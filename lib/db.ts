@@ -1,0 +1,834 @@
+import { Pool } from "pg";
+import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
+import {
+  getRecruiterByCode,
+  listRecruiters,
+  normalizeRecruiterCode,
+  RECRUITERS_BASE_URL,
+} from "@/lib/recruiters";
+import {
+  getTrainingById,
+  listTrainingOptions as listConfiguredTrainingOptions,
+  formatTrainingDateLabel,
+} from "@/lib/trainings";
+import type { TrainingOption } from "@/types/training";
+import type {
+  InscricaoItem,
+  InscricaoTipo,
+  ListInscricoesResult,
+  OrderableField,
+  OrderDirection,
+} from "@/types/inscricao";
+
+const SCHEMA_NAME = "inscricoes";
+
+const RECRUITER_CODE_FIELDS = [
+  "codigoRecrutador",
+  "codigo_recrutador",
+  "codigo",
+  "codigoProprio",
+  "codigo_indicador_proprio",
+];
+
+const ORDERABLE_COLUMNS: Record<OrderableField, string> = {
+  id: "i.id",
+  nome: "LOWER(COALESCE(i.payload->>'nome', ''))",
+  telefone: "COALESCE(i.payload->>'telefone', '')",
+  cidade: "LOWER(COALESCE(i.payload->>'cidade', ''))",
+  profissao: "LOWER(COALESCE(i.payload->>'profissao', ''))",
+  treinamento: "COALESCE(i.payload->>'treinamento', '')",
+  recrutador: "COALESCE(i.payload->>'traffic_source', '')",
+  criado_em: "i.criado_em",
+};
+
+declare global {
+  var pgPool: Pool | undefined;
+}
+
+interface ListInscricoesOptions {
+  page?: number;
+  pageSize?: number;
+  orderBy?: OrderableField;
+  orderDirection?: OrderDirection;
+  filters?: {
+    nome?: string;
+    telefone?: string;
+    indicacao?: string;
+    treinamento?: string;
+  };
+}
+
+interface DbRow {
+  id: number;
+  payload: Record<string, unknown>;
+  criado_em: Date | string;
+  nome: string | null;
+  telefone: string | null;
+  cidade: string | null;
+  profissao: string | null;
+  treinamento: string | null;
+  traffic_source: string | null;
+  total_count: number | string | null;
+}
+
+function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
+  const payload = (row.payload ?? {}) as Record<string, unknown>;
+  const parsed = parsePayload(payload);
+
+  const createdAtRaw = row.criado_em;
+  let createdAt: string;
+  if (createdAtRaw instanceof Date) {
+    createdAt = createdAtRaw.toISOString();
+  } else {
+    const temporal = new Date(createdAtRaw ?? Date.now());
+    createdAt = Number.isNaN(temporal.getTime()) ? new Date().toISOString() : temporal.toISOString();
+  }
+
+  const parsedTrafficSource = typeof parsed.traffic_source === "string" ? parsed.traffic_source : undefined;
+  const rowTrafficSource = typeof row.traffic_source === "string" ? row.traffic_source : undefined;
+  const codeCandidate = parsedTrafficSource ?? rowTrafficSource ?? null;
+  const recruiterCode = normalizeRecruiterCode(codeCandidate);
+  const recruiter = getRecruiterByCode(codeCandidate);
+
+  const parsedProfissao =
+    typeof parsed.profissao === "string" && parsed.profissao.trim().length > 0
+      ? parsed.profissao.trim()
+      : undefined;
+  const rowProfissao =
+    typeof row.profissao === "string" && row.profissao.trim().length > 0
+      ? row.profissao.trim()
+      : undefined;
+
+  const parsedTreinamento =
+    typeof parsed.treinamento === "string" && parsed.treinamento.trim().length > 0
+      ? parsed.treinamento.trim()
+      : undefined;
+  const rowTreinamento =
+    typeof row.treinamento === "string" && row.treinamento.trim().length > 0
+      ? row.treinamento.trim()
+      : undefined;
+  const treinamentoId = parsedTreinamento ?? rowTreinamento ?? null;
+  const treinamentoInfo = treinamentoId ? getTrainingById(treinamentoId) : null;
+  const treinamentoLabel =
+    treinamentoInfo && typeof treinamentoInfo.label === "string"
+      ? treinamentoInfo.label === treinamentoId
+        ? null
+        : treinamentoInfo.label
+      : null;
+  const treinamentoData = treinamentoInfo?.startsAt ?? treinamentoId ?? null;
+
+  const parseRecruiterCode = (value: unknown): string | null => {
+    if (typeof value === "string" && value.trim().length > 0) {
+      return normalizeRecruiterCode(value);
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return normalizeRecruiterCode(String(value));
+    }
+    return null;
+  };
+
+  const recruiterSelfCodeCandidates: Array<unknown> = [
+    parsed.codigoRecrutador,
+    payload.codigo_recrutador,
+    payload.codigo,
+    payload.codigoProprio,
+  ];
+  const codigoProprio = recruiterSelfCodeCandidates
+    .map((candidate) => parseRecruiterCode(candidate))
+    .find((value) => value !== null) ?? null;
+
+  const parseNumericId = (value: unknown): number | null => {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.trunc(value);
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsedNumber = Number.parseInt(value.trim(), 10);
+      if (Number.isFinite(parsedNumber)) {
+        return parsedNumber;
+      }
+    }
+    return null;
+  };
+
+  const parentInscricaoId = [parsed.recrutadorId, parsed.parentId, parsed.indicadorId, parsed.sponsorId]
+    .map((candidate) => parseNumericId(candidate))
+    .find((value) => value !== null) ?? null;
+
+  const nivelRaw =
+    typeof parsed.nivel === "number"
+      ? parsed.nivel
+      : typeof parsed.nivel === "string"
+      ? Number.parseInt(parsed.nivel, 10)
+      : null;
+  const nivel = Number.isFinite(nivelRaw ?? NaN) ? Math.max(0, Math.trunc(Number(nivelRaw))) : null;
+
+  const parsedTipo = typeof parsed.tipo === "string" ? parsed.tipo.trim().toLowerCase() : null;
+  const parsedIsRecruiter = typeof parsed.isRecruiter === "boolean"
+    ? parsed.isRecruiter
+    : typeof parsed.isRecruiter === "string"
+    ? ["true", "1", "sim", "yes"].includes(parsed.isRecruiter.trim().toLowerCase())
+    : false;
+
+  let tipo: "lead" | "recrutador" = "lead";
+  if (parsedTipo) {
+    if (parsedTipo.startsWith("recrutador") || parsedTipo === "indicador" || parsedTipo === "upline") {
+      tipo = "recrutador";
+    }
+  }
+  if (parsedIsRecruiter) {
+    tipo = "recrutador";
+  }
+  if (codigoProprio) {
+    tipo = "recrutador";
+  }
+
+  return {
+    id: Number(row.id),
+    payload,
+    criadoEm: createdAt,
+    parsedPayload: parsed,
+    nome: typeof row.nome === "string" ? row.nome : null,
+    telefone: typeof row.telefone === "string" ? row.telefone : null,
+    cidade: typeof row.cidade === "string" ? row.cidade : null,
+    profissao: parsedProfissao ?? rowProfissao ?? null,
+    recrutadorCodigo: recruiterCode ?? (codeCandidate ? codeCandidate.trim() : null),
+    recrutadorNome: recruiter?.name ?? null,
+    recrutadorUrl:
+      recruiter?.url ?? (recruiterCode ? `${RECRUITERS_BASE_URL}${recruiterCode}` : null),
+    treinamentoId,
+    treinamentoNome: treinamentoLabel,
+    treinamentoData,
+    tipo,
+    codigoProprio,
+    parentInscricaoId,
+    nivel,
+    isVirtual: false,
+  };
+}
+
+function createPool(): Pool {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not configured");
+  }
+
+  const sslEnabled = process.env.PG_SSL === "true";
+
+  return new Pool({
+    connectionString,
+    application_name: "painel-inscricoes",
+    ssl: sslEnabled
+      ? {
+          rejectUnauthorized: false,
+        }
+      : undefined,
+  });
+}
+
+function getPool(): Pool {
+  if (!global.pgPool) {
+    global.pgPool = createPool();
+  }
+
+  return global.pgPool;
+}
+
+function buildTrainingFilterCandidates(value: string): string[] {
+  const seen = new Set<string>();
+  const queue: string[] = [];
+
+  const enqueue = (candidate: string | null | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    seen.add(trimmed);
+    queue.push(trimmed);
+  };
+
+  enqueue(value);
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+
+    const info = getTrainingById(current);
+    if (info) {
+      enqueue(info.id);
+      enqueue(info.label);
+      enqueue(info.startsAt);
+    }
+
+    const formatted = formatTrainingDateLabel(current);
+    enqueue(formatted);
+
+    const isoMatch = current.match(/^(\d{4}-\d{2}-\d{2})(?:[T\s](\d{2}:\d{2}(?::\d{2})?(?:\.\d{1,3})?))?(?:([+-]\d{2}:?\d{2}|Z))?/);
+    if (isoMatch) {
+      const [, datePart, timePart] = isoMatch;
+      if (datePart) {
+        enqueue(datePart);
+      }
+      if (timePart) {
+        const normalizedTime = timePart.length === 5 ? `${timePart}:00` : timePart;
+        enqueue(`${datePart} ${normalizedTime}`.trim());
+        enqueue(`${datePart}T${normalizedTime}`.trim());
+      }
+    }
+
+    const brMatch = current.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brMatch) {
+      const [, day, month, year] = brMatch;
+      enqueue(`${year}-${month}-${day}`);
+    }
+  }
+
+  return Array.from(seen);
+}
+
+export async function listInscricoes(
+  options: ListInscricoesOptions = {}
+): Promise<ListInscricoesResult> {
+  const {
+    page = 1,
+    pageSize = 10,
+    orderBy = "criado_em",
+    orderDirection = "desc",
+    filters = {},
+  } = options;
+
+  if (!Number.isFinite(page) || page < 1) {
+    throw new Error("Invalid page number");
+  }
+
+  const pageSizeValue = Number.isFinite(pageSize) && pageSize > 0 ? pageSize : 10;
+  const sortColumn = ORDERABLE_COLUMNS[orderBy] ?? ORDERABLE_COLUMNS.criado_em;
+  const sortDirection = orderDirection === "asc" ? "ASC" : "DESC";
+
+  const conditions: string[] = [];
+  const filtersValues: unknown[] = [];
+
+  if (filters.nome && filters.nome.trim().length > 0) {
+    filtersValues.push(`%${filters.nome.trim()}%`);
+    conditions.push(`(i.payload->>'nome') ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.telefone && filters.telefone.trim().length > 0) {
+    const cleaned = filters.telefone.replace(/\D+/g, "");
+    filtersValues.push(`%${cleaned}%`);
+    conditions.push(
+      `REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') ILIKE $${filtersValues.length}`
+    );
+  }
+
+  if (filters.indicacao && filters.indicacao.trim().length > 0) {
+    const indicacaoTerm = filters.indicacao.trim();
+    const normalizedCode = normalizeRecruiterCode(indicacaoTerm);
+    const recruiterMatches = listRecruiters()
+      .filter((recruiter) => recruiter.name.toLowerCase().includes(indicacaoTerm.toLowerCase()))
+      .map((recruiter) => recruiter.code);
+
+    const codeCandidates = new Set<string>();
+    if (normalizedCode) {
+      codeCandidates.add(normalizedCode);
+    }
+    for (const code of recruiterMatches) {
+      if (code) {
+        codeCandidates.add(normalizeRecruiterCode(code) ?? code);
+      }
+    }
+
+    filtersValues.push(`%${indicacaoTerm}%`);
+    const likeIndex = filtersValues.length;
+
+    if (codeCandidates.size > 0) {
+      filtersValues.push(Array.from(codeCandidates));
+      const arrayIndex = filtersValues.length;
+      conditions.push(
+        `(COALESCE(i.payload->>'traffic_source', '') ILIKE $${likeIndex} OR COALESCE(i.payload->>'traffic_source', '') = ANY($${arrayIndex}))`
+      );
+    } else {
+      conditions.push(`COALESCE(i.payload->>'traffic_source', '') ILIKE $${likeIndex}`);
+    }
+  }
+
+  if (filters.treinamento && filters.treinamento.trim().length > 0) {
+    const rawCandidates = buildTrainingFilterCandidates(filters.treinamento.trim());
+    const likePatterns = Array.from(
+      rawCandidates.reduce((accumulator, candidate) => {
+        const trimmed = candidate.trim();
+        if (!trimmed) {
+          return accumulator;
+        }
+        accumulator.add(`%${trimmed}%`);
+        return accumulator;
+      }, new Set<string>())
+    );
+
+    if (likePatterns.length > 0) {
+      filtersValues.push(likePatterns);
+      const arrayIndex = filtersValues.length;
+      const normalizedTrainingFields = TRAINING_FIELD_KEYS.map(
+        (key) => `NULLIF(TRIM(COALESCE(i.payload->>'${key}', '')), '')`
+      );
+      const matches = normalizedTrainingFields.map(
+        (expr) => `${expr} IS NOT NULL AND ${expr} ILIKE ANY($${arrayIndex})`
+      );
+      if (matches.length > 0) {
+        conditions.push(`(${matches.join(' OR ')})`);
+      }
+    }
+  }
+
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const offset = (page - 1) * pageSizeValue;
+  const limitIndex = filtersValues.length + 1;
+  const offsetIndex = filtersValues.length + 2;
+  const queryValues = [...filtersValues, pageSizeValue, offset];
+
+  const query = `
+    SELECT
+      i.id,
+      i.payload,
+      i.criado_em,
+      i.payload->>'nome' AS nome,
+      i.payload->>'telefone' AS telefone,
+      i.payload->>'cidade' AS cidade,
+      i.payload->>'profissao' AS profissao,
+      i.payload->>'treinamento' AS treinamento,
+      i.payload->>'traffic_source' AS traffic_source,
+      COUNT(*) OVER() AS total_count
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    ${whereClause}
+    ORDER BY ${sortColumn} ${sortDirection}
+    LIMIT $${limitIndex} OFFSET $${offsetIndex}
+  `;
+
+  try {
+    const queryResult = await getPool().query<DbRow>(query, queryValues);
+    const rows: DbRow[] = queryResult.rows;
+
+    let total = rows[0]?.total_count ? Number(rows[0].total_count) : 0;
+
+    if (rows.length === 0) {
+      const countQuery = `
+        SELECT COUNT(*) AS total
+        FROM ${SCHEMA_NAME}.inscricoes AS i
+        ${whereClause}
+      `;
+      const { rows: countRows } = await getPool().query<{ total: number | string | null }>(
+        countQuery,
+        filtersValues
+      );
+      total = countRows[0]?.total ? Number(countRows[0].total) : 0;
+    }
+
+    const data: InscricaoItem[] = rows.map(mapDbRowToInscricaoItem);
+
+    return {
+      data,
+      page,
+      pageSize: pageSizeValue,
+      total,
+    };
+  } catch (error) {
+    console.error("Failed to list inscricoes", error);
+    throw error;
+  }
+}
+
+export async function getInscricaoById(id: number): Promise<InscricaoItem | null> {
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid inscrição id");
+  }
+
+  const query = `
+    SELECT
+      i.id,
+      i.payload,
+      i.criado_em,
+      i.payload->>'nome' AS nome,
+      i.payload->>'telefone' AS telefone,
+      i.payload->>'cidade' AS cidade,
+      i.payload->>'profissao' AS profissao,
+      i.payload->>'treinamento' AS treinamento,
+      i.payload->>'traffic_source' AS traffic_source,
+      NULL::bigint AS total_count
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE i.id = $1
+    LIMIT 1
+  `;
+
+  const { rows } = await getPool().query<DbRow>(query, [id]);
+  const row = rows[0];
+  if (!row) {
+    return null;
+  }
+  return mapDbRowToInscricaoItem(row);
+}
+
+export interface UpdateInscricaoInput {
+  nome?: string | null;
+  telefone?: string | null;
+  cidade?: string | null;
+  profissao?: string | null;
+  treinamento?: string | null;
+  trafficSource?: string | null;
+  tipo?: InscricaoTipo | null;
+  codigoProprio?: string | null;
+  parentInscricaoId?: number | null;
+  nivel?: number | null;
+}
+
+export async function updateInscricao(
+  id: number,
+  updates: UpdateInscricaoInput
+): Promise<InscricaoItem> {
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid inscrição id");
+  }
+
+  const fieldsProvided = Object.values(updates).some((value) => value !== undefined);
+  if (!fieldsProvided) {
+    throw new Error("Nenhum campo para atualizar");
+  }
+
+  const client = await getPool().connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
+      `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("Inscrição não encontrada");
+    }
+
+    const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+    const nextPayload: Record<string, unknown> = { ...payload };
+
+    const apply = (key: string, value: string | null | undefined) => {
+      if (value === undefined) {
+        return;
+      }
+      if (value === null) {
+        delete nextPayload[key];
+      } else {
+        nextPayload[key] = value;
+      }
+    };
+
+    apply("nome", updates.nome);
+    apply("telefone", updates.telefone);
+    apply("cidade", updates.cidade);
+    apply("profissao", updates.profissao);
+    apply("treinamento", updates.treinamento);
+
+    if (updates.trafficSource !== undefined) {
+      apply("traffic_source", updates.trafficSource);
+      apply("codigo_indicador", updates.trafficSource);
+      apply("indicador", updates.trafficSource);
+      apply("ref", updates.trafficSource);
+      apply("referral", updates.trafficSource);
+    }
+
+    if (updates.tipo !== undefined) {
+      const tipoValue = updates.tipo ?? null;
+      apply("tipo", tipoValue);
+      if (tipoValue === "recrutador") {
+        apply("isRecruiter", true);
+      } else {
+        apply("isRecruiter", null);
+      }
+    }
+
+    if (updates.codigoProprio !== undefined) {
+      let finalCode: string | null = null;
+
+      if (updates.codigoProprio === null) {
+        finalCode = null;
+      } else if (typeof updates.codigoProprio === "string") {
+        const trimmed = updates.codigoProprio.trim();
+        if (trimmed.length > 0) {
+          finalCode = normalizeRecruiterCode(trimmed) ?? trimmed;
+        } else {
+          finalCode = null;
+        }
+      }
+
+      apply("codigoRecrutador", finalCode);
+      apply("codigo_recrutador", finalCode);
+      apply("codigoProprio", finalCode);
+      apply("codigo", finalCode);
+      apply("codigo_indicador_proprio", finalCode);
+    }
+
+    if (updates.parentInscricaoId !== undefined) {
+      apply("recrutador_id", updates.parentInscricaoId);
+      apply("parent_id", updates.parentInscricaoId);
+      apply("indicador_id", updates.parentInscricaoId);
+      apply("sponsor_id", updates.parentInscricaoId);
+    }
+
+    if (updates.nivel !== undefined) {
+      const levelValue =
+        updates.nivel === null || updates.nivel === undefined
+          ? null
+          : Math.max(0, Math.trunc(Number(updates.nivel)));
+      apply("nivel", levelValue);
+      apply("level", levelValue);
+      apply("hierarchy_level", levelValue);
+    }
+
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [id, JSON.stringify(nextPayload)]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const updated = await getInscricaoById(id);
+  if (!updated) {
+    throw new Error("Inscrição não encontrada após atualização");
+  }
+
+  return updated;
+}
+
+export interface CreateRecruiterInscricaoInput {
+  nome: string;
+  codigo: string;
+  telefone?: string | null;
+  cidade?: string | null;
+  parentInscricaoId?: number | null;
+  parentCodigo?: string | null;
+  nivel?: number | null;
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export async function findInscricaoIdByOwnCode(code: string): Promise<number | null> {
+  const normalized = normalizeRecruiterCode(code);
+  if (!normalized) {
+    return null;
+  }
+
+  const candidates = new Set<string>();
+  candidates.add(normalized.toLowerCase());
+
+  const trimmed = code.trim().toLowerCase();
+  if (trimmed && !candidates.has(trimmed)) {
+    candidates.add(trimmed);
+  }
+
+  const comparisons = RECRUITER_CODE_FIELDS.map(
+    (field) => `LOWER(TRIM(COALESCE(i.payload->>'${field}', ''))) = ANY($1)`
+  );
+
+  const query = `
+    SELECT i.id
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE ${comparisons.join(" OR ")}
+    LIMIT 1
+  `;
+
+  const { rows } = await getPool().query<{ id: number }>(query, [Array.from(candidates)]);
+  return rows[0]?.id ?? null;
+}
+
+export async function createRecruiterInscricao(
+  input: CreateRecruiterInscricaoInput
+): Promise<InscricaoItem> {
+  const nome = normalizeOptionalString(input.nome);
+  if (!nome) {
+    throw new Error("O nome do recrutador é obrigatório");
+  }
+
+  const normalizedCode = normalizeRecruiterCode(input.codigo);
+  if (!normalizedCode) {
+    throw new Error("Código do recrutador inválido");
+  }
+
+  const existingId = await findInscricaoIdByOwnCode(normalizedCode);
+  if (existingId) {
+    throw new Error("Já existe um recrutador cadastrado com este código");
+  }
+
+  const telefone = normalizeOptionalString(input.telefone ?? null);
+  const cidade = normalizeOptionalString(input.cidade ?? null);
+  const parentCodigoRaw = normalizeOptionalString(input.parentCodigo ?? null);
+  const parentCodigo = parentCodigoRaw
+    ? normalizeRecruiterCode(parentCodigoRaw) ?? parentCodigoRaw
+    : null;
+  const parentId = Number.isFinite(input.parentInscricaoId ?? NaN)
+    ? Math.trunc(Number(input.parentInscricaoId))
+    : null;
+
+  const nivelValue =
+    input.nivel === null || input.nivel === undefined
+      ? null
+      : Math.max(0, Math.trunc(Number(input.nivel)));
+
+  const payload: Record<string, unknown> = {
+    nome,
+    tipo: "recrutador",
+    isRecruiter: true,
+    codigoRecrutador: normalizedCode,
+    codigo_recrutador: normalizedCode,
+    codigo: normalizedCode,
+    codigoProprio: normalizedCode,
+    codigo_indicador_proprio: normalizedCode,
+  };
+
+  if (telefone) {
+    payload.telefone = telefone;
+  }
+
+  if (cidade) {
+    payload.cidade = cidade;
+  }
+
+  if (parentCodigo) {
+    payload.traffic_source = parentCodigo;
+    payload.codigo_indicador = parentCodigo;
+    payload.indicador = parentCodigo;
+    payload.ref = parentCodigo;
+    payload.referral = parentCodigo;
+  }
+
+  if (parentId !== null) {
+    payload.recrutador_id = parentId;
+    payload.parent_id = parentId;
+    payload.indicador_id = parentId;
+    payload.sponsor_id = parentId;
+  }
+
+  if (nivelValue !== null) {
+    payload.nivel = nivelValue;
+    payload.level = nivelValue;
+    payload.hierarchy_level = nivelValue;
+  }
+
+  const insertQuery = `
+    INSERT INTO ${SCHEMA_NAME}.inscricoes (payload)
+    VALUES ($1::jsonb)
+    RETURNING
+      id,
+      payload,
+      criado_em,
+      payload->>'nome' AS nome,
+      payload->>'telefone' AS telefone,
+      payload->>'cidade' AS cidade,
+      payload->>'profissao' AS profissao,
+      payload->>'treinamento' AS treinamento,
+      payload->>'traffic_source' AS traffic_source,
+      1::bigint AS total_count
+  `;
+
+  const { rows } = await getPool().query<DbRow>(insertQuery, [JSON.stringify(payload)]);
+  const row = rows[0];
+  if (!row) {
+    throw new Error("Falha ao criar recrutador");
+  }
+
+  return mapDbRowToInscricaoItem(row);
+}
+
+export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
+  const configured = listConfiguredTrainingOptions();
+  const orderedOptions: TrainingOption[] = [...configured];
+  const seen = new Set(orderedOptions.map((option) => option.id));
+
+  const query = `
+    SELECT DISTINCT TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE TRIM(COALESCE(i.payload->>'treinamento', '')) <> ''
+    ORDER BY 1
+  `;
+
+  try {
+    const { rows } = await getPool().query<{ treinamento: string | null }>(query);
+    const extras: TrainingOption[] = [];
+
+    for (const row of rows) {
+      const rawId = typeof row.treinamento === "string" ? row.treinamento.trim() : "";
+      if (!rawId) {
+        continue;
+      }
+
+      const info = getTrainingById(rawId);
+      if (info) {
+        if (!seen.has(info.id)) {
+          seen.add(info.id);
+          extras.push(info);
+        }
+        continue;
+      }
+
+      if (!seen.has(rawId)) {
+        seen.add(rawId);
+        extras.push({ id: rawId, label: rawId });
+      }
+    }
+
+    extras.sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
+    return [...orderedOptions, ...extras];
+  } catch (error) {
+    console.error("Failed to list training filter options", error);
+    return orderedOptions;
+  }
+}
+
+export async function deleteInscricao(id: number): Promise<void> {
+  if (!Number.isFinite(id) || id < 1) {
+    throw new Error("Invalid inscrição id");
+  }
+
+  const query = `
+    DELETE FROM ${SCHEMA_NAME}.inscricoes
+    WHERE id = $1
+    RETURNING id
+  `;
+
+  const { rowCount } = await getPool().query(query, [id]);
+  if (!rowCount) {
+    throw new Error("Inscrição não encontrada");
+  }
+}
+
+export async function listAllInscricoes(batchSize = 200): Promise<InscricaoItem[]> {
+  const pageSize = Number.isFinite(batchSize) && batchSize > 0 ? Math.min(Math.trunc(batchSize), 500) : 200;
+  const firstPage = await listInscricoes({ page: 1, pageSize });
+  const items: InscricaoItem[] = [...firstPage.data];
+
+  const totalPages = Math.max(1, Math.ceil(firstPage.total / pageSize));
+  if (totalPages === 1) {
+    return items;
+  }
+
+  for (let page = 2; page <= totalPages; page += 1) {
+    const chunk = await listInscricoes({ page, pageSize });
+    items.push(...chunk.data);
+  }
+
+  return items;
+}
+
+export type { ListInscricoesOptions };
