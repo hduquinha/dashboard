@@ -51,6 +51,14 @@ type InscricaoLike = Pick<
   | 'isVirtual'
 >;
 
+function isInscricaoLike(value: unknown): value is InscricaoLike {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const record = value as Partial<InscricaoLike>;
+  return typeof record.id === 'number';
+}
+
 function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry {
   const code = inscricao.codigoProprio ?? inscricao.recrutadorCodigo ?? '';
   const url = inscricao.recrutadorUrl ?? (code ? `${RECRUITERS_BASE_URL}${code}` : `${RECRUITERS_BASE_URL}`);
@@ -178,13 +186,13 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
         return;
       }
 
-      const data = (await response.json()) as { inscricao?: unknown };
-      if (!data.inscricao) {
+      const responseBody = (await response.json()) as { inscricao?: unknown } | null;
+      if (!responseBody?.inscricao || !isInscricaoLike(responseBody.inscricao)) {
         setErrorMessage('Resposta inválida do servidor.');
         return;
       }
 
-      const recruiterEntry = mapInscricaoToEntry(data.inscricao);
+      const recruiterEntry = mapInscricaoToEntry(responseBody.inscricao);
 
       setEntries((previous) => {
         const next = previous.filter((item) => item.code !== recruiterEntry.code);

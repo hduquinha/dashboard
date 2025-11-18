@@ -512,7 +512,7 @@ export async function updateInscricao(
     const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
     const nextPayload: Record<string, unknown> = { ...payload };
 
-    const apply = (key: string, value: string | null | undefined) => {
+    const apply = (key: string, value: string | number | boolean | null | undefined) => {
       if (value === undefined) {
         return;
       }
