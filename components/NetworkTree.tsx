@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useMemo, useState, type ReactElement } from "react";
 import type { NetworkNode, NetworkTreeFocus, NetworkTreeStats } from "@/lib/network";
 
@@ -10,16 +11,24 @@ interface NetworkTreeProps {
   focus: NetworkTreeFocus | null;
 }
 
-function computeInitialExpanded(roots: NetworkNode[], focus: NetworkTreeFocus | null): number[] {
-  const ids = new Set<number>();
-  if (focus?.path) {
-    focus.path.forEach((id) => ids.add(id));
+function computeInitialExpanded(focus: NetworkTreeFocus | null): number[] {
+  if (!focus?.path?.length) {
+    return [];
   }
-  roots
-    .filter((node) => node.children.length > 0)
-    .slice(0, 3)
-    .forEach((node) => ids.add(node.id));
-  return Array.from(ids);
+  return [...new Set(focus.path)];
+}
+
+function findNodeById(nodes: NetworkNode[], id: number): NetworkNode | null {
+  for (const node of nodes) {
+    if (node.id === id) {
+      return node;
+    }
+    const child = findNodeById(node.children, id);
+    if (child) {
+      return child;
+    }
+  }
+  return null;
 }
 
 interface NetworkTreeInnerProps extends NetworkTreeProps {
@@ -27,7 +36,16 @@ interface NetworkTreeInnerProps extends NetworkTreeProps {
 }
 
 function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: NetworkTreeInnerProps) {
+  const router = useRouter();
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set(initialExpandedIds));
+
+  const displayedRoots = useMemo(() => {
+    if (!focus?.nodeId) {
+      return roots;
+    }
+    const node = findNodeById(roots, focus.nodeId);
+    return node ? [node] : roots;
+  }, [roots, focus]);
 
   function toggleNode(id: number) {
     setExpanded((previous) => {
@@ -72,6 +90,15 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
               Diretos: {node.directLeadCount + node.directRecruiterCount} · Descendentes: {node.totalDescendants}
             </p>
           </div>
+          {node.tipo === "recrutador" ? (
+            <button
+              type="button"
+              onClick={() => router.push(`/rede?focus=${node.id}`)}
+              className="mt-3 rounded-full border border-neutral-300 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-600 transition hover:border-neutral-500 hover:text-neutral-900"
+            >
+              Ver árvore completa
+            </button>
+          ) : null}
           {hasChildren ? (
             <button
               type="button"
@@ -86,7 +113,7 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
         {hasChildren && isExpanded ? (
           <div className="relative mt-6 flex w-full flex-col items-center">
             <span className="mb-4 h-10 w-px bg-neutral-300" aria-hidden="true" />
-            <div className="relative flex flex-wrap justify-center gap-8 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-neutral-200">
+            <div className="relative flex flex-row flex-nowrap justify-center gap-8 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-neutral-200">
               {node.children.map((child) => (
                 <div
                   key={child.id}
@@ -127,14 +154,31 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
         </div>
       </section>
 
+      {focus?.nodeId ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <span>
+            Mostrando a rede do recrutador {focus.code ?? `#${focus.nodeId}`}.
+          </span>
+          <button
+            type="button"
+            className="rounded-full bg-sky-600 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-sky-700"
+            onClick={() => router.push("/rede")}
+          >
+            Ver visão completa
+          </button>
+        </div>
+      ) : null}
+
       <div className="space-y-6">
-        {roots.length > 0 ? (
+        {displayedRoots.length > 0 ? (
           <section className="space-y-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Redes de recrutadores</h2>
-            <div className="space-y-8">
-              {roots.map((root) => (
-                <div key={root.id}>{renderNode(root)}</div>
-              ))}
+            <div className="space-y-8 overflow-x-auto pb-6">
+              <div className="min-w-[960px]">
+                {displayedRoots.map((root) => (
+                  <div key={root.id}>{renderNode(root)}</div>
+                ))}
+              </div>
             </div>
           </section>
         ) : (
@@ -162,10 +206,7 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
 }
 
 export default function NetworkTree(props: NetworkTreeProps) {
-  const initialExpandedIds = useMemo(
-    () => computeInitialExpanded(props.roots, props.focus),
-    [props.roots, props.focus]
-  );
+  const initialExpandedIds = useMemo(() => computeInitialExpanded(props.focus), [props.focus]);
   const resetKey = useMemo(() => {
     const focusKey = props.focus?.nodeId ?? "none";
     return `${focusKey}-${initialExpandedIds.join("-")}`;
