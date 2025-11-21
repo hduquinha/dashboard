@@ -309,6 +309,34 @@ export async function buildNetworkTree(
     node.parentNodeId = null;
   });
 
+  const PRIMARY_ROOT_CODES = ["01", "1", "001"];
+  let primaryRootNode: NetworkNode | undefined;
+  for (const code of PRIMARY_ROOT_CODES) {
+    const candidate = nodeByCode.get(code);
+    if (candidate && candidate.tipo === "recrutador") {
+      primaryRootNode = candidate;
+      break;
+    }
+  }
+  if (!primaryRootNode) {
+    primaryRootNode = nodes.find((node) => node.tipo === "recrutador");
+  }
+
+  if (primaryRootNode) {
+    primaryRootNode.parentNodeId = null;
+    nodes.forEach((node) => {
+      if (node.id === primaryRootNode!.id) {
+        return;
+      }
+      if (node.tipo === "recrutador" && node.parentNodeId === null) {
+        node.parentNodeId = primaryRootNode!.id;
+        if (!primaryRootNode!.children.some((child) => child.id === node.id)) {
+          primaryRootNode!.children.push(node);
+        }
+      }
+    });
+  }
+
   nodes.forEach((node) => {
     sortNodes(node.children);
   });
