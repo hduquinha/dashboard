@@ -18,8 +18,11 @@ interface InscricoesTableProps {
   recruiterOptions: Recruiter[];
 }
 
+const STATUS_COLUMN_KEY = 'status' as const;
+type ColumnKey = OrderableField | typeof STATUS_COLUMN_KEY;
+
 interface ColumnConfig {
-  key: OrderableField;
+  key: ColumnKey;
   label: string;
   sortable: boolean;
   align?: 'left' | 'center' | 'right';
@@ -30,6 +33,7 @@ const COLUMNS: ColumnConfig[] = [
   { key: 'nome', label: 'Nome', sortable: true },
   { key: 'telefone', label: 'Telefone', sortable: true },
   { key: 'cidade', label: 'Cidade', sortable: true },
+  { key: STATUS_COLUMN_KEY, label: 'Status', sortable: false, align: 'center' },
   { key: 'treinamento', label: 'Treinamento', sortable: true },
   { key: 'recrutador', label: 'Indicador', sortable: true },
 ];
@@ -121,8 +125,18 @@ export default function InscricoesTable({
   }
 
 
+  const getStatusInfo = (inscricao: InscricaoItem) => {
+    if (inscricao.tipo === 'recrutador') {
+      return { label: 'Recrutador', badgeClass: 'bg-emerald-100 text-emerald-800' };
+    }
+    if (inscricao.isVirtual) {
+      return { label: 'Virtual', badgeClass: 'bg-amber-100 text-amber-800' };
+    }
+    return { label: 'Pendente', badgeClass: 'bg-neutral-200 text-neutral-700' };
+  };
+
   return (
-    <div className="relative">
+    <div className="relative rounded-2xl border border-neutral-200 bg-white shadow-xl">
       {isPending && (
         <div className="absolute inset-x-0 top-0 z-10 flex justify-center">
           <span className="mt-2 inline-flex items-center rounded-md bg-neutral-900 px-3 py-1 text-xs font-semibold text-white shadow">
@@ -131,13 +145,13 @@ export default function InscricoesTable({
         </div>
       )}
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto lg:overflow-visible">
         <table className="min-w-full divide-y divide-neutral-200">
           <thead className="bg-neutral-100">
             <tr>
               {COLUMNS.map((column) => {
-                const isActive = orderBy === column.key;
-                const label = `${column.label}${isActive ? ` (${orderDirection.toUpperCase()})` : ''}`;
+                const isActive = column.sortable && orderBy === column.key;
+                const label = column.sortable && isActive ? `${column.label} (${orderDirection.toUpperCase()})` : column.label;
                 return (
                   <th
                     key={column.key}
@@ -156,7 +170,7 @@ export default function InscricoesTable({
                         className={`inline-flex items-center gap-1 text-neutral-700 hover:text-neutral-900 ${
                           isActive ? 'font-bold' : ''
                         }`}
-                        onClick={() => handleSort(column.key)}
+                        onClick={() => handleSort(column.key as OrderableField)}
                       >
                         {label}
                       </button>
@@ -184,7 +198,7 @@ export default function InscricoesTable({
                   <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-neutral-900">
                     #{inscricao.id}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-neutral-700">
+                  <td className="px-4 py-3 text-sm text-neutral-700">
                     <span className="mr-2 font-medium text-neutral-900">
                       {inscricao.nome ?? 'Indisponível'}
                       {inscricao.tipo === 'recrutador' && inscricao.codigoProprio ? (
@@ -204,11 +218,21 @@ export default function InscricoesTable({
                       ) : null}
                     </span>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-neutral-700">
+                  <td className="px-4 py-3 text-sm text-neutral-700">
                     {inscricao.telefone ?? 'Indisponível'}
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-sm text-neutral-700">
+                  <td className="px-4 py-3 text-sm text-neutral-700">
                     {inscricao.cidade ?? 'Indisponível'}
+                  </td>
+                  <td className="px-4 py-3 text-center text-sm">
+                    {(() => {
+                      const status = getStatusInfo(inscricao);
+                      return (
+                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${status.badgeClass}`}>
+                          {status.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3 text-sm text-neutral-700">
                     {(() => {

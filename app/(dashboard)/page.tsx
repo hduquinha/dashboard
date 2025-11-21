@@ -13,8 +13,8 @@ import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PAGE_SIZE = 10;
-const MAX_PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 25;
+const MAX_PAGE_SIZE = 100;
 
 interface DashboardPageProps {
   searchParams:
@@ -155,23 +155,28 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   return (
     <main className="min-h-screen bg-neutral-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
-        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div className="space-y-2">
-            <h1 className="text-2xl font-semibold text-neutral-900">Painel de Inscrições</h1>
-            <p className="text-sm text-neutral-600">
-              Acompanhe em tempo real as inscrições enviadas pelo formulário oficial.
-            </p>
-            <DashboardNav />
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
+        <header className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">
+                Visão geral
+              </p>
+              <h1 className="text-3xl font-semibold text-neutral-900">Painel de Inscrições</h1>
+              <p className="text-sm text-neutral-600">
+                Acompanhe em tempo real as inscrições enviadas pelo formulário oficial.
+              </p>
+            </div>
+            <span className="inline-flex items-center justify-center rounded-full bg-neutral-900 px-6 py-2 text-sm font-semibold text-white shadow-lg">
+              Total: {result.total}
+            </span>
           </div>
-          <span className="inline-flex items-center rounded-full bg-neutral-200 px-4 py-1 text-sm font-medium text-neutral-700 self-start md:self-auto">
-            Total: {result.total}
-          </span>
+          <DashboardNav />
         </header>
 
         {duplicateGroups.length > 0 ? <DuplicateAlerts groups={duplicateGroups} /> : null}
 
-        <section className="rounded-lg border border-neutral-200 bg-white shadow-sm">
+        <section className="space-y-4 rounded-2xl border border-neutral-200 bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-neutral-200 bg-neutral-50/60 px-6 py-4 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Filtros</h2>
@@ -292,16 +297,18 @@ export default async function DashboardPage(props: DashboardPageProps) {
             </div>
           ) : null}
 
-          <InscricoesTable
-            inscricoes={result.data}
-            page={page}
-            pageSize={pageSize}
-            total={result.total}
-            orderBy={orderBy}
-            orderDirection={orderDirection}
-            trainingOptions={trainingOptions}
-            recruiterOptions={recruiterOptions}
-          />
+          <div className="px-2 pb-6 sm:px-4">
+            <InscricoesTable
+              inscricoes={result.data}
+              page={page}
+              pageSize={pageSize}
+              total={result.total}
+              orderBy={orderBy}
+              orderDirection={orderDirection}
+              trainingOptions={trainingOptions}
+              recruiterOptions={recruiterOptions}
+            />
+          </div>
         </section>
       </div>
     </main>
