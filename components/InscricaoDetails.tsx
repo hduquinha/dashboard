@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import type { InscricaoItem } from "@/types/inscricao";
+import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { Recruiter } from "@/lib/recruiters";
 
@@ -50,6 +50,23 @@ function formatTrainingDate(value: string | null | undefined): string | null {
   });
 }
 
+function formatDateTime(value: string | null | undefined): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function InscricaoDetails({
   inscricao,
   onClose,
@@ -62,9 +79,13 @@ export default function InscricaoDetails({
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState<InscricaoStatus | null>(null);
   const [formState, setFormState] = useState<FormState>(() => buildInitialFormState(inscricao));
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [noteContent, setNoteContent] = useState("");
+  const [noteWhatsapp, setNoteWhatsapp] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const recruiterFieldId = useId();
 
   useEffect(() => {
@@ -92,8 +113,12 @@ export default function InscricaoDetails({
     setIsEditing(false);
     setIsSaving(false);
     setIsDeleting(false);
+    setStatusUpdating(null);
     setErrorMessage(null);
     setSuccessMessage(null);
+    setNoteContent("");
+    setNoteWhatsapp(false);
+    setIsSavingNote(false);
   }, [inscricao]);
 
   const createdAt = useMemo(() => {
@@ -136,9 +161,29 @@ export default function InscricaoDetails({
     return { text, rawDate };
   }, [inscricao, trainingOptionsById]);
 
+  const statusBadge = useMemo(() => {
+    if (!inscricao) {
+      return { label: "-", className: "bg-neutral-200 text-neutral-700" };
+    }
+    if (inscricao.tipo === "recrutador") {
+      return { label: "Recrutador", className: "bg-emerald-100 text-emerald-800" };
+    }
+    switch (inscricao.status) {
+      case "aprovado":
+        return { label: "Aprovado", className: "bg-emerald-100 text-emerald-800" };
+      case "rejeitado":
+        return { label: "Rejeitado", className: "bg-rose-100 text-rose-700" };
+      default:
+        return { label: "Aguardando", className: "bg-amber-100 text-amber-700" };
+    }
+  }, [inscricao]);
+
   if (!inscricao) {
     return null;
   }
+
+  const notes = inscricao.notes ?? [];
+  const isLead = inscricao.tipo !== "recrutador";
 
   const hasTrainingOption = formState.treinamento
     ? Boolean(trainingOptionsById[formState.treinamento])
@@ -276,6 +321,93 @@ export default function InscricaoDetails({
     }
   }
 
+  async function handleStatusChange(nextStatus: InscricaoStatus) {
+    if (!inscricao || statusUpdating === nextStatus) {
+      return;
+    }
+
+    if (!isLead) {
+      return;
+    }
+
+    let whatsappContacted: boolean | undefined = undefined;
+    if (nextStatus === "aprovado" || nextStatus === "rejeitado") {
+      const confirmed = window.confirm("Você já entrou em contato com este lead no WhatsApp? Clique em OK para confirmar que sim.");
+      whatsappContacted = confirmed;
+    }
+
+    setStatusUpdating(nextStatus);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await fetch(`/api/inscricoes/${inscricao.id}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ status: nextStatus, whatsappContacted }),
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        const message = data?.error ?? "Não foi possível atualizar o status.";
+        setErrorMessage(message);
+        return;
+      }
+
+      const data = (await response.json()) as { inscricao?: InscricaoItem };
+      const updated = data.inscricao ?? inscricao;
+      onUpdate?.(updated);
+      setSuccessMessage("Status atualizado com sucesso.");
+    } catch (error) {
+      console.error("Failed to update status", error);
+      setErrorMessage("Erro inesperado ao atualizar o status.");
+    } finally {
+      setStatusUpdating(null);
+    }
+  }
+
+  async function handleNoteSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!inscricao || !noteContent.trim() || isSavingNote) {
+      return;
+    }
+
+    setIsSavingNote(true);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await fetch(`/api/inscricoes/${inscricao.id}/notes`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: noteContent, viaWhatsapp: noteWhatsapp })
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        const message = data?.error ?? "Não foi possível salvar a anotação.";
+        setErrorMessage(message);
+        return;
+      }
+
+      const data = (await response.json()) as { inscricao?: InscricaoItem };
+      const updated = data.inscricao ?? inscricao;
+      onUpdate?.(updated);
+      setNoteContent("");
+      setNoteWhatsapp(false);
+      setSuccessMessage("Anotação registrada.");
+    } catch (error) {
+      console.error("Failed to add note", error);
+      setErrorMessage("Erro inesperado ao salvar a anotação.");
+    } finally {
+      setIsSavingNote(false);
+    }
+  }
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -342,6 +474,112 @@ export default function InscricaoDetails({
               {successMessage}
             </p>
           ) : null}
+
+          <section className="space-y-3 rounded-lg border border-neutral-200 bg-neutral-50/60 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Status atual</p>
+                <div className="mt-1 inline-flex items-center gap-2">
+                  <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${statusBadge.className}`}>
+                    {statusBadge.label}
+                  </span>
+                  {inscricao.statusUpdatedAt ? (
+                    <span className="text-xs text-neutral-500">Atualizado em {formatDateTime(inscricao.statusUpdatedAt)}</span>
+                  ) : null}
+                </div>
+                {typeof inscricao.statusWhatsappContacted === "boolean" ? (
+                  <p className="text-xs text-neutral-500">
+                    WhatsApp: {inscricao.statusWhatsappContacted ? "Contato confirmado" : "Ainda não contatado"}
+                  </p>
+                ) : null}
+              </div>
+              {isLead ? (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
+                    onClick={() => handleStatusChange("aguardando")}
+                    disabled={statusUpdating !== null}
+                  >
+                    Voltar para aguardando
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-emerald-200 bg-emerald-600 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-emerald-500 disabled:opacity-60"
+                    onClick={() => handleStatusChange("aprovado")}
+                    disabled={statusUpdating !== null}
+                  >
+                    {statusUpdating === "aprovado" ? "Atualizando..." : "Aprovar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                    onClick={() => handleStatusChange("rejeitado")}
+                    disabled={statusUpdating !== null}
+                  >
+                    {statusUpdating === "rejeitado" ? "Atualizando..." : "Rejeitar"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="space-y-3 rounded-lg border border-neutral-200 bg-white p-4">
+            <header className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-neutral-900">Anotações</h3>
+                <p className="text-xs text-neutral-500">Registre interações como em um CRM tradicional.</p>
+              </div>
+              <span className="text-xs text-neutral-400">{notes.length} anotação{notes.length === 1 ? "" : "es"}</span>
+            </header>
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {notes.length === 0 ? (
+                <p className="text-xs text-neutral-500">Nenhuma anotação registrada ainda.</p>
+              ) : (
+                notes.map((note) => (
+                  <article key={note.id} className="rounded-md border border-neutral-100 bg-neutral-50 p-3">
+                    <p className="text-xs text-neutral-500">{formatDateTime(note.createdAt)}</p>
+                    <p className="text-sm text-neutral-800">{note.content}</p>
+                    {typeof note.viaWhatsapp === "boolean" ? (
+                      <p className="text-[11px] uppercase tracking-wide text-neutral-500">
+                        WhatsApp: {note.viaWhatsapp ? "Sim" : "Não"}
+                      </p>
+                    ) : null}
+                  </article>
+                ))
+              )}
+            </div>
+            <form className="space-y-2" onSubmit={handleNoteSubmit}>
+              <textarea
+                className="w-full rounded-md border border-neutral-200 px-3 py-2 text-sm text-neutral-800 focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                rows={3}
+                placeholder="Escreva uma nova anotação"
+                value={noteContent}
+                onChange={(event) => setNoteContent(event.target.value)}
+                disabled={isSavingNote}
+                required
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-neutral-600">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-neutral-300 text-neutral-900 focus:ring-neutral-500"
+                    checked={noteWhatsapp}
+                    onChange={(event) => setNoteWhatsapp(event.target.checked)}
+                    disabled={isSavingNote}
+                  />
+                  Contato feito por WhatsApp
+                </label>
+                <button
+                  type="submit"
+                  className="rounded-md bg-neutral-900 px-4 py-1.5 text-xs font-semibold text-white shadow hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={isSavingNote || !noteContent.trim()}
+                >
+                  {isSavingNote ? "Salvando..." : "Adicionar anotação"}
+                </button>
+              </div>
+            </form>
+          </section>
 
           {isEditing ? (
             <form className="space-y-4" onSubmit={handleSubmit}>

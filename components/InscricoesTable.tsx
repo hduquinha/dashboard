@@ -132,7 +132,15 @@ export default function InscricoesTable({
     if (inscricao.isVirtual) {
       return { label: 'Virtual', badgeClass: 'bg-amber-100 text-amber-800' };
     }
-    return { label: 'Pendente', badgeClass: 'bg-neutral-200 text-neutral-700' };
+
+    switch (inscricao.status) {
+      case 'aprovado':
+        return { label: 'Aprovado', badgeClass: 'bg-emerald-100 text-emerald-800' };
+      case 'rejeitado':
+        return { label: 'Rejeitado', badgeClass: 'bg-rose-100 text-rose-700' };
+      default:
+        return { label: 'Aguardando', badgeClass: 'bg-amber-100 text-amber-800' };
+    }
   };
 
   return (

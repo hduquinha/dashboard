@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
 import {
@@ -18,6 +19,8 @@ import type {
   DuplicateReasonDetail,
   DuplicateSummary,
   InscricaoItem,
+  InscricaoNote,
+  InscricaoStatus,
   InscricaoTipo,
   ListInscricoesResult,
   OrderableField,
@@ -81,6 +84,79 @@ interface DuplicateDbRow extends DbRow {
   nome_normalizado: string | null;
   criado_dia: Date | string | null;
   payload_hash: string | null;
+}
+
+const STATUS_VALUES: InscricaoStatus[] = ["aguardando", "aprovado", "rejeitado"];
+
+function parseStatus(value: unknown): InscricaoStatus {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (STATUS_VALUES.includes(normalized as InscricaoStatus)) {
+      return normalized as InscricaoStatus;
+    }
+  }
+  return "aguardando";
+}
+
+function parseNotes(value: unknown): InscricaoNote[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const record = entry as Record<string, unknown>;
+      const id = typeof record.id === "string" && record.id.trim().length > 0 ? record.id.trim() : randomUUID();
+      const content = typeof record.content === "string" ? record.content.trim() : null;
+      if (!content) {
+        return null;
+      }
+      const createdAtRaw = typeof record.createdAt === "string" ? record.createdAt : record.created_at;
+      const createdAt = typeof createdAtRaw === "string" && createdAtRaw.trim().length > 0 ? createdAtRaw : new Date().toISOString();
+      const author = typeof record.author === "string" ? record.author : null;
+      const viaWhatsapp = typeof record.viaWhatsapp === "boolean"
+        ? record.viaWhatsapp
+        : typeof record.whatsapp === "boolean"
+        ? record.whatsapp
+        : null;
+
+      return {
+        id,
+        content,
+        createdAt,
+        author,
+        viaWhatsapp,
+      } satisfies InscricaoNote;
+    })
+    .filter((note): note is InscricaoNote => note !== null)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+}
+
+function appendNoteToPayload(
+  target: Record<string, unknown>,
+  note: { content: string; viaWhatsapp?: boolean | null; author?: string | null }
+) {
+  const trimmed = note.content.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  const existingRaw = Array.isArray(target["dashboard_notes"])
+    ? [...(target["dashboard_notes"] as unknown[])]
+    : [];
+
+  existingRaw.push({
+    id: randomUUID(),
+    content: trimmed,
+    createdAt: new Date().toISOString(),
+    author: note.author ?? null,
+    viaWhatsapp: typeof note.viaWhatsapp === "boolean" ? note.viaWhatsapp : undefined,
+  });
+
+  target["dashboard_notes"] = existingRaw;
 }
 
 function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
@@ -194,6 +270,21 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     tipo = "recrutador";
   }
 
+  const status = parseStatus((payload.dashboard_status ?? payload.status) as unknown);
+  const statusUpdatedAt =
+    typeof payload.dashboard_status_at === "string"
+      ? payload.dashboard_status_at
+      : typeof payload.status_at === "string"
+      ? payload.status_at
+      : null;
+  const statusWhatsappContacted =
+    typeof payload.dashboard_status_whatsapp === "boolean"
+      ? payload.dashboard_status_whatsapp
+      : typeof payload.status_whatsapp === "boolean"
+      ? payload.status_whatsapp
+      : null;
+  const notes = parseNotes(payload.dashboard_notes);
+
   return {
     id: Number(row.id),
     payload,
@@ -215,6 +306,10 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     parentInscricaoId,
     nivel,
     isVirtual: false,
+    status,
+    statusUpdatedAt,
+    statusWhatsappContacted,
+    notes,
   };
 }
 
@@ -657,6 +752,128 @@ export async function updateInscricao(
       apply("level", levelValue);
       apply("hierarchy_level", levelValue);
     }
+
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [id, JSON.stringify(nextPayload)]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const updated = await getInscricaoById(id);
+  if (!updated) {
+    throw new Error("Inscrição não encontrada após atualização");
+  }
+
+  return updated;
+}
+
+interface UpdateStatusOptions {
+  whatsappContacted?: boolean | null;
+  note?: string | null;
+  author?: string | null;
+}
+
+export async function setInscricaoStatus(
+  id: number,
+  status: InscricaoStatus,
+  options: UpdateStatusOptions = {}
+): Promise<InscricaoItem> {
+  if (!STATUS_VALUES.includes(status)) {
+    throw new Error("Status inválido");
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
+      `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("Inscrição não encontrada");
+    }
+
+    const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+    const nextPayload: Record<string, unknown> = { ...payload };
+
+    nextPayload["dashboard_status"] = status;
+    nextPayload["dashboard_status_at"] = new Date().toISOString();
+
+    if (options.whatsappContacted !== undefined) {
+      nextPayload["dashboard_status_whatsapp"] = options.whatsappContacted;
+    }
+
+    if (options.note && options.note.trim().length > 0) {
+      appendNoteToPayload(nextPayload, {
+        content: options.note,
+        viaWhatsapp: options.whatsappContacted ?? null,
+        author: options.author ?? null,
+      });
+    }
+
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [id, JSON.stringify(nextPayload)]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const updated = await getInscricaoById(id);
+  if (!updated) {
+    throw new Error("Inscrição não encontrada após atualização");
+  }
+
+  return updated;
+}
+
+interface NoteOptions {
+  viaWhatsapp?: boolean | null;
+  author?: string | null;
+}
+
+export async function addInscricaoNote(
+  id: number,
+  content: string,
+  options: NoteOptions = {}
+): Promise<InscricaoItem> {
+  if (typeof content !== "string" || content.trim().length === 0) {
+    throw new Error("A anotação não pode estar vazia");
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
+      `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      throw new Error("Inscrição não encontrada");
+    }
+
+    const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+    const nextPayload: Record<string, unknown> = { ...payload };
+
+    appendNoteToPayload(nextPayload, {
+      content,
+      viaWhatsapp: options.viaWhatsapp ?? null,
+      author: options.author ?? null,
+    });
 
     await client.query(
       `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,

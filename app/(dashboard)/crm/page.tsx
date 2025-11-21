@@ -4,6 +4,7 @@ import InscricoesTable from "@/components/InscricoesTable";
 import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
+import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
 
@@ -60,6 +61,23 @@ function buildExportUrl(params: URLSearchParams): string {
   return query.length ? `/api/export?${query}` : "/api/export";
 }
 
+function resolveLatestTrainingOption(options: TrainingOption[]): TrainingOption | undefined {
+  if (!options.length) {
+    return undefined;
+  }
+
+  return [...options]
+    .map((option) => {
+      const candidates = [option.startsAt, option.id, option.label];
+      const timestamps = candidates
+        .map((candidate) => (typeof candidate === "string" ? Date.parse(candidate) : Number.NaN))
+        .filter((value) => Number.isFinite(value)) as number[];
+      const best = timestamps.length ? Math.max(...timestamps) : Number.NEGATIVE_INFINITY;
+      return { option, score: best };
+    })
+    .sort((a, b) => b.score - a.score)[0]?.option;
+}
+
 export const metadata: Metadata = {
   title: "CRM de Inscrições",
   description: "Gerencie toda a base com filtros avançados e exportação completa.",
@@ -76,35 +94,44 @@ export default async function CrmPage(props: CrmPageProps) {
   const indicacao = pickStringParam(searchParams?.indicacao) ?? "";
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
 
-  const recruiterOptions = listRecruiters();
-  const [trainingOptions, result] = await Promise.all([
-    listTrainingFilterOptions(),
-    listInscricoes({
-      page,
-      pageSize,
-      orderBy,
-      orderDirection,
-      filters: {
-        nome,
-        telefone,
-        indicacao,
-        treinamento: treinamentoSelecionado,
-      },
-    }),
-  ]);
+  const recruiterOptionsPromise = listRecruiters();
+  const trainingOptions = await listTrainingFilterOptions();
+  const latestTrainingOption = resolveLatestTrainingOption(trainingOptions);
+  const activeTreinamentoId = treinamentoSelecionado || latestTrainingOption?.id || "";
+  const aplicouPadrao = !treinamentoSelecionado && Boolean(latestTrainingOption);
+
+  const resultPromise = listInscricoes({
+    page,
+    pageSize,
+    orderBy,
+    orderDirection,
+    filters: {
+      nome,
+      telefone,
+      indicacao,
+      treinamento: activeTreinamentoId,
+    },
+  });
+
+  const [recruiterOptions, result] = await Promise.all([recruiterOptionsPromise, resultPromise]);
 
   const indicatorDatalistId = "indicator-options";
-  const selectedTrainingOption = treinamentoSelecionado.length
-    ? trainingOptions.find((option) => option.id === treinamentoSelecionado)
+  const selectedTrainingOption = activeTreinamentoId.length
+    ? trainingOptions.find((option) => option.id === activeTreinamentoId)
     : undefined;
   const trainingFilterLabel = selectedTrainingOption
     ? selectedTrainingOption.label ?? selectedTrainingOption.id
-    : treinamentoSelecionado;
+    : activeTreinamentoId;
   const activeFilters = [
     nome ? { label: "Nome", value: nome } : null,
     telefone ? { label: "Telefone", value: telefone } : null,
     indicacao ? { label: "Indicador", value: indicacao } : null,
-    treinamentoSelecionado ? { label: "Treinamento", value: trainingFilterLabel } : null,
+    activeTreinamentoId
+      ? {
+          label: "Treinamento",
+          value: aplicouPadrao ? `${trainingFilterLabel ?? activeTreinamentoId} (padrão)` : trainingFilterLabel ?? activeTreinamentoId,
+        }
+      : null,
   ].filter((entry): entry is { label: string; value: string } => Boolean(entry));
   const activeFiltersCount = activeFilters.length;
 
@@ -112,7 +139,7 @@ export default async function CrmPage(props: CrmPageProps) {
   if (nome) paramsForExport.set("nome", nome);
   if (telefone) paramsForExport.set("telefone", telefone);
   if (indicacao) paramsForExport.set("indicacao", indicacao);
-  if (treinamentoSelecionado) paramsForExport.set("treinamento", treinamentoSelecionado);
+  if (activeTreinamentoId) paramsForExport.set("treinamento", activeTreinamentoId);
   paramsForExport.set("orderBy", orderBy);
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
@@ -232,7 +259,7 @@ export default async function CrmPage(props: CrmPageProps) {
                       <select
                         id="treinamento"
                         name="treinamento"
-                        defaultValue={treinamentoSelecionado}
+                        defaultValue={activeTreinamentoId}
                         className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
                       >
                         <option value="">Todos</option>

@@ -22,6 +22,16 @@ export interface InscricaoPayload {
 
 export type InscricaoTipo = "lead" | "recrutador";
 
+export type InscricaoStatus = "aguardando" | "aprovado" | "rejeitado";
+
+export interface InscricaoNote {
+  id: string;
+  content: string;
+  createdAt: string;
+  author?: string | null;
+  viaWhatsapp?: boolean | null;
+}
+
 export interface InscricaoItem {
   id: number;
   criadoEm: string;
@@ -42,6 +52,10 @@ export interface InscricaoItem {
   parentInscricaoId?: number | null;
   nivel?: number | null;
   isVirtual?: boolean;
+  status?: InscricaoStatus;
+  statusUpdatedAt?: string | null;
+  statusWhatsappContacted?: boolean | null;
+  notes?: InscricaoNote[];
 }
 
 export interface ListInscricoesResult {
