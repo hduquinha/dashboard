@@ -19,7 +19,7 @@ export default async function DuplicadosPage() {
   const duplicateSummary = await listDuplicateSuspects({ maxGroups: 20 });
 
   return (
-    <main className="min-h-screen bg-neutral-50">
+    <main className="min-h-screen bg-white">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
         <header className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

@@ -13,7 +13,7 @@ export default function DashboardError({ error, reset }: DashboardErrorProps) {
   }, [error]);
 
   return (
-    <main className="min-h-screen bg-neutral-50">
+    <main className="min-h-screen bg-white">
       <div className="mx-auto flex max-w-lg flex-col items-center justify-center gap-4 px-6 py-24 text-center">
         <h1 className="text-2xl font-semibold text-neutral-900">Algo deu errado</h1>
         <p className="text-sm text-neutral-600">

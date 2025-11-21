@@ -20,11 +20,18 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
     redirect("/login");
   }
 
-  const duplicateSummary = await listDuplicateSuspects({ maxGroups: 1 });
+  let duplicateCount = 0;
+  try {
+    const summary = await listDuplicateSuspects({ maxGroups: 1 });
+    duplicateCount = summary.totalGroups;
+  } catch (error) {
+    console.error("Failed to load duplicate summary for sidebar", error);
+    duplicateCount = 0;
+  }
 
   return (
-    <div className="flex min-h-screen bg-neutral-50">
-      <SidebarNav duplicateCount={duplicateSummary.totalGroups} />
+    <div className="flex min-h-screen bg-white">
+      <SidebarNav duplicateCount={duplicateCount} />
       <div className="flex-1">
         <div className="sticky top-0 z-20 border-b border-neutral-200 bg-white/80 px-4 py-3 shadow-sm backdrop-blur lg:hidden">
           <nav className="flex items-center gap-3 overflow-x-auto text-sm font-semibold text-neutral-600" aria-label="Navegação mobile">

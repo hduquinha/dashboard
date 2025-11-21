@@ -7,8 +7,8 @@ import type { OrderDirection, OrderableField } from "@/types/inscricao";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PAGE_SIZE = 25;
-const MAX_PAGE_SIZE = 100;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 interface CrmPageProps {
   searchParams:
