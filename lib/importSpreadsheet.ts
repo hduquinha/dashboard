@@ -27,6 +27,7 @@ export interface ImportPayload {
   cidade: string | null;
   clientId: string | null;
   from_bio: string | null;
+  indicacao: string | null;
   telefone: string | null;
   ansiedade: string | null;
   timestamp: string | null;
@@ -219,10 +220,52 @@ function pickField(row: Record<string, unknown>, ...keys: string[]): unknown {
   return undefined;
 }
 
+function formatDateParts(year: number, month: number, day: number): string {
+  const safeYear = Math.max(1900, Math.min(9999, Math.trunc(year)));
+  const safeMonth = Math.max(1, Math.min(12, Math.trunc(month)));
+  const safeDay = Math.max(1, Math.min(31, Math.trunc(day)));
+  return `${String(safeDay).padStart(2, "0")}/${String(safeMonth).padStart(2, "0")}/${safeYear}`;
+}
+
+function normalizeTrainingValue(value: unknown): string | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return formatDateParts(value.getFullYear(), value.getMonth() + 1, value.getDate());
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (parsed && parsed.y && parsed.m && parsed.d) {
+      return formatDateParts(parsed.y, parsed.m, parsed.d);
+    }
+  }
+
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const directDate = new Date(normalized);
+  if (!Number.isNaN(directDate.getTime())) {
+    return formatDateParts(directDate.getFullYear(), directDate.getMonth() + 1, directDate.getDate());
+  }
+
+  const numericMatch = normalized.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})$/);
+  if (numericMatch) {
+    const [, day, month, yearRaw] = numericMatch;
+    const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
+    return formatDateParts(year, Number(month), Number(day));
+  }
+
+  return normalized;
+}
+
 function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
   const row = normalizeRowKeys(rawRow);
   const treinamentoValue =
-    normalizeString(pickField(row, "treinamento", "data_treinamento")) ?? normalizeString(row.data);
+    normalizeTrainingValue(pickField(row, "treinamento", "data_treinamento", "data")) ??
+    normalizeTrainingValue(row.data);
+  const indicacaoValue = normalizeString(pickField(row, "bio", "from_bio", "indicacao"));
+  const trafficSourceValue = indicacaoValue ?? normalizeString(row.traffic_source);
 
   return {
     nome: normalizeString(row.nome),
@@ -233,7 +276,8 @@ function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
     _final: toBoolean(row._final),
     cidade: normalizeString(row.cidade),
     clientId: normalizeString(pickField(row, "clientId", "client_id", "id", "lead_id")),
-    from_bio: normalizeString(row.from_bio),
+    from_bio: indicacaoValue,
+    indicacao: indicacaoValue,
     telefone: normalizePhone(pickField(row, "telefone", "phone", "tefone", "celular")),
     ansiedade: normalizeString(row.ansiedade),
     timestamp: normalizeString(row.timestamp),
@@ -243,7 +287,7 @@ function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
     is_bio_traffic: normalizeString(row.is_bio_traffic),
     profissao_area: normalizeString(row.profissao_area),
     relacionamento: normalizeString(row.relacionamento),
-    traffic_source: normalizeString(row.traffic_source),
+    traffic_source: trafficSourceValue,
     vida_financeira: normalizeString(row.vida_financeira),
     audience_segment: normalizeString(row.audience_segment),
     data_treinamento: treinamentoValue,

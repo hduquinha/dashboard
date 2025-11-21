@@ -15,6 +15,7 @@ const PREVIEW_COLUMNS: Array<{ key: keyof ImportPayload; label: string }> = [
   { key: "telefone", label: "Telefone" },
   { key: "cidade", label: "Cidade" },
   { key: "data_treinamento", label: "Treinamento" },
+  { key: "indicacao", label: "Indicação" },
   { key: "clientId", label: "Client ID" },
 ];
 
