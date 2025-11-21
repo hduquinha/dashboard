@@ -43,8 +43,8 @@ export async function previewImportAction(
   }
 
   try {
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const result = importSpreadsheet(buffer);
+    const bytes = await file.arrayBuffer();
+    const result = importSpreadsheet(bytes);
     return {
       status: "success",
       message: `Pré-visualização pronta: ${result.importados.length} registros válidos`,

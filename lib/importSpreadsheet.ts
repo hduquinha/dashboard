@@ -1,5 +1,17 @@
 import * as XLSX from "xlsx";
 
+type SpreadsheetBinary = ArrayBuffer | ArrayBufferView;
+
+function toUint8Array(input: SpreadsheetBinary): Uint8Array {
+  if (input instanceof Uint8Array) {
+    return input;
+  }
+  if (ArrayBuffer.isView(input)) {
+    return new Uint8Array(input.buffer);
+  }
+  return new Uint8Array(input);
+}
+
 export interface ImportPayload {
   nome: string | null;
   page: string | null;
@@ -139,9 +151,9 @@ function buildPayload(row: Record<string, unknown>): ImportPayload {
   };
 }
 
-export function importSpreadsheet(buffer: Buffer): ImportResult {
-  const workbook = XLSX.read(buffer, {
-    type: "buffer",
+export function importSpreadsheet(data: SpreadsheetBinary): ImportResult {
+  const workbook = XLSX.read(toUint8Array(data), {
+    type: "array",
     cellDates: false,
     cellNF: false,
     raw: false,
