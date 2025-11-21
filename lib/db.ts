@@ -376,10 +376,43 @@ function buildTrainingFilterCandidates(value: string): string[] {
     }
   };
 
+  const enqueueCompositeSegments = (candidate: string | null | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const compoundParts = trimmed.split("::");
+    if (compoundParts.length > 1) {
+      for (const part of compoundParts) {
+        enqueue(part);
+      }
+    }
+
+    const dashParts = trimmed.split(/\s+[–—-]\s+/);
+    if (dashParts.length > 1) {
+      for (const part of dashParts) {
+        enqueue(part);
+      }
+    }
+
+    if (trimmed.includes("|")) {
+      for (const part of trimmed.split("|")) {
+        enqueue(part);
+      }
+    }
+  };
+
   enqueue(value);
+  enqueueCompositeSegments(value);
 
   while (queue.length > 0) {
     const current = queue.shift()!;
+
+    enqueueCompositeSegments(current);
 
     const info = getTrainingById(current);
     if (info) {
@@ -428,6 +461,38 @@ function buildTrainingFilterCandidates(value: string): string[] {
   }
 
   return Array.from(seen);
+}
+
+function formatCityLabel(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1).toLowerCase())
+    .join(" ")
+    .trim();
+  return normalized || null;
+}
+
+function buildCompositeTrainingId(
+  trainingValue: string | null | undefined,
+  cityValue: string | null | undefined
+): string | null {
+  const training = trainingValue?.trim() ?? "";
+  const city = cityValue?.trim() ?? "";
+
+  if (training && city) {
+    return `${training}::${city}`;
+  }
+  if (training) {
+    return training;
+  }
+  if (city) {
+    return `cidade::${city}`;
+  }
+  return null;
 }
 
 function formatNormalizedPhone(value: string | null | undefined): string {
@@ -544,9 +609,13 @@ export async function listInscricoes(
       const normalizedTrainingFields = TRAINING_FIELD_KEYS.map(
         (key) => `NULLIF(TRIM(COALESCE(i.payload->>'${key}', '')), '')`
       );
-      const matches = normalizedTrainingFields.map(
-        (expr) => `${expr} IS NOT NULL AND ${expr} ILIKE ANY($${arrayIndex})`
+      const trainingCityFields = ["cidade", "treinamento_cidade", "training_city"];
+      const normalizedCityFields = trainingCityFields.map(
+        (key) => `NULLIF(TRIM(COALESCE(i.payload->>'${key}', '')), '')`
       );
+      const matches = [...normalizedTrainingFields, ...normalizedCityFields]
+        .filter((expr, index, all) => expr && all.indexOf(expr) === index)
+        .map((expr) => `${expr} IS NOT NULL AND ${expr} ILIKE ANY($${arrayIndex})`);
       if (matches.length > 0) {
         conditions.push(`(${matches.join(' OR ')})`);
       }
@@ -1251,35 +1320,69 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   const seen = new Set(orderedOptions.map((option) => option.id));
 
   const query = `
-    SELECT DISTINCT TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento
+    SELECT DISTINCT
+      TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento,
+      TRIM(COALESCE(i.payload->>'treinamento_label', '')) AS treinamento_label,
+      TRIM(COALESCE(i.payload->>'treinamento_nome', '')) AS treinamento_nome,
+      TRIM(COALESCE(i.payload->>'treinamento_cidade', '')) AS treinamento_cidade,
+      TRIM(COALESCE(i.payload->>'cidade', '')) AS cidade
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE TRIM(COALESCE(i.payload->>'treinamento', '')) <> ''
-    ORDER BY 1
+    WHERE TRIM(COALESCE(
+      i.payload->>'treinamento',
+      i.payload->>'treinamento_label',
+      i.payload->>'treinamento_nome',
+      i.payload->>'treinamento_cidade',
+      i.payload->>'cidade',
+      ''
+    )) <> ''
+    ORDER BY 1, 5
   `;
 
   try {
-    const { rows } = await getPool().query<{ treinamento: string | null }>(query);
+    const { rows } = await getPool().query<{
+      treinamento: string | null;
+      treinamento_label: string | null;
+      treinamento_nome: string | null;
+      treinamento_cidade: string | null;
+      cidade: string | null;
+    }>(query);
     const extras: TrainingOption[] = [];
 
     for (const row of rows) {
-      const rawId = typeof row.treinamento === "string" ? row.treinamento.trim() : "";
-      if (!rawId) {
+      const baseTrainingId =
+        row.treinamento?.trim() ??
+        row.treinamento_label?.trim() ??
+        row.treinamento_nome?.trim() ??
+        "";
+      const cityLabel = formatCityLabel(row.treinamento_cidade ?? row.cidade);
+      const compositeId = buildCompositeTrainingId(baseTrainingId, cityLabel);
+      if (!compositeId) {
         continue;
       }
 
-      const info = getTrainingById(rawId);
-      if (info) {
-        if (!seen.has(info.id)) {
-          seen.add(info.id);
-          extras.push(info);
-        }
+      if (seen.has(compositeId)) {
         continue;
       }
 
-      if (!seen.has(rawId)) {
-        seen.add(rawId);
-        extras.push({ id: rawId, label: rawId });
+      const configuredInfo = baseTrainingId ? getTrainingById(baseTrainingId) : null;
+      const fallbackLabel = baseTrainingId || cityLabel || "";
+      const baseLabel = configuredInfo?.label ?? fallbackLabel;
+      const labelParts = [];
+      if (cityLabel) {
+        labelParts.push(cityLabel);
       }
+      if (baseLabel && (!cityLabel || baseLabel !== cityLabel)) {
+        labelParts.push(baseLabel);
+      }
+
+      const label = labelParts.length > 0 ? labelParts.join(" – ") : compositeId;
+      seen.add(compositeId);
+
+      extras.push({
+        id: compositeId,
+        label,
+        startsAt: configuredInfo?.startsAt,
+      });
     }
 
     extras.sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
