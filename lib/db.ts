@@ -574,7 +574,7 @@ export async function listInscricoes(
       COUNT(*) OVER() AS total_count
     FROM ${SCHEMA_NAME}.inscricoes AS i
     ${whereClause}
-    ORDER BY ${sortColumn} ${sortDirection}
+    ORDER BY ${sortColumn} ${sortDirection}, i.id ${sortDirection}
     LIMIT $${limitIndex} OFFSET $${offsetIndex}
   `;
 
