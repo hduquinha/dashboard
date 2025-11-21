@@ -121,7 +121,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
         <header className="rounded-3xl border border-neutral-200 bg-white/90 p-6 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Treinamento atual</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-sky-500">Treinamento atual</p>
               <h1 className="text-3xl font-semibold text-neutral-900">{heroLabel}</h1>
               <p className="text-sm text-neutral-600">
                 Acompanhe o desempenho do treinamento em tempo real e compartilhe os resultados com o time.
@@ -130,13 +130,13 @@ export default async function DashboardPage(props: DashboardPageProps) {
             <div className="flex flex-col gap-3 sm:flex-row">
               <Link
                 href={nextCtaHref}
-                className="inline-flex items-center justify-center rounded-2xl bg-neutral-900 px-6 py-3 text-sm font-semibold text-white shadow hover:bg-neutral-800"
+                className="inline-flex items-center justify-center rounded-2xl bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow hover:bg-sky-500"
               >
                 Abrir CRM completo
               </Link>
               <Link
                 href="/importar"
-                className="inline-flex items-center justify-center rounded-2xl border border-neutral-300 px-6 py-3 text-sm font-semibold text-neutral-800 hover:border-neutral-500"
+                className="inline-flex items-center justify-center rounded-2xl border border-sky-100 px-6 py-3 text-sm font-semibold text-sky-700 hover:border-sky-300"
               >
                 Importar planilha
               </Link>

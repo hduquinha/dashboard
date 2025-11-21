@@ -2,9 +2,10 @@ import { ReactNode } from "react";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import SidebarNav, { NAV_LINKS } from "@/components/SidebarNav";
+import SidebarNav from "@/components/SidebarNav";
 import { assertToken } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
+import { NAV_LINKS } from "@/lib/navLinks";
 
 interface DashboardLayoutProps {
   children: ReactNode;

@@ -2,33 +2,18 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import type { NavLink } from '@/lib/navLinks';
+import { NAV_LINKS } from '@/lib/navLinks';
 
 interface SidebarNavProps {
   duplicateCount?: number;
 }
 
-export interface NavLink {
-  key: string;
-  href: string;
-  label: string;
-  description: string;
-  icon: string;
-}
-
-export const NAV_LINKS: NavLink[] = [
-  { key: 'home', href: '/', label: 'Início', description: 'Treinamento atual', icon: '🏠' },
-  { key: 'crm', href: '/crm', label: 'CRM', description: 'Base completa', icon: '📋' },
-  { key: 'duplicados', href: '/duplicados', label: 'Duplicados', description: 'Higienização', icon: '⚠️' },
-  { key: 'recrutadores', href: '/recrutadores', label: 'Recrutadores', description: 'Gerencie códigos', icon: '🧭' },
-  { key: 'rede', href: '/rede', label: 'Rede', description: 'Visualização da árvore', icon: '🌱' },
-  { key: 'importar', href: '/importar', label: 'Importar', description: 'Planilhas e lotes', icon: '📥' },
-];
-
 export default function SidebarNav({ duplicateCount = 0 }: SidebarNavProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden w-64 flex-shrink-0 flex-col gap-5 rounded-3xl border border-neutral-100 bg-white p-5 shadow-lg/30 lg:flex">
+    <aside className="hidden w-64 flex-shrink-0 flex-col gap-5 rounded-3xl border border-neutral-100 bg-white p-5 shadow-lg/30 md:flex">
       <div className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-neutral-400">Painel</p>
         <h1 className="text-lg font-semibold text-neutral-900">Marketing Network</h1>

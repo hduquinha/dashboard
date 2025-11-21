@@ -1,0 +1,16 @@
+export interface NavLink {
+  key: string;
+  href: string;
+  label: string;
+  description: string;
+  icon: string;
+}
+
+export const NAV_LINKS: NavLink[] = [
+  { key: "home", href: "/", label: "Início", description: "Treinamento atual", icon: "🏠" },
+  { key: "crm", href: "/crm", label: "CRM", description: "Base completa", icon: "📋" },
+  { key: "duplicados", href: "/duplicados", label: "Duplicados", description: "Higienização", icon: "⚠️" },
+  { key: "recrutadores", href: "/recrutadores", label: "Recrutadores", description: "Gerencie códigos", icon: "🧭" },
+  { key: "rede", href: "/rede", label: "Rede", description: "Visualização da árvore", icon: "🌱" },
+  { key: "importar", href: "/importar", label: "Importar", description: "Planilhas e lotes", icon: "📥" },
+];
