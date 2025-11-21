@@ -82,7 +82,7 @@ function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry 
 export default function RecruitersDirectory({ recruiters, trainingOptions, recruiterOptions }: RecruitersDirectoryProps) {
   const [entries, setEntries] = useState<RecruiterDirectoryEntry[]>(() => recruiters.slice());
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<FormMode>('create');
+  const [mode, setMode] = useState<FormMode>('link');
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [telefone, setTelefone] = useState('');
@@ -101,9 +101,12 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
   const [existingSearchTerm, setExistingSearchTerm] = useState('');
   const [existingSuggestions, setExistingSuggestions] = useState<InscricaoLike[]>([]);
   const [isSearchingExisting, setIsSearchingExisting] = useState(false);
-  const [existingSelectedLabel, setExistingSelectedLabel] = useState<string | null>(null);
+  const [selectedExisting, setSelectedExisting] = useState<InscricaoLike | null>(null);
+  const [linkingContext, setLinkingContext] = useState<string | null>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchTimeoutRef = useRef<number | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const nextSuggestedCode = useMemo(() => computeNextCode(entries), [entries]);
 
@@ -183,15 +186,12 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
     };
   }, [existingSearchTerm, mode]);
 
-  const changeMode = useCallback((nextMode: FormMode) => {
-    if (mode === nextMode) {
-      return;
+  const resetForm = useCallback(() => {
+    searchAbortRef.current?.abort();
+    if (searchTimeoutRef.current !== null) {
+      window.clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
     }
-    setMode(nextMode);
-    resetForm();
-  }, [mode]);
-
-  function resetForm() {
     setName('');
     setCode('');
     setTelefone('');
@@ -201,15 +201,25 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
     setExistingInscricaoId('');
     setNivel('');
     setExistingSearchTerm('');
-    setExistingSelectedLabel(null);
     setExistingSuggestions([]);
-  }
+    setSelectedExisting(null);
+    setLinkingContext(null);
+    setIsSearchingExisting(false);
+  }, []);
+
+  const handleModeChange = useCallback((nextMode: FormMode) => {
+    if (mode !== nextMode) {
+      setMode(nextMode);
+    }
+    resetForm();
+  }, [mode, resetForm]);
 
   const handleExistingSuggestionSelect = useCallback((suggestion: InscricaoLike) => {
+    setSelectedExisting(suggestion);
     setExistingInscricaoId(String(suggestion.id));
     setExistingSearchTerm(suggestion.nome ?? `Inscrição #${suggestion.id}`);
-    setExistingSelectedLabel(`${suggestion.nome ?? 'Sem nome'} · ID #${suggestion.id}`);
     setExistingSuggestions([]);
+    setCode((current) => current || nextSuggestedCode);
     if (!name) {
       setName(suggestion.nome ?? '');
     }
@@ -219,13 +229,26 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
     if (!cidade && suggestion.cidade) {
       setCidade(suggestion.cidade);
     }
-  }, [cidade, name, telefone]);
+  }, [cidade, name, nextSuggestedCode, telefone]);
 
   const handleExistingSearchChange = useCallback((value: string) => {
     setExistingSearchTerm(value);
-    setExistingSelectedLabel(null);
     setExistingInscricaoId('');
+    setSelectedExisting(null);
   }, []);
+
+  const startLinkingForRecruiter = useCallback((recruiterEntry: RecruiterDirectoryEntry) => {
+    if (mode !== 'link') {
+      setMode('link');
+    }
+    resetForm();
+    setCode(recruiterEntry.code);
+    setLinkingContext(`Reatribuindo o código ${recruiterEntry.code} · ${recruiterEntry.name}`);
+    requestAnimationFrame(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      searchInputRef.current?.focus();
+    });
+  }, [mode, resetForm]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -383,22 +406,11 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
           </p>
         ) : null}
 
-        <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
+        <form ref={formRef} className="mt-4 space-y-4" onSubmit={handleSubmit}>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={() => changeMode('create')}
-              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                mode === 'create'
-                  ? 'border-neutral-900 bg-neutral-900 text-white'
-                  : 'border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900'
-              }`}
-            >
-              Criar recrutador
-            </button>
-            <button
-              type="button"
-              onClick={() => changeMode('link')}
+              onClick={() => handleModeChange('link')}
               className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                 mode === 'link'
                   ? 'border-neutral-900 bg-neutral-900 text-white'
@@ -407,38 +419,34 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
             >
               Vincular um existente
             </button>
+            <button
+              type="button"
+              onClick={() => handleModeChange('create')}
+              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                mode === 'create'
+                  ? 'border-neutral-900 bg-neutral-900 text-white'
+                  : 'border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900'
+              }`}
+            >
+              Criar recrutador
+            </button>
           </div>
           <p className="text-sm text-neutral-600">
             {mode === 'create'
               ? 'Crie um novo recrutador e gere automaticamente o cadastro no CRM.'
-              : 'Localize um cadastro existente no CRM e promova-o para recrutador.'}
+              : 'Localize um cadastro existente no CRM. A tela abre focada na busca para agilizar a vinculação.'}
           </p>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Código do recrutador
-              <input
-                value={code}
-                onChange={(event) => setCode(event.target.value)}
-                placeholder={nextSuggestedCode}
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-            {mode === 'create' ? (
+          {mode === 'link' ? (
+            <div className="space-y-4">
+              {linkingContext ? (
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{linkingContext}</p>
+              ) : null}
               <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                Nome do recrutador
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Digite o nome"
-                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-            ) : (
-              <div className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
                 Buscar no CRM
                 <div className="relative">
                   <input
+                    ref={searchInputRef}
                     value={existingSearchTerm}
                     onChange={(event) => handleExistingSearchChange(event.target.value)}
                     placeholder="Digite pelo menos 2 letras"
@@ -473,96 +481,157 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                     </ul>
                   ) : null}
                 </div>
-                {existingSelectedLabel ? (
-                  <span className="text-xs text-emerald-700">Selecionado: {existingSelectedLabel}</span>
-                ) : (
-                  <span className="text-xs text-neutral-500">Selecione um cadastro para continuar.</span>
-                )}
+                <span className="text-xs text-neutral-500">
+                  {selectedExisting
+                    ? 'Cadastro selecionado. Ajuste as informações abaixo e confirme.'
+                    : 'Comece digitando para localizar um cadastro importado.'}
+                </span>
+              </label>
+
+              {selectedExisting ? (
+                <>
+                  <div className="flex flex-col gap-2 rounded-md border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-700 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-neutral-900">{selectedExisting.nome ?? `Inscrição #${selectedExisting.id}`}</p>
+                      <p className="text-xs text-neutral-500">
+                        ID #{selectedExisting.id}
+                        {selectedExisting.cidade ? ` · ${selectedExisting.cidade}` : ''}
+                        {selectedExisting.telefone ? ` · ${selectedExisting.telefone}` : ''}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-xs font-semibold text-neutral-600 underline"
+                      onClick={() => handleExistingSearchChange('')}
+                    >
+                      Trocar seleção
+                    </button>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                      Código do recrutador
+                      <input
+                        value={code}
+                        onChange={(event) => setCode(event.target.value)}
+                        placeholder={nextSuggestedCode}
+                        className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                      />
+                    </label>
+                    <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                      Nome (opcional)
+                      <input
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="Atualize o nome, se necessário"
+                        className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                      />
+                    </label>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-neutral-500">Selecione um cadastro para habilitar o vínculo.</p>
+              )}
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                Código do recrutador
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  placeholder={nextSuggestedCode}
+                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                />
+              </label>
+              <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                Nome do recrutador
+                <input
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Digite o nome"
+                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                />
+              </label>
+            </div>
+          )}
+
+          {(mode === 'create' || selectedExisting) && (
+            <>
+              <div className="grid gap-4 md:grid-cols-3">
+                <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                  Telefone (opcional)
+                  <input
+                    value={telefone}
+                    onChange={(event) => setTelefone(event.target.value)}
+                    placeholder="DDD + número"
+                    className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+                <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                  Cidade (opcional)
+                  <input
+                    value={cidade}
+                    onChange={(event) => setCidade(event.target.value)}
+                    placeholder="Cidade"
+                    className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+                <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                  Nível (opcional)
+                  <input
+                    value={nivel}
+                    onChange={(event) => setNivel(event.target.value)}
+                    placeholder="0"
+                    className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
               </div>
-            )}
-          </div>
 
-          {mode === 'link' ? (
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Nome do recrutador (opcional)
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Atualize o nome, se necessário"
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Telefone (opcional)
-              <input
-                value={telefone}
-                onChange={(event) => setTelefone(event.target.value)}
-                placeholder="DDD + número"
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Cidade (opcional)
-              <input
-                value={cidade}
-                onChange={(event) => setCidade(event.target.value)}
-                placeholder="Cidade"
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Nível (opcional)
-              <input
-                value={nivel}
-                onChange={(event) => setNivel(event.target.value)}
-                placeholder="0"
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Indicador (código)
-              <input
-                value={parentCode}
-                onChange={(event) => setParentCode(event.target.value)}
-                placeholder="Digite o código do indicador"
-                list={parentCodeDatalistId}
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-              <datalist id={parentCodeDatalistId}>
-                {entries.map((item) => (
-                  <option key={`parent-code-${item.code}`} value={item.code}>
-                    {item.name}
-                  </option>
-                ))}
-              </datalist>
-              <span className="text-xs text-neutral-500">
-                Use o código do recrutador responsável (opcional).
-              </span>
-            </label>
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              ID do indicador (opcional)
-              <input
-                value={parentInscricaoId}
-                onChange={(event) => setParentInscricaoId(event.target.value)}
-                placeholder="Ex.: 45"
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                  Indicador (código)
+                  <input
+                    value={parentCode}
+                    onChange={(event) => setParentCode(event.target.value)}
+                    placeholder="Digite o código do indicador"
+                    list={parentCodeDatalistId}
+                    className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                  <datalist id={parentCodeDatalistId}>
+                    {entries.map((item) => (
+                      <option key={`parent-code-${item.code}`} value={item.code}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </datalist>
+                  <span className="text-xs text-neutral-500">
+                    Use o código do recrutador responsável (opcional).
+                  </span>
+                </label>
+                <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                  ID do indicador (opcional)
+                  <input
+                    value={parentInscricaoId}
+                    onChange={(event) => setParentInscricaoId(event.target.value)}
+                    placeholder="Ex.: 45"
+                    className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+              </div>
+            </>
+          )}
 
           <div className="flex justify-end">
             <button
               type="submit"
               className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={isSubmitting}
+              disabled={isSubmitting || (mode === 'link' && !existingInscricaoId)}
             >
-              {isSubmitting ? 'Processando...' : mode === 'create' ? 'Criar recrutador' : 'Promover inscrição'}
+              {isSubmitting
+                ? 'Processando...'
+                : mode === 'create'
+                ? 'Criar recrutador'
+                : 'Vincular selecionado'}
             </button>
           </div>
         </form>
@@ -660,6 +729,13 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                         >
                           Ver árvore
                         </Link>
+                        <button
+                          type="button"
+                          onClick={() => startLinkingForRecruiter(recruiter)}
+                          className="rounded-md border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-700 transition hover:border-emerald-400 hover:text-emerald-900"
+                        >
+                          Trocar vínculo
+                        </button>
                         <button
                           type="button"
                           onClick={() => openInscricaoDetails(recruiter.inscricaoId)}

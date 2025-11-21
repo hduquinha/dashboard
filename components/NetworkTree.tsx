@@ -188,8 +188,8 @@ function NetworkTreeInner({
           ) : null}
         </div>
         {hasChildren && isExpanded ? (
-          <div className="relative mt-6 flex w-full flex-col items-center">
-            <span className="mb-4 h-10 w-px bg-neutral-300" aria-hidden="true" />
+          <div className="relative mt-6 flex w-full flex-col">
+            <span className="mb-4 h-10 w-px self-center bg-neutral-300" aria-hidden="true" />
             <div className="relative flex flex-row flex-nowrap justify-start gap-8 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-neutral-200">
               {node.children.map((child) => (
                 <div
