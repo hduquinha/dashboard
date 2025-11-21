@@ -1,10 +1,7 @@
 "use server";
 
-import { Buffer } from "node:buffer";
 import { importSpreadsheet } from "@/lib/importSpreadsheet";
 import { initialImportState, type ImportActionState } from "./state";
-
-export const runtime = "nodejs";
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15MB guard to avoid oversized uploads
 
@@ -35,7 +32,7 @@ export async function previewImportAction(
   }
 
   try {
-    const bytes = Buffer.from(await file.arrayBuffer());
+    const bytes = new Uint8Array(await file.arrayBuffer());
     const result = importSpreadsheet(bytes);
     return {
       status: "success",
