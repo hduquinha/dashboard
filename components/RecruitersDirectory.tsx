@@ -1,9 +1,10 @@
-'use client';
+"use client";
 
-import { FormEvent, useEffect, useId, useMemo, useState } from 'react';
-import type { RecruiterDirectoryEntry } from '@/app/(dashboard)/recrutadores/page';
-import type { InscricaoItem } from '@/types/inscricao';
-import { RECRUITERS_BASE_URL } from '@/lib/recruiters';
+import Link from "next/link";
+import { FormEvent, useEffect, useId, useMemo, useState } from "react";
+import type { RecruiterDirectoryEntry } from "@/app/(dashboard)/recrutadores/page";
+import type { InscricaoItem } from "@/types/inscricao";
+import { RECRUITERS_BASE_URL } from "@/lib/recruiters";
 
 interface RecruitersDirectoryProps {
   recruiters: RecruiterDirectoryEntry[];
@@ -451,13 +452,21 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
                       </a>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
-                        onClick={() => copyToClipboard(recruiter.url)}
-                      >
-                        Copiar link
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <Link
+                          href={`/recrutadores/${recruiter.code}`}
+                          className="rounded-md border border-sky-200 px-3 py-1 text-xs font-semibold text-sky-700 transition hover:border-sky-400 hover:text-sky-900"
+                        >
+                          Ver árvore
+                        </Link>
+                        <button
+                          type="button"
+                          className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
+                          onClick={() => copyToClipboard(recruiter.url)}
+                        >
+                          Copiar link
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

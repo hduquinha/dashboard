@@ -173,6 +173,22 @@ function sortNodes(nodes: NetworkNode[]): void {
   });
 }
 
+function compareByDescendants(a: NetworkNode, b: NetworkNode): number {
+  const diff = b.totalDescendants - a.totalDescendants;
+  if (diff !== 0) {
+    return diff;
+  }
+  if (a.tipo !== b.tipo) {
+    return a.tipo === "recrutador" ? -1 : 1;
+  }
+  return a.displayName.localeCompare(b.displayName, "pt-BR");
+}
+
+function sortTreeByDescendants(node: NetworkNode): void {
+  node.children.sort(compareByDescendants);
+  node.children.forEach(sortTreeByDescendants);
+}
+
 function computeMetrics(node: NetworkNode, depth: number, nodeById: Map<number, NetworkNode>): {
   total: number;
   leads: number;
@@ -337,14 +353,9 @@ export async function buildNetworkTree(
     });
   }
 
-  nodes.forEach((node) => {
-    sortNodes(node.children);
-  });
-
   const roots = nodes.filter((node) => node.parentNodeId === null && node.tipo === "recrutador");
   const orphans = nodes.filter((node) => node.parentNodeId === null && node.tipo !== "recrutador");
 
-  sortNodes(roots);
   sortNodes(orphans);
 
   const recruiterCount = nodes.filter((node) => node.tipo === "recrutador").length;
@@ -355,9 +366,15 @@ export async function buildNetworkTree(
     computeMetrics(root, 0, nodeById);
   });
 
+  roots.sort(compareByDescendants);
+  roots.forEach(sortTreeByDescendants);
+
   orphans.forEach((orphan) => {
     computeMetrics(orphan, 0, nodeById);
   });
+
+  orphans.sort(compareByDescendants);
+  orphans.forEach(sortTreeByDescendants);
 
   const stats: NetworkTreeStats = {
     total: nodes.length,

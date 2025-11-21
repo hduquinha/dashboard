@@ -16,6 +16,13 @@ const LINKS = [
     icon: '🗂️',
   },
   {
+    key: 'importar',
+    href: '/importar',
+    label: 'Importar',
+    description: 'Suba arquivos do Meta antes de gravar.',
+    icon: '📥',
+  },
+  {
     key: 'duplicados',
     href: '/duplicados',
     label: 'Duplicados',
@@ -42,7 +49,7 @@ export default function DashboardNav({ duplicateCount = 0 }: DashboardNavProps) 
   const pathname = usePathname();
 
   return (
-    <nav className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Navegação do painel">
+    <nav className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Navegação do painel">
       {LINKS.map((link) => {
         const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
         const showBadge = link.key === 'duplicados' && duplicateCount > 0;
