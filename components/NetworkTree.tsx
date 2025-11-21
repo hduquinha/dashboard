@@ -136,7 +136,7 @@ function NetworkTreeInner({
               handleNodeCardClick(node);
             }
           }}
-          className={`relative flex cursor-pointer flex-col items-center rounded-2xl border-2 px-4 py-3 text-center shadow-md transition focus:outline-none focus:ring-2 focus:ring-sky-500 ${
+          className={`relative flex cursor-pointer flex-col items-center rounded-2xl border-2 px-4 py-3 text-center shadow-md transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-sky-500 ${
             isFocus ? "border-sky-600 bg-sky-50" : "border-neutral-200 bg-white"
           } ${isLoadingNode ? "opacity-70" : ""}`}
           aria-pressed={isFocus}
@@ -188,14 +188,25 @@ function NetworkTreeInner({
           ) : null}
         </div>
         {hasChildren && isExpanded ? (
-          <div className="relative mt-6 flex w-full flex-col">
-            <span className="mb-4 h-10 w-px self-center bg-neutral-300" aria-hidden="true" />
-            <div className="relative flex flex-row flex-nowrap justify-start gap-8 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-neutral-200">
-              {node.children.map((child) => (
-                <div
-                  key={child.id}
-                  className="relative pt-6 before:absolute before:top-0 before:left-1/2 before:h-6 before:w-px before:-translate-x-1/2 before:bg-neutral-200"
-                >
+          <div className="relative mt-6 flex w-full flex-col items-center">
+            <span className="mb-4 h-10 w-px bg-neutral-300" aria-hidden="true" />
+            <div className="flex flex-row flex-nowrap justify-center gap-8">
+              {node.children.map((child, index) => (
+                <div key={child.id} className="relative flex flex-col items-center pt-6">
+                  {/* Horizontal line to the left (hidden for first child) */}
+                  <div
+                    className={`absolute left-0 top-0 h-px w-1/2 bg-neutral-300 ${
+                      index === 0 ? "hidden" : "block"
+                    }`}
+                  />
+                  {/* Horizontal line to the right (hidden for last child) */}
+                  <div
+                    className={`absolute right-0 top-0 h-px w-1/2 bg-neutral-300 ${
+                      index === node.children.length - 1 ? "hidden" : "block"
+                    }`}
+                  />
+                  {/* Vertical line from top to child */}
+                  <div className="absolute left-1/2 top-0 h-6 w-px -translate-x-1/2 bg-neutral-300" />
                   {renderNode(child)}
                 </div>
               ))}
@@ -257,9 +268,11 @@ function NetworkTreeInner({
           <section className="space-y-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Redes de recrutadores</h2>
             <div className="space-y-8 overflow-x-auto pb-6">
-              <div className="min-w-full">
+              <div className="flex min-w-full w-fit flex-col items-center">
                 {displayedRoots.map((root) => (
-                  <div key={root.id}>{renderNode(root)}</div>
+                  <div key={root.id} className="mb-8">
+                    {renderNode(root)}
+                  </div>
                 ))}
               </div>
             </div>
