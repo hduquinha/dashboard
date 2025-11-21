@@ -157,69 +157,136 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   return (
     <main className="px-4 py-8 sm:px-6 lg:px-10">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-sky-500">Treinamento atual</p>
-              <h1 className="text-3xl font-semibold text-neutral-900">{heroLabel}</h1>
-              <p className="text-sm text-neutral-600">
-                Acompanhe o desempenho do treinamento em tempo real e compartilhe os resultados com o time.
-              </p>
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+        <header className="space-y-4">
+          <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Painel</p>
+                <div className="space-y-2">
+                  <h1 className="text-3xl font-semibold text-neutral-900">Central do treinamento</h1>
+                  <p className="text-sm text-neutral-600">
+                    Monitore o desempenho do {heroLabel.toLowerCase()} e acione o time rapidamente com atalhos do CRM.
+                  </p>
+                </div>
+                <div className="inline-flex flex-wrap items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 px-3 py-1 text-xs font-semibold text-neutral-700">
+                  <span>Treinamento atual</span>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-neutral-900">{heroLabel}</span>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  href={nextCtaHref}
+                  className="inline-flex items-center rounded-2xl border border-neutral-300 px-5 py-2.5 text-sm font-semibold text-neutral-800 transition hover:border-neutral-500"
+                >
+                  Ver CRM completo
+                </Link>
+                <Link
+                  href="/importar"
+                  className="inline-flex items-center rounded-2xl bg-neutral-900 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-neutral-800"
+                >
+                  Importar novas inscrições
+                </Link>
+              </div>
             </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <Link
-                href={nextCtaHref}
-                className="inline-flex items-center justify-center rounded-2xl bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow hover:bg-sky-500"
-              >
-                Abrir CRM completo
-              </Link>
-              <Link
-                href="/importar"
-                className="inline-flex items-center justify-center rounded-2xl border border-slate-200 px-6 py-3 text-sm font-semibold text-slate-700 hover:border-slate-400"
-              >
-                Importar planilha
-              </Link>
+            <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
+              <div className="rounded-xl border border-neutral-100 bg-neutral-50/80 p-4">
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Selecionar treinamento</p>
+                <p className="text-sm text-neutral-600">Aplique o filtro para alinhar indicadores e atalhos.</p>
+                <div className="mt-4 max-w-sm">
+                  <TrainingSwitcher options={switcherOptions} selectedId={selectedTrainingId} />
+                </div>
+              </div>
+              <div className="rounded-xl border border-neutral-100 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Atalhos rápidos</p>
+                <ul className="mt-3 space-y-2 text-sm text-neutral-700">
+                  <li className="flex items-center justify-between gap-4">
+                    <span>Revisar possíveis duplicados</span>
+                    <Link href="/duplicados" className="text-xs font-semibold text-neutral-900 underline-offset-2 hover:underline">
+                      Abrir
+                    </Link>
+                  </li>
+                  <li className="flex items-center justify-between gap-4">
+                    <span>Diretório de recrutadores</span>
+                    <Link href="/recrutadores" className="text-xs font-semibold text-neutral-900 underline-offset-2 hover:underline">
+                      Abrir
+                    </Link>
+                  </li>
+                  <li className="flex items-center justify-between gap-4">
+                    <span>Rede de contatos</span>
+                    <Link href="/rede" className="text-xs font-semibold text-neutral-900 underline-offset-2 hover:underline">
+                      Abrir
+                    </Link>
+                  </li>
+                </ul>
+              </div>
             </div>
-          </div>
-          <div className="mt-4 max-w-xs">
-            <TrainingSwitcher options={switcherOptions} selectedId={selectedTrainingId} />
           </div>
         </header>
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <article className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
-            <p className="text-xs uppercase tracking-wide text-neutral-500">Total no treinamento</p>
-            <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.total}</p>
-          </article>
-          <article className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
-            <p className="text-xs uppercase tracking-wide text-neutral-500">Novos (24h)</p>
-            <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.last24h}</p>
-          </article>
-          <article className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
-            <p className="text-xs uppercase tracking-wide text-neutral-500">Sem indicador</p>
-            <p className="mt-2 text-3xl font-semibold text-amber-600">{snapshot.withoutIndicator}</p>
-          </article>
-          <article className="rounded-3xl border border-rose-100 bg-rose-50 p-4 shadow-sm">
-            <div className="flex items-center justify-between text-xs uppercase tracking-wide text-rose-600">
-              <span>Possíveis duplicados</span>
-              <Link href="/duplicados" className="text-[11px] font-semibold text-rose-700 underline-offset-2 hover:underline">
-                Revisar
-              </Link>
-            </div>
-            <p className="mt-2 text-3xl font-semibold text-rose-700">{duplicateSummary.totalGroups}</p>
-          </article>
-        </section>
-
-        <section className="space-y-4 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-2 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <section className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-neutral-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-neutral-900">Últimas inscrições</h2>
-              <p className="text-sm text-neutral-600">As {Math.min(RECENT_PAGE_SIZE, recentResult.data.length)} inscrições mais recentes deste treinamento.</p>
+              <h2 className="text-xl font-semibold text-neutral-900">Resumo do treinamento</h2>
+              <p className="text-sm text-neutral-600">Indicadores gerais e alertas do período selecionado.</p>
             </div>
             <Link
               href={nextCtaHref}
-              className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400"
+              className="text-sm font-semibold text-neutral-500 underline-offset-4 hover:text-neutral-900 hover:underline"
+            >
+              Abrir no CRM
+            </Link>
+          </div>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <article className="rounded-xl border border-neutral-100 bg-neutral-50/70 p-4">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">Total no treinamento</p>
+              <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.total}</p>
+            </article>
+            <article className="rounded-xl border border-neutral-100 bg-white p-4 shadow-sm">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">Novos (24h)</p>
+              <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.last24h}</p>
+            </article>
+            <article className="rounded-xl border border-neutral-100 bg-white p-4 shadow-sm">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">Com indicador</p>
+              <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.withIndicator}</p>
+            </article>
+            <article className="rounded-xl border border-neutral-100 bg-white p-4 shadow-sm">
+              <p className="text-xs uppercase tracking-wide text-neutral-500">Sem indicador</p>
+              <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.withoutIndicator}</p>
+            </article>
+            <article className="rounded-xl border border-neutral-100 bg-white p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-neutral-500">
+                <span>Leads priorizados</span>
+                <span className="text-neutral-900">{snapshot.leads}</span>
+              </div>
+              <p className="mt-4 text-sm text-neutral-600">
+                Registros prontos para abordagem imediata com base nos filtros definidos.
+              </p>
+            </article>
+            <article className="rounded-xl border border-rose-100 bg-rose-50 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+              <div className="flex items-center justify-between text-xs uppercase tracking-wide text-rose-600">
+                <span>Possíveis duplicados</span>
+                <Link href="/duplicados" className="text-[11px] font-semibold text-rose-700 underline-offset-2 hover:underline">
+                  Revisar
+                </Link>
+              </div>
+              <p className="mt-2 text-3xl font-semibold text-rose-700">{duplicateSummary.totalGroups}</p>
+              <p className="text-xs text-rose-700">Separados por clientId ou telefone repetido.</p>
+            </article>
+          </div>
+        </section>
+
+        <section className="space-y-4 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-2 border-b border-neutral-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-neutral-900">Últimas inscrições</h2>
+              <p className="text-sm text-neutral-600">
+                As {Math.min(RECENT_PAGE_SIZE, recentResult.data.length)} inscrições mais recentes deste treinamento.
+              </p>
+            </div>
+            <Link
+              href={nextCtaHref}
+              className="inline-flex items-center rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-800 hover:border-neutral-500"
             >
               Ver tudo no CRM
             </Link>
