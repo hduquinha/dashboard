@@ -261,6 +261,22 @@ function buildTrainingFilterCandidates(value: string): string[] {
     queue.push(trimmed);
   };
 
+  const enqueueDayTokens = (dayValue: string | null | undefined) => {
+    if (!dayValue) {
+      return;
+    }
+    const numeric = Number.parseInt(dayValue.trim(), 10);
+    if (!Number.isFinite(numeric) || numeric < 1 || numeric > 31) {
+      return;
+    }
+    const normalized = String(numeric);
+    enqueue(normalized);
+    const padded = normalized.padStart(2, "0");
+    if (padded !== normalized) {
+      enqueue(padded);
+    }
+  };
+
   enqueue(value);
 
   while (queue.length > 0) {
@@ -281,6 +297,7 @@ function buildTrainingFilterCandidates(value: string): string[] {
       const [, datePart, timePart] = isoMatch;
       if (datePart) {
         enqueue(datePart);
+        enqueueDayTokens(datePart.slice(8, 10));
       }
       if (timePart) {
         const normalizedTime = timePart.length === 5 ? `${timePart}:00` : timePart;
@@ -293,6 +310,21 @@ function buildTrainingFilterCandidates(value: string): string[] {
     if (brMatch) {
       const [, day, month, year] = brMatch;
       enqueue(`${year}-${month}-${day}`);
+      enqueueDayTokens(day);
+    }
+
+    if (/^\s*\d{1,2}\s*$/.test(current)) {
+      enqueueDayTokens(current);
+    }
+
+    const dayKeywordMatch = current.match(/dia\s*(\d{1,2})/i);
+    if (dayKeywordMatch) {
+      enqueueDayTokens(dayKeywordMatch[1]);
+    }
+
+    const dayMonthTextMatch = current.match(/^\s*(\d{1,2})\s*(?:de|do)\s+[A-Za-zÀ-ÿ]+/i);
+    if (dayMonthTextMatch) {
+      enqueueDayTokens(dayMonthTextMatch[1]);
     }
   }
 
