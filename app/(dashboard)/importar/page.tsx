@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import ImportForm from "./ImportForm";
+import { previewImportAction } from "./actions";
 
 export const metadata: Metadata = {
   title: "Importar inscrições | Painel",
@@ -20,7 +21,7 @@ export default function ImportarPage() {
           </div>
         </header>
 
-        <ImportForm />
+        <ImportForm action={previewImportAction} />
       </div>
     </main>
   );

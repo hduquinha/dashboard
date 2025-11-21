@@ -1,21 +1,10 @@
 "use server";
 
 import { Buffer } from "node:buffer";
-import { importSpreadsheet, type ImportResult } from "@/lib/importSpreadsheet";
+import { importSpreadsheet } from "@/lib/importSpreadsheet";
+import { initialImportState, type ImportActionState } from "./state";
 
 export const runtime = "nodejs";
-
-export interface ImportActionState {
-  status: "idle" | "success" | "error";
-  message: string | null;
-  filename?: string;
-  result?: ImportResult;
-}
-
-export const initialImportState: ImportActionState = {
-  status: "idle",
-  message: null,
-};
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15MB guard to avoid oversized uploads
 

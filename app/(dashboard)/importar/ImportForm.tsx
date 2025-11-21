@@ -3,14 +3,10 @@
 import { useEffect, useState } from "react";
 import { useFormState } from "react-dom";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
-import {
-  initialImportState,
-  previewImportAction,
-  type ImportActionState,
-} from "./actions";
+import { initialImportState, type ImportActionState } from "./state";
 
 interface ImportFormProps {
-  action?: typeof previewImportAction;
+  action: (prevState: ImportActionState, formData: FormData) => Promise<ImportActionState>;
 }
 
 const PREVIEW_COLUMNS: Array<{ key: keyof ImportPayload; label: string }> = [
@@ -43,7 +39,7 @@ function downloadJson(filename: string, payload: unknown): void {
   URL.revokeObjectURL(url);
 }
 
-export default function ImportForm({ action = previewImportAction }: ImportFormProps) {
+export default function ImportForm({ action }: ImportFormProps) {
   const [state, formAction] = useFormState<ImportActionState, FormData>(action, initialImportState);
   const [confirmationStatus, setConfirmationStatus] = useState<"idle" | "pending" | "done">("idle");
 
