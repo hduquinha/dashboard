@@ -1,6 +1,9 @@
 "use server";
 
+import { Buffer } from "node:buffer";
 import { importSpreadsheet, type ImportResult } from "@/lib/importSpreadsheet";
+
+export const runtime = "nodejs";
 
 export interface ImportActionState {
   status: "idle" | "success" | "error";
@@ -43,7 +46,7 @@ export async function previewImportAction(
   }
 
   try {
-    const bytes = await file.arrayBuffer();
+    const bytes = Buffer.from(await file.arrayBuffer());
     const result = importSpreadsheet(bytes);
     return {
       status: "success",

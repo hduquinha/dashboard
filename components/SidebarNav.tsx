@@ -13,7 +13,7 @@ export default function SidebarNav({ duplicateCount = 0 }: SidebarNavProps) {
   const pathname = usePathname();
 
   return (
-    <aside className="hidden w-64 flex-shrink-0 flex-col gap-5 rounded-3xl border border-neutral-100 bg-white p-5 shadow-lg/30 md:flex">
+    <aside className="flex w-64 flex-shrink-0 flex-col gap-5 rounded-3xl border border-neutral-100 bg-white p-5 shadow-lg/30">
       <div className="space-y-1">
         <p className="text-xs font-semibold uppercase tracking-[0.3em] text-neutral-400">Painel</p>
         <h1 className="text-lg font-semibold text-neutral-900">Marketing Network</h1>

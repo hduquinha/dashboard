@@ -8,6 +8,7 @@ import {
   listInscricoes,
   listTrainingFilterOptions,
 } from "@/lib/db";
+import type { DuplicateSummary, ListInscricoesResult } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
@@ -66,10 +67,37 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
+const EMPTY_SNAPSHOT = {
+  total: 0,
+  leads: 0,
+  recruiters: 0,
+  withIndicator: 0,
+  withoutIndicator: 0,
+  last24h: 0,
+};
+
+const EMPTY_RECENT: ListInscricoesResult = {
+  data: [],
+  page: 1,
+  pageSize: RECENT_PAGE_SIZE,
+  total: 0,
+};
+
+const EMPTY_DUPLICATES: DuplicateSummary = {
+  groups: [],
+  totalGroups: 0,
+};
+
 export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
-  const trainingOptions = await listTrainingFilterOptions();
+
+  let trainingOptions: TrainingOption[] = [];
+  try {
+    trainingOptions = await listTrainingFilterOptions();
+  } catch (error) {
+    console.error("Failed to load training options", error);
+  }
 
   function resolveDefaultTraining(): TrainingOption | undefined {
     if (!trainingOptions.length) {
@@ -91,22 +119,34 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const selectedTrainingOption = trainingOptions.find((option) => option.id === treinamentoSelecionado) ?? resolveDefaultTraining();
   const selectedTrainingId = selectedTrainingOption?.id ?? "";
 
-  const [snapshot, recentResult, duplicateSummary] = await Promise.all([
-    getTrainingSnapshot({ treinamentoId: selectedTrainingId || undefined }),
-    listInscricoes({
-      page: 1,
-      pageSize: RECENT_PAGE_SIZE,
-      orderBy: "criado_em",
-      orderDirection: "desc",
-      filters: {
-        nome: "",
-        telefone: "",
-        indicacao: "",
-        treinamento: selectedTrainingId,
-      },
-    }),
-    listDuplicateSuspects({ maxGroups: 1 }),
-  ]);
+  let snapshot = EMPTY_SNAPSHOT;
+  let recentResult: ListInscricoesResult = EMPTY_RECENT;
+  let duplicateSummary: DuplicateSummary = EMPTY_DUPLICATES;
+
+  try {
+    const [snapshotData, recentData, duplicateData] = await Promise.all([
+      getTrainingSnapshot({ treinamentoId: selectedTrainingId || undefined }),
+      listInscricoes({
+        page: 1,
+        pageSize: RECENT_PAGE_SIZE,
+        orderBy: "criado_em",
+        orderDirection: "desc",
+        filters: {
+          nome: "",
+          telefone: "",
+          indicacao: "",
+          treinamento: selectedTrainingId,
+        },
+      }),
+      listDuplicateSuspects({ maxGroups: 1 }),
+    ]);
+
+    snapshot = snapshotData;
+    recentResult = recentData;
+    duplicateSummary = duplicateData;
+  } catch (error) {
+    console.error("Failed to load dashboard metrics", error);
+  }
 
   const heroLabel = selectedTrainingOption ? getTrainingDisplayLabel(selectedTrainingOption) : "Visão geral";
   const switcherOptions = trainingOptions.length

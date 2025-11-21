@@ -1,6 +1,7 @@
+import type { Buffer } from "node:buffer";
 import * as XLSX from "xlsx";
 
-type SpreadsheetBinary = ArrayBuffer | ArrayBufferView;
+type SpreadsheetBinary = ArrayBuffer | ArrayBufferView | Buffer;
 
 function toUint8Array(input: SpreadsheetBinary): Uint8Array {
   if (input instanceof Uint8Array) {
