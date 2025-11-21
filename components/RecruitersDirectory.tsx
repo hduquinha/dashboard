@@ -1,13 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useId, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import InscricaoDetails from "@/components/InscricaoDetails";
 import type { RecruiterDirectoryEntry } from "@/app/(dashboard)/recrutadores/page";
 import type { InscricaoItem } from "@/types/inscricao";
-import { RECRUITERS_BASE_URL } from "@/lib/recruiters";
+import type { TrainingOption } from "@/types/training";
+import { RECRUITERS_BASE_URL, type Recruiter } from "@/lib/recruiters";
 
 interface RecruitersDirectoryProps {
   recruiters: RecruiterDirectoryEntry[];
+  trainingOptions: TrainingOption[];
+  recruiterOptions: Recruiter[];
 }
 
 type FormMode = 'create' | 'link';
@@ -75,7 +79,7 @@ function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry 
   };
 }
 
-export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryProps) {
+export default function RecruitersDirectory({ recruiters, trainingOptions, recruiterOptions }: RecruitersDirectoryProps) {
   const [entries, setEntries] = useState<RecruiterDirectoryEntry[]>(() => recruiters.slice());
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<FormMode>('create');
@@ -90,10 +94,21 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
+  const [isDetailsLoading, setIsDetailsLoading] = useState(false);
+  const [pendingEditId, setPendingEditId] = useState<number | null>(null);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [existingSearchTerm, setExistingSearchTerm] = useState('');
+  const [existingSuggestions, setExistingSuggestions] = useState<InscricaoLike[]>([]);
+  const [isSearchingExisting, setIsSearchingExisting] = useState(false);
+  const [existingSelectedLabel, setExistingSelectedLabel] = useState<string | null>(null);
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchTimeoutRef = useRef<number | null>(null);
 
   const nextSuggestedCode = useMemo(() => computeNextCode(entries), [entries]);
 
   const parentCodeDatalistId = useId();
+  const suggestionListId = useId();
 
   const filteredEntries = useMemo(() => {
     if (!query.trim()) {
@@ -109,6 +124,73 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
     setEntries(recruiters.slice());
   }, [recruiters]);
 
+  useEffect(() => {
+    if (mode !== 'link') {
+      setExistingSuggestions([]);
+      setIsSearchingExisting(false);
+      return;
+    }
+
+    const term = existingSearchTerm.trim();
+    if (term.length < 2) {
+      searchAbortRef.current?.abort();
+      if (searchTimeoutRef.current !== null) {
+        window.clearTimeout(searchTimeoutRef.current);
+        searchTimeoutRef.current = null;
+      }
+      setExistingSuggestions([]);
+      setIsSearchingExisting(false);
+      return;
+    }
+
+    searchAbortRef.current?.abort();
+    if (searchTimeoutRef.current !== null) {
+      window.clearTimeout(searchTimeoutRef.current);
+    }
+
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    const timeoutId = window.setTimeout(async () => {
+      setIsSearchingExisting(true);
+      try {
+        const response = await fetch(`/api/inscricoes/search?q=${encodeURIComponent(term)}&limit=8`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error('Não foi possível buscar as inscrições.');
+        }
+        const data = (await response.json()) as { results?: unknown };
+        const parsed = Array.isArray(data?.results)
+          ? (data.results.filter(isInscricaoLike) as InscricaoLike[])
+          : [];
+        setExistingSuggestions(parsed);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        console.error('Failed to search inscrições', error);
+      } finally {
+        setIsSearchingExisting(false);
+      }
+    }, 250);
+
+    searchTimeoutRef.current = timeoutId;
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [existingSearchTerm, mode]);
+
+  const changeMode = useCallback((nextMode: FormMode) => {
+    if (mode === nextMode) {
+      return;
+    }
+    setMode(nextMode);
+    resetForm();
+  }, [mode]);
+
   function resetForm() {
     setName('');
     setCode('');
@@ -118,7 +200,32 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
     setParentInscricaoId('');
     setExistingInscricaoId('');
     setNivel('');
+    setExistingSearchTerm('');
+    setExistingSelectedLabel(null);
+    setExistingSuggestions([]);
   }
+
+  const handleExistingSuggestionSelect = useCallback((suggestion: InscricaoLike) => {
+    setExistingInscricaoId(String(suggestion.id));
+    setExistingSearchTerm(suggestion.nome ?? `Inscrição #${suggestion.id}`);
+    setExistingSelectedLabel(`${suggestion.nome ?? 'Sem nome'} · ID #${suggestion.id}`);
+    setExistingSuggestions([]);
+    if (!name) {
+      setName(suggestion.nome ?? '');
+    }
+    if (!telefone && suggestion.telefone) {
+      setTelefone(suggestion.telefone);
+    }
+    if (!cidade && suggestion.cidade) {
+      setCidade(suggestion.cidade);
+    }
+  }, [cidade, name, telefone]);
+
+  const handleExistingSearchChange = useCallback((value: string) => {
+    setExistingSearchTerm(value);
+    setExistingSelectedLabel(null);
+    setExistingInscricaoId('');
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -141,7 +248,7 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
       payload.name = name.trim() || `Recrutador ${normalizedCode}`;
     } else {
       if (!existingInscricaoId.trim()) {
-        setErrorMessage('Informe o ID da inscrição que será promovida.');
+        setErrorMessage('Selecione um cadastro existente pelo nome antes de promover.');
         setIsSubmitting(false);
         return;
       }
@@ -224,6 +331,39 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
     }
   }
 
+  const openInscricaoDetails = useCallback(
+    async (inscricaoId: number | null) => {
+      if (!inscricaoId) {
+        setDetailsError('Este recrutador ainda não está vinculado a uma inscrição editável.');
+        setSelectedInscricao(null);
+        return;
+      }
+
+      setDetailsError(null);
+      setIsDetailsLoading(true);
+      setPendingEditId(inscricaoId);
+
+      try {
+        const response = await fetch(`/api/inscricoes/${inscricaoId}`);
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          setDetailsError(payload?.error ?? 'Não foi possível carregar o cadastro.');
+          setSelectedInscricao(null);
+          return;
+        }
+        const data = (await response.json()) as { inscricao?: InscricaoItem };
+        setSelectedInscricao(data.inscricao ?? null);
+      } catch (error) {
+        console.error('Failed to open inscrição', error);
+        setDetailsError('Erro inesperado ao abrir o cadastro.');
+      } finally {
+        setIsDetailsLoading(false);
+        setPendingEditId(null);
+      }
+    },
+    []
+  );
+
   return (
     <div className="flex flex-col gap-6">
       <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
@@ -243,19 +383,38 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
           </p>
         ) : null}
 
-        <form className="mt-4 grid gap-4" onSubmit={handleSubmit}>
-          <div className="grid gap-4 md:grid-cols-3">
-            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-              Ação
-              <select
-                value={mode}
-                onChange={(event) => setMode(event.target.value as FormMode)}
-                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              >
-                <option value="create">Criar nova inscrição</option>
-                <option value="link">Promover inscrição existente</option>
-              </select>
-            </label>
+        <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => changeMode('create')}
+              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                mode === 'create'
+                  ? 'border-neutral-900 bg-neutral-900 text-white'
+                  : 'border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900'
+              }`}
+            >
+              Criar recrutador
+            </button>
+            <button
+              type="button"
+              onClick={() => changeMode('link')}
+              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
+                mode === 'link'
+                  ? 'border-neutral-900 bg-neutral-900 text-white'
+                  : 'border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900'
+              }`}
+            >
+              Vincular um existente
+            </button>
+          </div>
+          <p className="text-sm text-neutral-600">
+            {mode === 'create'
+              ? 'Crie um novo recrutador e gere automaticamente o cadastro no CRM.'
+              : 'Localize um cadastro existente no CRM e promova-o para recrutador.'}
+          </p>
+
+          <div className="grid gap-4 md:grid-cols-2">
             <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
               Código do recrutador
               <input
@@ -265,17 +424,7 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
                 className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
               />
             </label>
-            {mode === 'link' ? (
-              <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                ID da inscrição existente
-                <input
-                  value={existingInscricaoId}
-                  onChange={(event) => setExistingInscricaoId(event.target.value)}
-                  placeholder="Ex.: 123"
-                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-            ) : (
+            {mode === 'create' ? (
               <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
                 Nome do recrutador
                 <input
@@ -285,21 +434,67 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
                   className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
                 />
               </label>
+            ) : (
+              <div className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+                Buscar no CRM
+                <div className="relative">
+                  <input
+                    value={existingSearchTerm}
+                    onChange={(event) => handleExistingSearchChange(event.target.value)}
+                    placeholder="Digite pelo menos 2 letras"
+                    className="w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                    aria-controls={suggestionListId}
+                    aria-expanded={existingSuggestions.length > 0}
+                  />
+                  {isSearchingExisting ? (
+                    <span className="pointer-events-none absolute right-3 top-2.5 text-xs text-neutral-500">Buscando...</span>
+                  ) : null}
+                  {existingSuggestions.length > 0 ? (
+                    <ul
+                      id={suggestionListId}
+                      className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-md border border-neutral-200 bg-white shadow-lg"
+                    >
+                      {existingSuggestions.map((suggestion) => (
+                        <li key={`suggestion-${suggestion.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => handleExistingSuggestionSelect(suggestion)}
+                            className="flex w-full flex-col items-start px-3 py-2 text-left text-sm text-neutral-800 transition hover:bg-neutral-100"
+                          >
+                            <span className="font-semibold">{suggestion.nome ?? `Inscrição #${suggestion.id}`}</span>
+                            <span className="text-xs text-neutral-500">
+                              ID #{suggestion.id}
+                              {suggestion.cidade ? ` · ${suggestion.cidade}` : ''}
+                              {suggestion.telefone ? ` · ${suggestion.telefone}` : ''}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+                {existingSelectedLabel ? (
+                  <span className="text-xs text-emerald-700">Selecionado: {existingSelectedLabel}</span>
+                ) : (
+                  <span className="text-xs text-neutral-500">Selecione um cadastro para continuar.</span>
+                )}
+              </div>
             )}
           </div>
 
+          {mode === 'link' ? (
+            <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+              Nome do recrutador (opcional)
+              <input
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="Atualize o nome, se necessário"
+                className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          ) : null}
+
           <div className="grid gap-4 md:grid-cols-3">
-            {mode === 'link' ? (
-              <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                Nome do recrutador (opcional)
-                <input
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Atualize o nome, se necessário"
-                  className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-            ) : null}
             <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
               Telefone (opcional)
               <input
@@ -375,6 +570,12 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
           Sugestão automática: <span className="font-semibold">{nextSuggestedCode}</span>
         </div>
       </section>
+
+      {detailsError ? (
+        <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {detailsError}
+        </p>
+      ) : null}
 
       <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
         <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -461,6 +662,14 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
                         </Link>
                         <button
                           type="button"
+                          onClick={() => openInscricaoDetails(recruiter.inscricaoId)}
+                          className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={isDetailsLoading && pendingEditId === recruiter.inscricaoId}
+                        >
+                          Editar cadastro
+                        </button>
+                        <button
+                          type="button"
                           className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
                           onClick={() => copyToClipboard(recruiter.url)}
                         >
@@ -475,6 +684,28 @@ export default function RecruitersDirectory({ recruiters }: RecruitersDirectoryP
           </table>
         </div>
       </section>
+
+      <InscricaoDetails
+        inscricao={selectedInscricao}
+        onClose={() => setSelectedInscricao(null)}
+        onUpdate={(updated) => {
+          setSelectedInscricao(updated);
+          setEntries((previous) =>
+            previous.map((entry) =>
+              entry.inscricaoId === updated.id
+                ? {
+                    ...entry,
+                    name: updated.nome ?? entry.name,
+                    telefone: updated.telefone ?? entry.telefone,
+                    cidade: updated.cidade ?? entry.cidade,
+                  }
+                : entry
+            )
+          );
+        }}
+        trainingOptions={trainingOptions}
+        recruiterOptions={recruiterOptions}
+      />
     </div>
   );
 }

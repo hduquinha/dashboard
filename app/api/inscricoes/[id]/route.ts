@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { assertToken } from "@/lib/auth";
-import { deleteInscricao, updateInscricao, type UpdateInscricaoInput } from "@/lib/db";
+import { deleteInscricao, getInscricaoById, updateInscricao, type UpdateInscricaoInput } from "@/lib/db";
 
 type RouteParams = {
   id: string;
@@ -135,6 +135,28 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     console.error("Failed to update inscrição", error);
     return NextResponse.json({ error: "Erro ao atualizar inscrição" }, { status: 500 });
+  }
+}
+
+export async function GET(_request: Request, context: RouteContext) {
+  if (!(await ensureAuthorizedToken())) {
+    return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+  }
+
+  const id = await resolveInscricaoId(context);
+  if (!id) {
+    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+  }
+
+  try {
+    const inscricao = await getInscricaoById(id);
+    if (!inscricao) {
+      return NextResponse.json({ error: "Inscrição não encontrada" }, { status: 404 });
+    }
+    return NextResponse.json({ inscricao });
+  } catch (error) {
+    console.error("Failed to load inscrição", error);
+    return NextResponse.json({ error: "Erro ao carregar inscrição" }, { status: 500 });
   }
 }
 

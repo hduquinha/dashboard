@@ -680,6 +680,46 @@ export async function listInscricoes(
   }
 }
 
+export async function searchInscricoesByName(
+  term: string,
+  limit = 8
+): Promise<InscricaoItem[]> {
+  const needle = term.trim();
+  if (!needle) {
+    return [];
+  }
+
+  const sanitized = needle.replace(/[\\%_]/g, (match) => `\\${match}`);
+  const likeValue = `%${sanitized}%`;
+  const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+
+  const query = `
+    SELECT
+      i.id,
+      i.payload,
+      i.criado_em,
+      i.payload->>'nome' AS nome,
+      i.payload->>'telefone' AS telefone,
+      i.payload->>'cidade' AS cidade,
+      i.payload->>'profissao' AS profissao,
+      i.payload->>'treinamento' AS treinamento,
+      i.payload->>'traffic_source' AS traffic_source,
+      NULL::bigint AS total_count
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE COALESCE(i.payload->>'nome', '') ILIKE $1 ESCAPE '\\'
+    ORDER BY i.criado_em DESC
+    LIMIT $2
+  `;
+
+  try {
+    const { rows } = await getPool().query<DbRow>(query, [likeValue, safeLimit]);
+    return rows.map(mapDbRowToInscricaoItem);
+  } catch (error) {
+    console.error('Failed to search inscrições by name', error);
+    return [];
+  }
+}
+
 export async function getInscricaoById(id: number): Promise<InscricaoItem | null> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Invalid inscrição id");

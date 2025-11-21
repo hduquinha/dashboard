@@ -173,11 +173,21 @@ function sortNodes(nodes: NetworkNode[]): void {
   });
 }
 
+function getDirectInviteScore(node: NetworkNode): number {
+  return node.directLeadCount + node.directRecruiterCount;
+}
+
 function compareByDescendants(a: NetworkNode, b: NetworkNode): number {
+  const directDiff = getDirectInviteScore(b) - getDirectInviteScore(a);
+  if (directDiff !== 0) {
+    return directDiff;
+  }
+
   const diff = b.totalDescendants - a.totalDescendants;
   if (diff !== 0) {
     return diff;
   }
+
   if (a.tipo !== b.tipo) {
     return a.tipo === "recrutador" ? -1 : 1;
   }

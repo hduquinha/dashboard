@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import NetworkTree from "@/components/NetworkTree";
 import { assertToken } from "@/lib/auth";
 import { buildNetworkTree } from "@/lib/network";
+import { listTrainingFilterOptions } from "@/lib/db";
+import { listRecruiters } from "@/lib/recruiters";
 
 export const metadata: Metadata = {
   title: "Rede | Painel de Inscrições",
@@ -36,7 +38,11 @@ export default async function RedePage(props: RedePageProps) {
     redirect("/login");
   }
 
-  const tree = await buildNetworkTree({ focus: focusParam });
+  const [tree, trainingOptions, recruiterOptions] = await Promise.all([
+    buildNetworkTree({ focus: focusParam }),
+    listTrainingFilterOptions(),
+    Promise.resolve(listRecruiters()),
+  ]);
 
   return (
     <main className="px-4 py-8 sm:px-6 lg:px-10">
@@ -52,7 +58,14 @@ export default async function RedePage(props: RedePageProps) {
         </header>
 
         <section className="rounded-2xl border border-neutral-200 bg-white/80 p-6 shadow-sm">
-          <NetworkTree roots={tree.roots} orphans={tree.orphans} stats={tree.stats} focus={tree.focus} />
+          <NetworkTree
+            roots={tree.roots}
+            orphans={tree.orphans}
+            stats={tree.stats}
+            focus={tree.focus}
+            trainingOptions={trainingOptions}
+            recruiterOptions={recruiterOptions}
+          />
         </section>
       </div>
     </main>

@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import NetworkTree from "@/components/NetworkTree";
 import { buildNetworkTree } from "@/lib/network";
+import { listTrainingFilterOptions } from "@/lib/db";
+import { listRecruiters } from "@/lib/recruiters";
 
 interface PageProps {
   params: { code: string };
@@ -18,7 +20,11 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function RecruiterDetailPage({ params }: PageProps) {
   const code = params.code ?? "";
-  const tree = await buildNetworkTree({ focus: code });
+  const [tree, trainingOptions, recruiterOptions] = await Promise.all([
+    buildNetworkTree({ focus: code }),
+    listTrainingFilterOptions(),
+    Promise.resolve(listRecruiters()),
+  ]);
 
   if (!tree.focus?.nodeId) {
     notFound();
@@ -50,6 +56,8 @@ export default async function RecruiterDetailPage({ params }: PageProps) {
           orphans={tree.orphans}
           stats={tree.stats}
           focus={tree.focus}
+          trainingOptions={trainingOptions}
+          recruiterOptions={recruiterOptions}
         />
       </div>
     </main>
