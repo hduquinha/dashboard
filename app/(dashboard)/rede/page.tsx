@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import DashboardNav from "@/components/DashboardNav";
 import NetworkTree from "@/components/NetworkTree";
 import { assertToken } from "@/lib/auth";
+import { listDuplicateSuspects } from "@/lib/db";
 import { buildNetworkTree } from "@/lib/network";
 
 export const metadata: Metadata = {
@@ -37,7 +38,10 @@ export default async function RedePage(props: RedePageProps) {
     redirect("/login");
   }
 
-  const tree = await buildNetworkTree({ focus: focusParam });
+  const [tree, duplicateSummary] = await Promise.all([
+    buildNetworkTree({ focus: focusParam }),
+    listDuplicateSuspects({ maxGroups: 1 }),
+  ]);
 
   return (
     <main className="min-h-screen bg-neutral-50">
@@ -49,7 +53,7 @@ export default async function RedePage(props: RedePageProps) {
               Explore a árvore completa de recrutadores e leads para mapear a estrutura do marketing multinível.
             </p>
           </div>
-          <DashboardNav />
+          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
         <section className="rounded-lg border border-neutral-200 bg-white/60 p-6">

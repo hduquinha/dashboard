@@ -14,6 +14,9 @@ import {
 import type { TrainingOption } from "@/types/training";
 import type {
   DuplicateGroup,
+  DuplicateReason,
+  DuplicateReasonDetail,
+  DuplicateSummary,
   InscricaoItem,
   InscricaoTipo,
   ListInscricoesResult,
@@ -886,7 +889,7 @@ interface DuplicateEntry {
 
 export async function listDuplicateSuspects(
   options: ListDuplicateSuspectsOptions = {}
-): Promise<DuplicateGroup[]> {
+): Promise<DuplicateSummary> {
   const windowDays = Math.max(1, Math.trunc(options.windowDays ?? 30));
   const maxGroups = Math.max(1, Math.min(50, Math.trunc(options.maxGroups ?? 8)));
   const sampleSize = Math.max(200, Math.min(2000, Math.trunc(options.sampleSize ?? maxGroups * 40)));
@@ -918,7 +921,7 @@ export async function listDuplicateSuspects(
   );
 
   if (!rows.length) {
-    return [];
+    return { groups: [], totalGroups: 0 };
   }
 
   const entries: DuplicateEntry[] = rows.map((row) => {
@@ -948,7 +951,48 @@ export async function listDuplicateSuspects(
     };
   });
 
-  const groups: DuplicateGroup[] = [];
+  const parent = new Map<number, number>();
+  const rank = new Map<number, number>();
+
+  const find = (id: number): number => {
+    const currentParent = parent.get(id) ?? id;
+    if (currentParent !== id) {
+      const root = find(currentParent);
+      parent.set(id, root);
+      return root;
+    }
+    return currentParent;
+  };
+
+  const union = (a: number, b: number) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA === rootB) {
+      return;
+    }
+    const rankA = rank.get(rootA) ?? 0;
+    const rankB = rank.get(rootB) ?? 0;
+    if (rankA < rankB) {
+      parent.set(rootA, rootB);
+    } else if (rankA > rankB) {
+      parent.set(rootB, rootA);
+    } else {
+      parent.set(rootB, rootA);
+      rank.set(rootA, rankA + 1);
+    }
+  };
+
+  for (const entry of entries) {
+    parent.set(entry.item.id, entry.item.id);
+    rank.set(entry.item.id, 0);
+  }
+
+  const bucketReasons: Array<{
+    entries: DuplicateEntry[];
+    reason: DuplicateReason;
+    matchValue: string;
+    hint?: string | null;
+  }> = [];
 
   const addToMap = (map: Map<string, DuplicateEntry[]>, key: string, entry: DuplicateEntry) => {
     const current = map.get(key);
@@ -979,9 +1023,9 @@ export async function listDuplicateSuspects(
     }
   }
 
-  const pushGroups = (
+  const registerBuckets = (
     source: Map<string, DuplicateEntry[]>,
-    reason: "telefone" | "email" | "nome-dia" | "payload",
+    reason: DuplicateReason,
     formatter: (key: string, bucket: DuplicateEntry[]) => { matchValue: string; hint?: string | null }
   ) => {
     for (const [key, bucket] of source.entries()) {
@@ -992,27 +1036,30 @@ export async function listDuplicateSuspects(
         .slice()
         .sort((a, b) => b.item.criadoEm.localeCompare(a.item.criadoEm));
       const { matchValue, hint } = formatter(key, sortedBucket);
-      groups.push({
-        id: `${reason}:${key}`,
+      bucketReasons.push({
+        entries: sortedBucket,
         reason,
         matchValue,
         hint: hint ?? null,
-        entries: sortedBucket.map((entry) => entry.item),
-        score: sortedBucket.length,
       });
+
+      const [first, ...rest] = sortedBucket;
+      for (const other of rest) {
+        union(first.item.id, other.item.id);
+      }
     }
   };
 
-  pushGroups(phoneMap, "telefone", (key) => ({
+  registerBuckets(phoneMap, "telefone", (key) => ({
     matchValue: formatNormalizedPhone(key),
     hint: key,
   }));
 
-  pushGroups(emailMap, "email", (key) => ({
+  registerBuckets(emailMap, "email", (key) => ({
     matchValue: key,
   }));
 
-  pushGroups(nameDayMap, "nome-dia", (key, bucket) => {
+  registerBuckets(nameDayMap, "nome-dia", (key, bucket) => {
     const [name, day] = key.split("|");
     const displayName = bucket.find((entry) => entry.item.nome)?.item.nome ?? name ?? "Nome semelhante";
     const formattedDay = formatDateLabelPtBR(day ?? null);
@@ -1022,21 +1069,73 @@ export async function listDuplicateSuspects(
     };
   });
 
-  pushGroups(payloadMap, "payload", (key) => ({
+  registerBuckets(payloadMap, "payload", (key) => ({
     matchValue: `Payload repetido (${key.slice(0, 8)})`,
     hint: key,
   }));
 
-  groups.sort((a, b) => {
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-    const latestA = a.entries[0]?.criadoEm ?? "";
-    const latestB = b.entries[0]?.criadoEm ?? "";
-    return latestB.localeCompare(latestA);
-  });
+  const groupMap = new Map<number, { entries: Set<InscricaoItem>; reasons: DuplicateReasonDetail[]; latest: string }>();
 
-  return groups.slice(0, maxGroups);
+  for (const entry of entries) {
+    const root = find(entry.item.id);
+    if (!groupMap.has(root)) {
+      groupMap.set(root, {
+        entries: new Set<InscricaoItem>(),
+        reasons: [],
+        latest: entry.item.criadoEm,
+      });
+    }
+    const bucket = groupMap.get(root)!;
+    bucket.entries.add(entry.item);
+    if (entry.item.criadoEm > bucket.latest) {
+      bucket.latest = entry.item.criadoEm;
+    }
+  }
+
+  for (const reasonBucket of bucketReasons) {
+    const root = find(reasonBucket.entries[0]?.item.id ?? 0);
+    const group = groupMap.get(root);
+    if (!group) {
+      continue;
+    }
+    const alreadyExists = group.reasons.some(
+      (detail) =>
+        detail.reason === reasonBucket.reason &&
+        detail.matchValue === reasonBucket.matchValue &&
+        detail.hint === reasonBucket.hint
+    );
+    if (!alreadyExists) {
+      group.reasons.push({
+        reason: reasonBucket.reason,
+        matchValue: reasonBucket.matchValue,
+        hint: reasonBucket.hint ?? null,
+      });
+    }
+  }
+
+  const groups: DuplicateGroup[] = Array.from(groupMap.entries())
+    .map(([root, data]) => {
+      const sortedEntries = Array.from(data.entries).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm));
+      return {
+        id: `group:${root}`,
+        entries: sortedEntries,
+        reasons: data.reasons,
+        score: sortedEntries.length,
+        latestCreatedAt: sortedEntries[0]?.criadoEm ?? data.latest,
+      };
+    })
+    .filter((group) => group.entries.length > 1)
+    .sort((a, b) => {
+      if (b.score !== a.score) {
+        return b.score - a.score;
+      }
+      return b.latestCreatedAt.localeCompare(a.latestCreatedAt);
+    });
+
+  return {
+    groups: groups.slice(0, maxGroups),
+    totalGroups: groups.length,
+  };
 }
 
 export type { ListInscricoesOptions };

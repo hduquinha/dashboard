@@ -3,20 +3,34 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 
+interface DashboardNavProps {
+  duplicateCount?: number;
+}
+
 const LINKS = [
   {
+    key: 'home',
     href: '/',
     label: 'Inscrições',
     description: 'Monitoramento em tempo real das submissões.',
     icon: '🗂️',
   },
   {
+    key: 'duplicados',
+    href: '/duplicados',
+    label: 'Duplicados',
+    description: 'Revise e confirme possíveis duplicidades.',
+    icon: '⚠️',
+  },
+  {
+    key: 'recrutadores',
     href: '/recrutadores',
     label: 'Recrutadores',
     description: 'Gerencie códigos e convites ativos.',
     icon: '🧭',
   },
   {
+    key: 'rede',
     href: '/rede',
     label: 'Rede',
     description: 'Visualize o crescimento e conexões.',
@@ -24,18 +38,19 @@ const LINKS = [
   },
 ];
 
-export default function DashboardNav() {
+export default function DashboardNav({ duplicateCount = 0 }: DashboardNavProps) {
   const pathname = usePathname();
 
   return (
     <nav className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label="Navegação do painel">
       {LINKS.map((link) => {
         const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
+        const showBadge = link.key === 'duplicados' && duplicateCount > 0;
         return (
           <Link
             key={link.href}
             href={link.href}
-            className={`group flex items-center justify-between rounded-2xl border px-4 py-3 transition shadow-sm ${
+            className={`group relative flex items-center justify-between rounded-2xl border px-4 py-3 transition shadow-sm ${
               isActive
                 ? 'border-neutral-900 bg-neutral-900 text-white shadow-lg'
                 : 'border-neutral-200 bg-white text-neutral-800 hover:border-neutral-400 hover:shadow-md'
@@ -66,6 +81,11 @@ export default function DashboardNav() {
             >
               <path d="M9 18l6-6-6-6" />
             </svg>
+            {showBadge ? (
+              <span className="absolute right-3 top-3 inline-flex min-w-[1.5rem] justify-center rounded-full bg-amber-500 px-2 py-0.5 text-[11px] font-bold text-white shadow">
+                {duplicateCount > 99 ? '99+' : duplicateCount}
+              </span>
+            ) : null}
           </Link>
         );
       })}

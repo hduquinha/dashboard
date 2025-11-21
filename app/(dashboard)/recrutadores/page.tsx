@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import DashboardNav from "@/components/DashboardNav";
 import RecruitersDirectory from "@/components/RecruitersDirectory";
+import { listDuplicateSuspects } from "@/lib/db";
 import { buildNetworkTree, type NetworkNode } from "@/lib/network";
 import { RECRUITERS_BASE_URL } from "@/lib/recruiters";
 
@@ -68,7 +69,10 @@ export const metadata: Metadata = {
 };
 
 export default async function RecruitersPage() {
-  const tree = await buildNetworkTree();
+  const [tree, duplicateSummary] = await Promise.all([
+    buildNetworkTree(),
+    listDuplicateSuspects({ maxGroups: 1 }),
+  ]);
   const recruiters = flattenRecruiters(tree.roots, tree.orphans);
 
   return (
@@ -81,7 +85,7 @@ export default async function RecruitersPage() {
               Centralize os códigos de indicação e compartilhe o link correto com cada recrutador.
             </p>
           </div>
-          <DashboardNav />
+          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
         <RecruitersDirectory recruiters={recruiters} />

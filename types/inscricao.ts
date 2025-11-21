@@ -65,11 +65,21 @@ export type OrderDirection = "asc" | "desc";
 
 export type DuplicateReason = "telefone" | "email" | "nome-dia" | "payload";
 
-export interface DuplicateGroup {
-  id: string;
+export interface DuplicateReasonDetail {
   reason: DuplicateReason;
   matchValue: string;
   hint?: string | null;
+}
+
+export interface DuplicateGroup {
+  id: string;
   entries: InscricaoItem[];
+  reasons: DuplicateReasonDetail[];
   score: number;
+  latestCreatedAt: string;
+}
+
+export interface DuplicateSummary {
+  groups: DuplicateGroup[];
+  totalGroups: number;
 }

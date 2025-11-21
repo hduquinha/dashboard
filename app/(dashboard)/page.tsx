@@ -6,7 +6,6 @@ import { listDuplicateSuspects, listInscricoes, listTrainingFilterOptions } from
 import { assertToken } from "@/lib/auth";
 import DashboardNav from "@/components/DashboardNav";
 import InscricoesTable from "@/components/InscricoesTable";
-import DuplicateAlerts from "@/components/DuplicateAlerts";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -121,7 +120,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const recruiterOptions = listRecruiters();
 
-  const [trainingOptions, result, duplicateGroups] = await Promise.all([
+  const [trainingOptions, result, duplicateSummary] = await Promise.all([
     listTrainingFilterOptions(),
     listInscricoes({
       page,
@@ -171,10 +170,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
               Total: {result.total}
             </span>
           </div>
-          <DashboardNav />
+          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
-
-        {duplicateGroups.length > 0 ? <DuplicateAlerts groups={duplicateGroups} /> : null}
 
         <section className="space-y-4 rounded-2xl border border-neutral-200 bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-neutral-200 bg-neutral-50/60 px-6 py-4 md:flex-row md:items-center md:justify-between">

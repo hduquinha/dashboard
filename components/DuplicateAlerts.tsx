@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import type { DuplicateGroup } from '@/types/inscricao';
+import type { DuplicateGroup, DuplicateReasonDetail } from '@/types/inscricao';
 
 interface DuplicateAlertsProps {
   groups: DuplicateGroup[];
@@ -13,7 +13,7 @@ interface AlertState extends DuplicateGroup {
   error: string | null;
 }
 
-function formatReasonLabel(reason: DuplicateGroup['reason']): string {
+function formatReasonLabel(reason: DuplicateReasonDetail['reason']): string {
   switch (reason) {
     case 'telefone':
       return 'Telefone idêntico';
@@ -154,14 +154,29 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
             className="rounded-md border border-amber-300 bg-white/70 px-4 py-3 shadow-sm"
           >
             <div className="flex flex-col gap-2 border-b border-amber-100 pb-3 md:flex-row md:items-center md:justify-between">
-              <div>
+              <div className="space-y-1">
                 <p className="text-sm font-semibold text-amber-900">
-                  {formatReasonLabel(group.reason)}
+                  {group.entries.length} registro{group.entries.length > 1 ? 's' : ''} relacionados
                 </p>
-                <p className="text-sm text-amber-800">{group.matchValue}</p>
-                {group.hint ? (
-                  <p className="text-xs text-amber-600">Detalhe: {group.hint}</p>
-                ) : null}
+                {group.reasons.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {group.reasons.map((detail, index) => (
+                      <span
+                        key={`${group.id}-reason-${index}`}
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-800"
+                      >
+                        {formatReasonLabel(detail.reason)}
+                        {detail.matchValue ? (
+                          <span className="text-[10px] font-normal normal-case text-amber-700">
+                            {detail.matchValue}
+                          </span>
+                        ) : null}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-amber-700">Duplicidade identificada automaticamente.</p>
+                )}
               </div>
               <div className="flex items-center gap-2 text-xs text-amber-700">
                 <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold">
