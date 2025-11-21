@@ -47,64 +47,58 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
     const isFocus = focus?.nodeId === node.id;
 
     return (
-      <li key={node.id} className="space-y-2">
+      <div className="flex flex-col items-center">
         <div
-          className={`flex items-start gap-3 rounded-md border px-3 py-2 shadow-sm transition ${
-            isFocus ? "border-neutral-900 bg-neutral-900/5" : "border-neutral-200 bg-white"
+          className={`relative flex flex-col items-center rounded-2xl border-2 px-4 py-3 text-center shadow-md transition ${
+            isFocus ? "border-sky-600 bg-sky-50" : "border-neutral-200 bg-white"
           }`}
         >
+          <span
+            className={`mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full text-lg ${
+              node.tipo === "recrutador" ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"
+            }`}
+          >
+            {node.tipo === "recrutador" ? "👤" : "🧲"}
+          </span>
+          <span className="text-sm font-semibold text-neutral-900">{node.displayName}</span>
+          {node.code ? (
+            <span className="mt-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">{`Código ${node.code}`}</span>
+          ) : null}
+          <div className="mt-2 text-[11px] text-neutral-600">
+            {node.recrutadorCodigo ? <p>Indicador: {node.recrutadorCodigo}</p> : null}
+            {node.telefone ? <p>Telefone: {node.telefone}</p> : null}
+            {node.cidade ? <p>Cidade: {node.cidade}</p> : null}
+            <p>
+              Diretos: {node.directLeadCount + node.directRecruiterCount} · Descendentes: {node.totalDescendants}
+            </p>
+          </div>
           {hasChildren ? (
             <button
               type="button"
               onClick={() => toggleNode(node.id)}
-              className="mt-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-neutral-300 text-xs font-semibold text-neutral-600 transition hover:border-neutral-400 hover:text-neutral-900"
+              className="absolute -bottom-4 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-neutral-900 text-white shadow-lg"
+              aria-label={isExpanded ? "Recolher" : "Expandir"}
             >
               {isExpanded ? "−" : "+"}
             </button>
-          ) : (
-            <span className="mt-1 inline-flex h-6 w-6 items-center justify-center rounded-full border border-transparent text-xs text-neutral-400">
-              •
-            </span>
-          )}
-          <div className="flex-1 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-neutral-900">{node.displayName}</span>
-              {node.code ? (
-                <span className="inline-flex items-center rounded-full bg-neutral-900 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-white">
-                  Código {node.code}
-                </span>
-              ) : null}
-              {node.isVirtual ? (
-                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
-                  Virtual
-                </span>
-              ) : null}
-              {node.tipo === "recrutador" ? (
-                <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-emerald-700">
-                  Recrutador
-                </span>
-              ) : (
-                <span className="inline-flex items-center rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-sky-700">
-                  Lead
-                </span>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-neutral-600">
-              {node.recrutadorCodigo ? <span>Indicador: {node.recrutadorCodigo}</span> : null}
-              {typeof node.nivel === "number" ? <span>Nível: {node.nivel}</span> : null}
-              {node.telefone ? <span>Telefone: {node.telefone}</span> : null}
-              {node.cidade ? <span>Cidade: {node.cidade}</span> : null}
-              <span>Diretos: {node.directLeadCount + node.directRecruiterCount}</span>
-              <span>Descendentes: {node.totalDescendants}</span>
-            </div>
-          </div>
+          ) : null}
         </div>
         {hasChildren && isExpanded ? (
-          <ul className="ml-8 border-l border-neutral-200 pl-4">
-            {node.children.map((child) => renderNode(child))}
-          </ul>
+          <div className="relative mt-6 flex w-full flex-col items-center">
+            <span className="mb-4 h-10 w-px bg-neutral-300" aria-hidden="true" />
+            <div className="relative flex flex-wrap justify-center gap-8 before:absolute before:left-0 before:right-0 before:top-0 before:h-px before:bg-neutral-200">
+              {node.children.map((child) => (
+                <div
+                  key={child.id}
+                  className="relative pt-6 before:absolute before:top-0 before:left-1/2 before:h-6 before:w-px before:-translate-x-1/2 before:bg-neutral-200"
+                >
+                  {renderNode(child)}
+                </div>
+              ))}
+            </div>
+          </div>
         ) : null}
-      </li>
+      </div>
     );
   }
 
@@ -137,9 +131,11 @@ function NetworkTreeInner({ roots, orphans, stats, focus, initialExpandedIds }: 
         {roots.length > 0 ? (
           <section className="space-y-3">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Redes de recrutadores</h2>
-            <ul className="space-y-4">
-              {roots.map((root) => renderNode(root))}
-            </ul>
+            <div className="space-y-8">
+              {roots.map((root) => (
+                <div key={root.id}>{renderNode(root)}</div>
+              ))}
+            </div>
           </section>
         ) : (
           <p className="rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600">
