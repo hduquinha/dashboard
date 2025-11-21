@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
+import type { ImportPayload } from "@/lib/importSpreadsheet";
 import {
   getRecruiterByCode,
   listRecruiters,
@@ -1042,6 +1043,206 @@ export async function createRecruiterInscricao(
   }
 
   return mapDbRowToInscricaoItem(row);
+}
+
+interface InsertImportedInscricoesOptions {
+  filename?: string | null;
+}
+
+export interface InsertImportedInscricoesResult {
+  inserted: number;
+  skipped: number;
+  duplicateClientIds: string[];
+  duplicatePhones: string[];
+}
+
+function normalizeImportClientId(value: unknown): string | null {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function normalizeImportPhoneValue(value: unknown): string | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    value = String(Math.trunc(value));
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const digits = trimmed.replace(/\D+/g, "");
+  if (digits.length >= 10) {
+    return digits;
+  }
+  return trimmed.replace(/\s+/g, "");
+}
+
+function buildImportPayload(
+  record: ImportPayload,
+  options: InsertImportedInscricoesOptions
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = { ...record };
+
+  const trainingValue = record.data_treinamento ?? null;
+  if (trainingValue) {
+    for (const key of TRAINING_FIELD_KEYS) {
+      if (!payload[key]) {
+        payload[key] = trainingValue;
+      }
+    }
+  }
+
+  if (!payload["tipo"]) {
+    payload["tipo"] = "lead";
+  }
+
+  const normalizedPhone = normalizeImportPhoneValue(record.telefone);
+  if (normalizedPhone) {
+    payload["telefone"] = normalizedPhone;
+  }
+
+  payload["importado_via_dashboard"] = true;
+  payload["importado_em"] = new Date().toISOString();
+  if (options.filename) {
+    payload["importado_arquivo"] = options.filename;
+  }
+
+  return payload;
+}
+
+export async function insertImportedInscricoes(
+  records: ImportPayload[],
+  options: InsertImportedInscricoesOptions = {}
+): Promise<InsertImportedInscricoesResult> {
+  if (!Array.isArray(records) || records.length === 0) {
+    return {
+      inserted: 0,
+      skipped: 0,
+      duplicateClientIds: [],
+      duplicatePhones: [],
+    };
+  }
+
+  const clientIdCandidates = new Set<string>();
+  const phoneCandidates = new Set<string>();
+
+  for (const record of records) {
+    const clientId = normalizeImportClientId(record.clientId);
+    if (clientId) {
+      clientIdCandidates.add(clientId);
+    }
+    const phone = normalizeImportPhoneValue(record.telefone);
+    if (phone) {
+      phoneCandidates.add(phone);
+    }
+  }
+
+  const clientIdList = Array.from(clientIdCandidates);
+  const phoneList = Array.from(phoneCandidates);
+  const conflictClientIds = new Set<string>();
+  const conflictPhones = new Set<string>();
+
+  if (clientIdList.length || phoneList.length) {
+    const params: unknown[] = [];
+    const conditions: string[] = [];
+
+    if (clientIdList.length) {
+      params.push(clientIdList);
+      conditions.push(`TRIM(COALESCE(i.payload->>'clientId', '')) = ANY($${params.length}::text[])`);
+    }
+
+    if (phoneList.length) {
+      params.push(phoneList);
+      conditions.push(
+        `REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') = ANY($${params.length}::text[])`
+      );
+    }
+
+    if (conditions.length) {
+      const query = `
+        SELECT
+          TRIM(COALESCE(i.payload->>'clientId', '')) AS client_id,
+          REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') AS telefone
+        FROM ${SCHEMA_NAME}.inscricoes AS i
+        WHERE ${conditions.join(" OR ")}
+      `;
+
+      const { rows } = await getPool().query<{ client_id: string | null; telefone: string | null }>(query, params);
+
+      for (const row of rows) {
+        const clientId = normalizeImportClientId(row.client_id);
+        if (clientId) {
+          conflictClientIds.add(clientId);
+        }
+        const phone = normalizeImportPhoneValue(row.telefone);
+        if (phone) {
+          conflictPhones.add(phone);
+        }
+      }
+    }
+  }
+
+  const localClientIds = new Set<string>();
+  const localPhones = new Set<string>();
+
+  const filteredRecords = records.filter((record) => {
+    const clientId = normalizeImportClientId(record.clientId);
+    if (clientId) {
+      if (conflictClientIds.has(clientId) || localClientIds.has(clientId)) {
+        return false;
+      }
+      localClientIds.add(clientId);
+    }
+    const phone = normalizeImportPhoneValue(record.telefone);
+    if (phone) {
+      if (conflictPhones.has(phone) || localPhones.has(phone)) {
+        return false;
+      }
+      localPhones.add(phone);
+    }
+    return true;
+  });
+
+  if (!filteredRecords.length) {
+    return {
+      inserted: 0,
+      skipped: records.length,
+      duplicateClientIds: Array.from(conflictClientIds),
+      duplicatePhones: Array.from(conflictPhones),
+    };
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    for (const record of filteredRecords) {
+      const payload = buildImportPayload(record, options);
+      await client.query(`INSERT INTO ${SCHEMA_NAME}.inscricoes (payload) VALUES ($1::jsonb)`, [
+        JSON.stringify(payload),
+      ]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  return {
+    inserted: filteredRecords.length,
+    skipped: records.length - filteredRecords.length,
+    duplicateClientIds: Array.from(conflictClientIds),
+    duplicatePhones: Array.from(conflictPhones),
+  };
 }
 
 export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {

@@ -1,7 +1,11 @@
-import type { Buffer } from "node:buffer";
+import { Buffer } from "node:buffer";
 import * as XLSX from "xlsx";
 
 type SpreadsheetBinary = ArrayBuffer | ArrayBufferView | Buffer;
+
+export interface ImportOptions {
+  filename?: string | null;
+}
 
 function toUint8Array(input: SpreadsheetBinary): Uint8Array {
   if (input instanceof Uint8Array) {
@@ -76,8 +80,22 @@ function parseList(value: unknown): string[] | null {
   if (!normalized) {
     return null;
   }
+  if (normalized.startsWith("[") && normalized.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(normalized);
+      if (Array.isArray(parsed)) {
+        const values = parsed
+          .map((entry) => normalizeString(entry))
+          .filter((entry): entry is string => Boolean(entry));
+        return values.length ? values : null;
+      }
+    } catch {
+      // Fallback to delimiter-based split below
+    }
+  }
+
   return normalized
-    .split(",")
+    .split(/[,;|]/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
     .map((entry) => entry);
@@ -114,8 +132,97 @@ function isRowEmpty(row: Record<string, unknown>): boolean {
   return Object.values(row).every((value) => normalizeString(value) === null);
 }
 
-function buildPayload(row: Record<string, unknown>): ImportPayload {
-  const dataTreinamento = normalizeString(row.data) ?? normalizeString(row.data_treinamento);
+export function normalizePhone(value: unknown): string | null {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  const digits = normalized.replace(/\D+/g, "");
+  if (digits.length >= 10) {
+    return digits;
+  }
+  return normalized.replace(/\s+/g, "");
+}
+
+function detectDelimiter(sample: string): string {
+  const limited = sample.slice(0, 5_000);
+  const counts = {
+    ",": (limited.match(/,/g) ?? []).length,
+    ";": (limited.match(/;/g) ?? []).length,
+    "\t": (limited.match(/\t/g) ?? []).length,
+  };
+  const winner = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  return winner && winner[1] > 0 ? winner[0] : ",";
+}
+
+function decodeText(bytes: Uint8Array): string {
+  try {
+    const decoder = new TextDecoder("utf-8", { fatal: false });
+    return decoder.decode(bytes);
+  } catch {
+    return Buffer.from(bytes).toString("utf8");
+  }
+}
+
+function readWorkbook(data: Uint8Array, options?: ImportOptions): XLSX.WorkBook {
+  const filename = options?.filename?.toLowerCase() ?? "";
+  const shouldForceCsv = filename.endsWith(".csv") || filename.endsWith(".txt");
+
+  const textFallback = () => {
+    const text = decodeText(data);
+    const delimiter = detectDelimiter(text);
+    return XLSX.read(text, {
+      type: "string",
+      cellDates: false,
+      cellNF: false,
+      raw: false,
+      FS: delimiter,
+    });
+  };
+
+  if (shouldForceCsv) {
+    return textFallback();
+  }
+
+  try {
+    return XLSX.read(data, {
+      type: "array",
+      cellDates: false,
+      cellNF: false,
+      raw: false,
+    });
+  } catch {
+    return textFallback();
+  }
+}
+
+function normalizeRowKeys(row: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = value;
+    if (typeof key === "string") {
+      const slug = key.trim().toLowerCase().replace(/\s+/g, "_");
+      if (slug && !(slug in normalized)) {
+        normalized[slug] = value;
+      }
+    }
+  }
+  return normalized;
+}
+
+function pickField(row: Record<string, unknown>, ...keys: string[]): unknown {
+  for (const key of keys) {
+    if (key in row) {
+      return row[key];
+    }
+  }
+  return undefined;
+}
+
+function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
+  const row = normalizeRowKeys(rawRow);
+  const treinamentoValue =
+    normalizeString(pickField(row, "treinamento", "data_treinamento")) ?? normalizeString(row.data);
 
   return {
     nome: normalizeString(row.nome),
@@ -125,9 +232,9 @@ function buildPayload(row: Record<string, unknown>): ImportPayload {
     idade: normalizeString(row.idade),
     _final: toBoolean(row._final),
     cidade: normalizeString(row.cidade),
-    clientId: normalizeString(row.clientId),
+    clientId: normalizeString(pickField(row, "clientId", "client_id", "id", "lead_id")),
     from_bio: normalizeString(row.from_bio),
-    telefone: normalizeString(row.telefone),
+    telefone: normalizePhone(pickField(row, "telefone", "phone", "tefone", "celular")),
     ansiedade: normalizeString(row.ansiedade),
     timestamp: normalizeString(row.timestamp),
     saude_fisica: normalizeString(row.saude_fisica),
@@ -139,7 +246,7 @@ function buildPayload(row: Record<string, unknown>): ImportPayload {
     traffic_source: normalizeString(row.traffic_source),
     vida_financeira: normalizeString(row.vida_financeira),
     audience_segment: normalizeString(row.audience_segment),
-    data_treinamento: dataTreinamento,
+    data_treinamento: treinamentoValue,
     sintomas_fisicos: parseList(row.sintomas_fisicos),
     data_preenchimento: normalizeString(row.data_preenchimento),
     gatilhos_ansiedade: parseList(row.gatilhos_ansiedade),
@@ -152,13 +259,8 @@ function buildPayload(row: Record<string, unknown>): ImportPayload {
   };
 }
 
-export function importSpreadsheet(data: SpreadsheetBinary): ImportResult {
-  const workbook = XLSX.read(toUint8Array(data), {
-    type: "array",
-    cellDates: false,
-    cellNF: false,
-    raw: false,
-  });
+export function importSpreadsheet(data: SpreadsheetBinary, options?: ImportOptions): ImportResult {
+  const workbook = readWorkbook(toUint8Array(data), options);
 
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {

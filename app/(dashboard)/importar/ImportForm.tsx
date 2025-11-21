@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { useFormState } from "react-dom";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
+import { confirmImportAction, type ConfirmImportResponse } from "./actions";
 import { initialImportState, type ImportActionState } from "./state";
 
 interface ImportFormProps {
@@ -27,24 +28,10 @@ function formatValue(value: unknown): string {
   return String(value);
 }
 
-function downloadJson(filename: string, payload: unknown): void {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], {
-    type: "application/json",
-  });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename.endsWith(".json") ? filename : `${filename}.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function ImportForm({ action }: ImportFormProps) {
   const [state, formAction] = useFormState<ImportActionState, FormData>(action, initialImportState);
-  const [confirmationState, setConfirmationState] = useState<{
-    status: "idle" | "pending" | "done";
-    key: string | null;
-  }>({ status: "idle", key: null });
+  const [confirmFeedback, setConfirmFeedback] = useState<ConfirmImportResponse | null>(null);
+  const [isConfirming, startConfirm] = useTransition();
 
   const previewSignature = useMemo(() => {
     if (!state.result) {
@@ -57,19 +44,43 @@ export default function ImportForm({ action }: ImportFormProps) {
     return `${importados}-${duplicados}-${comErros}-${filename}`;
   }, [state.result, state.filename]);
 
-  const confirmationStatus = confirmationState.key === previewSignature ? confirmationState.status : "idle";
+  useEffect(() => {
+    setConfirmFeedback(null);
+  }, [previewSignature]);
+
+  const confirmationStatus = isConfirming
+    ? "pending"
+    : confirmFeedback?.status === "success"
+    ? "done"
+    : confirmFeedback?.status === "error"
+    ? "error"
+    : "idle";
 
   const hasPreview = state.status === "success" && state.result;
+  const confirmSummary = confirmFeedback?.summary ?? null;
 
-  async function handleConfirm() {
-    if (!state.result) {
+  function handleConfirm() {
+    if (!state.result || state.result.importados.length === 0) {
       return;
     }
-    const signature = previewSignature;
-    setConfirmationState({ status: "pending", key: signature });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    downloadJson(state.filename ?? "importacao", state.result.importados);
-    setConfirmationState({ status: "done", key: signature });
+
+    startConfirm(() => {
+      setConfirmFeedback(null);
+      void confirmImportAction({
+        filename: state.filename ?? null,
+        registros: state.result!.importados,
+      })
+        .then((response) => {
+          setConfirmFeedback(response);
+        })
+        .catch((error) => {
+          console.error("Failed to confirm import", error);
+          setConfirmFeedback({
+            status: "error",
+            message: "Não foi possível concluir a importação.",
+          });
+        });
+    });
   }
 
   return (
@@ -127,7 +138,7 @@ export default function ImportForm({ action }: ImportFormProps) {
           <header className="flex flex-col gap-2">
             <h3 className="text-lg font-semibold text-neutral-900">Pré-visualização</h3>
             <p className="text-sm text-neutral-600">
-              Analise os dados identificados. Confirme para gerar o lote higienizado e seguir com a importação manual.
+              Analise os dados identificados. Confirme para enviar o lote higienizado diretamente ao banco e bloquear duplicados.
             </p>
           </header>
 
@@ -170,7 +181,7 @@ export default function ImportForm({ action }: ImportFormProps) {
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-4">
             <p className="text-xs text-neutral-500">
-              A confirmação gera um arquivo JSON pronto para enviar ao pipeline de importação.
+              Ao confirmar, os registros válidos são gravados diretamente no banco de dados.
             </p>
             <button
               type="button"
@@ -179,12 +190,41 @@ export default function ImportForm({ action }: ImportFormProps) {
               className="rounded-xl bg-emerald-600 px-6 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {confirmationStatus === "done"
-                ? "Lote confirmado"
+                ? "Importação concluída"
                 : confirmationStatus === "pending"
-                ? "Gerando arquivo..."
+                ? "Importando..."
+                : confirmationStatus === "error"
+                ? "Tentar novamente"
                 : "Confirmar importação"}
             </button>
           </div>
+          {confirmFeedback ? (
+            <div
+              className={`mt-3 w-full rounded-lg border px-4 py-3 text-sm ${
+                confirmFeedback.status === "success"
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-red-200 bg-red-50 text-red-800"
+              }`}
+            >
+              <p className="font-medium">{confirmFeedback.message}</p>
+              {confirmSummary ? (
+                <ul className="mt-2 space-y-1 text-xs">
+                  <li>
+                    Inseridos: <span className="font-semibold">{confirmSummary.inserted}</span>
+                  </li>
+                  <li>
+                    Ignorados: <span className="font-semibold">{confirmSummary.skipped}</span>
+                  </li>
+                  {confirmSummary.duplicateClientIds.length ? (
+                    <li>Client IDs duplicados: {confirmSummary.duplicateClientIds.length}</li>
+                  ) : null}
+                  {confirmSummary.duplicatePhones.length ? (
+                    <li>Telefones duplicados: {confirmSummary.duplicatePhones.length}</li>
+                  ) : null}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>
