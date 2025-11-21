@@ -1,9 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import DashboardNav from "@/components/DashboardNav";
 import NetworkTree from "@/components/NetworkTree";
-import { listDuplicateSuspects } from "@/lib/db";
 import { buildNetworkTree } from "@/lib/network";
 
 interface PageProps {
@@ -20,18 +18,15 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 
 export default async function RecruiterDetailPage({ params }: PageProps) {
   const code = params.code ?? "";
-  const [tree, duplicateSummary] = await Promise.all([
-    buildNetworkTree({ focus: code }),
-    listDuplicateSuspects({ maxGroups: 1 }),
-  ]);
+  const tree = await buildNetworkTree({ focus: code });
 
   if (!tree.focus?.nodeId) {
     notFound();
   }
 
   return (
-    <main className="min-h-screen bg-neutral-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+    <main className="px-4 py-8 sm:px-6 lg:px-10">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="space-y-3">
           <div className="space-y-2">
             <Link
@@ -41,13 +36,13 @@ export default async function RecruiterDetailPage({ params }: PageProps) {
               ← Voltar para recrutadores
             </Link>
             <div className="space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Rede</p>
               <h1 className="text-2xl font-semibold text-neutral-900">Rede do recrutador {code.toUpperCase()}</h1>
               <p className="text-sm text-neutral-600">
                 Utilize esta visão para revisar descendentes, detectar gargalos e compartilhar com o time.
               </p>
             </div>
           </div>
-          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
         <NetworkTree

@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
-import DashboardNav from "@/components/DashboardNav";
 import RecruitersDirectory from "@/components/RecruitersDirectory";
-import { listDuplicateSuspects } from "@/lib/db";
 import { buildNetworkTree, type NetworkNode } from "@/lib/network";
 import { RECRUITERS_BASE_URL } from "@/lib/recruiters";
 
@@ -69,23 +67,20 @@ export const metadata: Metadata = {
 };
 
 export default async function RecruitersPage() {
-  const [tree, duplicateSummary] = await Promise.all([
-    buildNetworkTree(),
-    listDuplicateSuspects({ maxGroups: 1 }),
-  ]);
+  const tree = await buildNetworkTree();
   const recruiters = flattenRecruiters(tree.roots, tree.orphans);
 
   return (
-    <main className="min-h-screen bg-neutral-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+    <main className="px-4 py-8 sm:px-6 lg:px-10">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <header className="space-y-3">
           <div className="space-y-2">
-            <h1 className="text-2xl font-semibold text-neutral-900">Recrutadores</h1>
+            <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Recrutadores</p>
+            <h1 className="text-2xl font-semibold text-neutral-900">Base de indicadores oficiais</h1>
             <p className="text-sm text-neutral-600">
               Centralize os códigos de indicação e compartilhe o link correto com cada recrutador.
             </p>
           </div>
-          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
         <RecruitersDirectory recruiters={recruiters} />

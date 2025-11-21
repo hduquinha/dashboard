@@ -869,6 +869,93 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   }
 }
 
+export interface TrainingSnapshotFilters {
+  treinamentoId?: string | null;
+}
+
+export interface TrainingSnapshot {
+  total: number;
+  leads: number;
+  recruiters: number;
+  withIndicator: number;
+  withoutIndicator: number;
+  last24h: number;
+}
+
+export async function getTrainingSnapshot(
+  filters: TrainingSnapshotFilters = {}
+): Promise<TrainingSnapshot> {
+  const params: Array<string> = [];
+  const conditions: string[] = [];
+
+  if (filters.treinamentoId) {
+    params.push(filters.treinamentoId.trim());
+    conditions.push(`TRIM(COALESCE(i.payload->>'treinamento', '')) = $${params.length}`);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const typeExpression = "LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead'))";
+  const indicatorExpression = `COALESCE(
+    NULLIF(TRIM(i.payload->>'recrutadorCodigo'), ''),
+    NULLIF(TRIM(i.payload->>'codigo_indicador'), ''),
+    NULLIF(TRIM(i.payload->>'traffic_source'), '')
+  )`;
+
+  const query = `
+    SELECT
+      COUNT(*)::bigint AS total,
+      COUNT(*) FILTER (WHERE ${typeExpression} = 'recrutador')::bigint AS recruiters,
+      COUNT(*) FILTER (WHERE ${typeExpression} <> 'recrutador')::bigint AS leads,
+      COUNT(*) FILTER (WHERE ${indicatorExpression} IS NOT NULL)::bigint AS with_indicator,
+      COUNT(*) FILTER (WHERE ${indicatorExpression} IS NULL)::bigint AS without_indicator,
+      COUNT(*) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    ${whereClause}
+  `;
+
+  try {
+    const { rows } = await getPool().query<{
+      total: string;
+      recruiters: string;
+      leads: string;
+      with_indicator: string;
+      without_indicator: string;
+      last_24h: string;
+    }>(query, params);
+
+    const row = rows[0];
+    if (!row) {
+      return {
+        total: 0,
+        leads: 0,
+        recruiters: 0,
+        withIndicator: 0,
+        withoutIndicator: 0,
+        last24h: 0,
+      };
+    }
+
+    return {
+      total: Number(row.total) || 0,
+      leads: Number(row.leads) || 0,
+      recruiters: Number(row.recruiters) || 0,
+      withIndicator: Number(row.with_indicator) || 0,
+      withoutIndicator: Number(row.without_indicator) || 0,
+      last24h: Number(row.last_24h) || 0,
+    };
+  } catch (error) {
+    console.error('Failed to compute training snapshot', error);
+    return {
+      total: 0,
+      leads: 0,
+      recruiters: 0,
+      withIndicator: 0,
+      withoutIndicator: 0,
+      last24h: 0,
+    };
+  }
+}
+
 export async function deleteInscricao(id: number): Promise<void> {
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Invalid inscrição id");

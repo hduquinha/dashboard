@@ -2,7 +2,6 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { assertToken } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
-import DashboardNav from "@/components/DashboardNav";
 import DuplicateAlerts from "@/components/DuplicateAlerts";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +36,6 @@ export default async function DuplicadosPage() {
               {duplicateSummary.totalGroups} pendente{duplicateSummary.totalGroups === 1 ? "" : "s"}
             </span>
           </div>
-          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
         {duplicateSummary.groups.length === 0 ? (

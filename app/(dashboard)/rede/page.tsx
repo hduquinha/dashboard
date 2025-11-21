@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import DashboardNav from "@/components/DashboardNav";
 import NetworkTree from "@/components/NetworkTree";
 import { assertToken } from "@/lib/auth";
-import { listDuplicateSuspects } from "@/lib/db";
 import { buildNetworkTree } from "@/lib/network";
 
 export const metadata: Metadata = {
@@ -38,25 +36,22 @@ export default async function RedePage(props: RedePageProps) {
     redirect("/login");
   }
 
-  const [tree, duplicateSummary] = await Promise.all([
-    buildNetworkTree({ focus: focusParam }),
-    listDuplicateSuspects({ maxGroups: 1 }),
-  ]);
+  const tree = await buildNetworkTree({ focus: focusParam });
 
   return (
-    <main className="min-h-screen bg-neutral-50">
-      <div className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+    <main className="px-4 py-8 sm:px-6 lg:px-10">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
         <header className="space-y-3">
           <div className="space-y-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Rede</p>
             <h1 className="text-2xl font-semibold text-neutral-900">Rede de Recrutadores</h1>
             <p className="text-sm text-neutral-600">
               Explore a árvore completa de recrutadores e leads para mapear a estrutura do marketing multinível.
             </p>
           </div>
-          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
         </header>
 
-        <section className="rounded-lg border border-neutral-200 bg-white/60 p-6">
+        <section className="rounded-2xl border border-neutral-200 bg-white/80 p-6 shadow-sm">
           <NetworkTree roots={tree.roots} orphans={tree.orphans} stats={tree.stats} focus={tree.focus} />
         </section>
       </div>

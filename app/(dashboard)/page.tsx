@@ -1,19 +1,18 @@
 import type { Metadata } from "next";
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { redirect } from "next/navigation";
-import { listDuplicateSuspects, listInscricoes, listTrainingFilterOptions } from "@/lib/db";
-import { assertToken } from "@/lib/auth";
-import DashboardNav from "@/components/DashboardNav";
-import InscricoesTable from "@/components/InscricoesTable";
-import { listRecruiters } from "@/lib/recruiters";
-import type { OrderDirection, OrderableField } from "@/types/inscricao";
+import RecentInscricoesTable from "@/components/RecentInscricoesTable";
+import TrainingSwitcher from "@/components/TrainingSwitcher";
+import {
+  getTrainingSnapshot,
+  listDuplicateSuspects,
+  listInscricoes,
+  listTrainingFilterOptions,
+} from "@/lib/db";
 import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PAGE_SIZE = 25;
-const MAX_PAGE_SIZE = 100;
+const RECENT_PAGE_SIZE = 15;
 
 interface DashboardPageProps {
   searchParams:
@@ -26,37 +25,6 @@ function pickStringParam(value: string | string[] | undefined): string | undefin
     return value[0];
   }
   return value;
-}
-
-function parseNumberParam(value: string | string[] | undefined, fallback: number): number {
-  const raw = pickStringParam(value);
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function parseOrderField(value: string | string[] | undefined): OrderableField {
-  const raw = pickStringParam(value);
-  if (!raw) {
-    return "criado_em";
-  }
-  const allowed: OrderableField[] = [
-    "id",
-    "nome",
-    "telefone",
-    "cidade",
-    "treinamento",
-    "recrutador",
-    "criado_em",
-  ];
-  return allowed.includes(raw as OrderableField) ? (raw as OrderableField) : "criado_em";
-}
-
-function parseDirection(value: string | string[] | undefined): OrderDirection {
-  const raw = pickStringParam(value);
-  return raw === "asc" ? "asc" : "desc";
 }
 
 function formatTrainingDate(value: string | null | undefined): string | null {
@@ -100,212 +68,123 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
-  const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
+  const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
+  const trainingOptions = await listTrainingFilterOptions();
 
-  try {
-    assertToken(token);
-  } catch {
-    redirect("/login");
+  function resolveDefaultTraining(): TrainingOption | undefined {
+    if (!trainingOptions.length) {
+      return undefined;
+    }
+    const withOrder = trainingOptions
+      .map((option) => {
+        const candidates = [option.startsAt, option.label, option.id];
+        const timestamps = candidates
+          .map((candidate) => (candidate ? Date.parse(candidate) : Number.NaN))
+          .filter((value) => Number.isFinite(value)) as number[];
+        const best = timestamps.length ? Math.max(...timestamps) : Number.NEGATIVE_INFINITY;
+        return { option, score: best };
+      })
+      .sort((a, b) => b.score - a.score);
+    return withOrder[0]?.option ?? trainingOptions[0];
   }
 
-  const page = parseNumberParam(searchParams?.page, 1);
-  const pageSize = Math.min(parseNumberParam(searchParams?.pageSize, DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
-  const orderBy = parseOrderField(searchParams?.orderBy);
-  const orderDirection = parseDirection(searchParams?.orderDirection);
-  const nome = pickStringParam(searchParams?.nome) ?? "";
-  const telefone = pickStringParam(searchParams?.telefone) ?? "";
-  const indicacao = pickStringParam(searchParams?.indicacao) ?? "";
-  const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
+  const selectedTrainingOption = trainingOptions.find((option) => option.id === treinamentoSelecionado) ?? resolveDefaultTraining();
+  const selectedTrainingId = selectedTrainingOption?.id ?? "";
 
-  const recruiterOptions = listRecruiters();
-
-  const [trainingOptions, result, duplicateSummary] = await Promise.all([
-    listTrainingFilterOptions(),
+  const [snapshot, recentResult, duplicateSummary] = await Promise.all([
+    getTrainingSnapshot({ treinamentoId: selectedTrainingId || undefined }),
     listInscricoes({
-      page,
-      pageSize,
-      orderBy,
-      orderDirection,
+      page: 1,
+      pageSize: RECENT_PAGE_SIZE,
+      orderBy: "criado_em",
+      orderDirection: "desc",
       filters: {
-        nome,
-        telefone,
-        indicacao,
-        treinamento: treinamentoSelecionado,
+        nome: "",
+        telefone: "",
+        indicacao: "",
+        treinamento: selectedTrainingId,
       },
     }),
-    listDuplicateSuspects(),
+    listDuplicateSuspects({ maxGroups: 1 }),
   ]);
 
-  const indicatorDatalistId = "indicator-options";
-  const selectedTrainingOption = treinamentoSelecionado.length
-    ? trainingOptions.find((option) => option.id === treinamentoSelecionado)
-    : undefined;
-  const trainingFilterLabel = selectedTrainingOption
-    ? getTrainingDisplayLabel(selectedTrainingOption)
-    : formatTrainingDate(treinamentoSelecionado) ?? treinamentoSelecionado;
-  const activeFilters = [
-    nome ? { label: "Nome", value: nome } : null,
-    telefone ? { label: "Telefone", value: telefone } : null,
-    indicacao ? { label: "Indicador", value: indicacao } : null,
-    treinamentoSelecionado ? { label: "Treinamento", value: trainingFilterLabel } : null,
-  ].filter((entry): entry is { label: string; value: string } => Boolean(entry));
-  const activeFiltersCount = activeFilters.length;
+  const heroLabel = selectedTrainingOption ? getTrainingDisplayLabel(selectedTrainingOption) : "Visão geral";
+  const switcherOptions = trainingOptions.length
+    ? trainingOptions
+    : [{ id: "", label: "Todos os treinamentos" } satisfies TrainingOption];
+
+  const nextCtaHref = selectedTrainingId ? `/crm?treinamento=${encodeURIComponent(selectedTrainingId)}` : "/crm";
 
   return (
-    <main className="min-h-screen bg-neutral-50">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
-        <header className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <main className="px-4 py-8 sm:px-6 lg:px-10">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+        <header className="rounded-3xl border border-neutral-200 bg-white/90 p-6 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">
-                Visão geral
-              </p>
-              <h1 className="text-3xl font-semibold text-neutral-900">Painel de Inscrições</h1>
+              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Treinamento atual</p>
+              <h1 className="text-3xl font-semibold text-neutral-900">{heroLabel}</h1>
               <p className="text-sm text-neutral-600">
-                Acompanhe em tempo real as inscrições enviadas pelo formulário oficial.
+                Acompanhe o desempenho do treinamento em tempo real e compartilhe os resultados com o time.
               </p>
             </div>
-            <span className="inline-flex items-center justify-center rounded-full bg-neutral-900 px-6 py-2 text-sm font-semibold text-white shadow-lg">
-              Total: {result.total}
-            </span>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Link
+                href={nextCtaHref}
+                className="inline-flex items-center justify-center rounded-2xl bg-neutral-900 px-6 py-3 text-sm font-semibold text-white shadow hover:bg-neutral-800"
+              >
+                Abrir CRM completo
+              </Link>
+              <Link
+                href="/importar"
+                className="inline-flex items-center justify-center rounded-2xl border border-neutral-300 px-6 py-3 text-sm font-semibold text-neutral-800 hover:border-neutral-500"
+              >
+                Importar planilha
+              </Link>
+            </div>
           </div>
-          <DashboardNav duplicateCount={duplicateSummary.totalGroups} />
+          <div className="mt-4 max-w-xs">
+            <TrainingSwitcher options={switcherOptions} selectedId={selectedTrainingId} />
+          </div>
         </header>
 
-        <section className="space-y-4 rounded-2xl border border-neutral-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-4 border-b border-neutral-200 bg-neutral-50/60 px-6 py-4 md:flex-row md:items-center md:justify-between">
+        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <article className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-wide text-neutral-500">Total no treinamento</p>
+            <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.total}</p>
+          </article>
+          <article className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-wide text-neutral-500">Novos (24h)</p>
+            <p className="mt-2 text-3xl font-semibold text-neutral-900">{snapshot.last24h}</p>
+          </article>
+          <article className="rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <p className="text-xs uppercase tracking-wide text-neutral-500">Sem indicador</p>
+            <p className="mt-2 text-3xl font-semibold text-amber-600">{snapshot.withoutIndicator}</p>
+          </article>
+          <article className="rounded-3xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+            <div className="flex items-center justify-between text-xs uppercase tracking-wide text-amber-700">
+              <span>Possíveis duplicados</span>
+              <Link href="/duplicados" className="text-[11px] font-semibold text-amber-900 underline-offset-2 hover:underline">
+                Revisar
+              </Link>
+            </div>
+            <p className="mt-2 text-3xl font-semibold text-amber-900">{duplicateSummary.totalGroups}</p>
+          </article>
+        </section>
+
+        <section className="space-y-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Filtros</h2>
-              <p className="text-xs text-neutral-500">
-                {activeFiltersCount > 0
-                  ? `${activeFiltersCount} filtro${activeFiltersCount > 1 ? "s" : ""} aplicado${
-                      activeFiltersCount > 1 ? "s" : ""
-                    }.`
-                  : "Refine a lista usando os campos disponíveis no menu."}
-              </p>
+              <h2 className="text-xl font-semibold text-neutral-900">Últimas inscrições</h2>
+              <p className="text-sm text-neutral-600">As {Math.min(RECENT_PAGE_SIZE, recentResult.data.length)} inscrições mais recentes deste treinamento.</p>
             </div>
-            <details className="group relative">
-              <summary className="flex cursor-pointer items-center gap-2 rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-semibold text-neutral-700 transition hover:border-neutral-400 hover:bg-white/70 hover:text-neutral-900">
-                Abrir filtros
-                {activeFiltersCount > 0 ? (
-                  <span className="inline-flex min-w-[1.75rem] justify-center rounded-full bg-neutral-900 px-2 py-1 text-xs font-semibold text-white">
-                    {activeFiltersCount}
-                  </span>
-                ) : null}
-              </summary>
-              <div className="absolute right-0 top-full z-20 mt-3 w-[min(90vw,420px)] rounded-lg border border-neutral-200 bg-white p-5 shadow-xl">
-                <form className="space-y-4" method="get">
-                  <input type="hidden" name="page" value="1" />
-                  <input type="hidden" name="pageSize" value={String(pageSize)} />
-                  <input type="hidden" name="orderBy" value={orderBy} />
-                  <input type="hidden" name="orderDirection" value={orderDirection} />
-
-                  <div className="grid grid-cols-1 gap-3">
-                    <label className="flex flex-col gap-2 text-sm text-neutral-700">
-                      Nome
-                      <input
-                        id="nome"
-                        name="nome"
-                        defaultValue={nome}
-                        placeholder="Filtrar por nome"
-                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2 text-sm text-neutral-700">
-                      Telefone
-                      <input
-                        id="telefone"
-                        name="telefone"
-                        defaultValue={telefone}
-                        placeholder="Filtrar por telefone"
-                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2 text-sm text-neutral-700">
-                      Indicador
-                      <input
-                        id="indicacao"
-                        name="indicacao"
-                        defaultValue={indicacao}
-                        placeholder="Código ou nome do indicador"
-                        list={indicatorDatalistId}
-                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-2 text-sm text-neutral-700">
-                      Treinamento
-                      <select
-                        id="treinamento"
-                        name="treinamento"
-                        defaultValue={treinamentoSelecionado}
-                        className="w-full rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      >
-                        <option value="">Todos</option>
-                        {trainingOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {getTrainingDisplayLabel(option)}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <datalist id={indicatorDatalistId}>
-                    {recruiterOptions.map((option) => (
-                      <option key={`${option.code}-name`} value={option.name}>
-                        {option.name} ({option.code})
-                      </option>
-                    ))}
-                    {recruiterOptions.map((option) => (
-                      <option key={`${option.code}-code`} value={option.code} />
-                    ))}
-                  </datalist>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <Link
-                      href="/"
-                      className="text-sm font-semibold text-neutral-500 underline-offset-4 hover:underline"
-                    >
-                      Limpar filtros
-                    </Link>
-                    <button
-                      type="submit"
-                      className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-neutral-700"
-                    >
-                      Aplicar filtros
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </details>
+            <Link
+              href={nextCtaHref}
+              className="inline-flex items-center rounded-full border border-neutral-300 px-4 py-2 text-sm font-semibold text-neutral-700 hover:border-neutral-500"
+            >
+              Ver tudo no CRM
+            </Link>
           </div>
-
-          {activeFiltersCount > 0 ? (
-            <div className="flex flex-wrap gap-2 px-6 py-4">
-              {activeFilters.map((filter) => (
-                <span
-                  key={`${filter.label}-${filter.value}`}
-                  className="inline-flex items-center rounded-full bg-neutral-200 px-3 py-1 text-xs font-semibold text-neutral-700"
-                >
-                  {filter.label}: {filter.value}
-                </span>
-              ))}
-            </div>
-          ) : null}
-
-          <div className="px-2 pb-6 sm:px-4">
-            <InscricoesTable
-              inscricoes={result.data}
-              page={page}
-              pageSize={pageSize}
-              total={result.total}
-              orderBy={orderBy}
-              orderDirection={orderDirection}
-              trainingOptions={trainingOptions}
-              recruiterOptions={recruiterOptions}
-            />
-          </div>
+          <RecentInscricoesTable inscricoes={recentResult.data} />
         </section>
       </div>
     </main>
