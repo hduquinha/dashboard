@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 import { useFormState } from "react-dom";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
 import { initialImportState, type ImportActionState } from "./state";
@@ -41,11 +41,23 @@ function downloadJson(filename: string, payload: unknown): void {
 
 export default function ImportForm({ action }: ImportFormProps) {
   const [state, formAction] = useFormState<ImportActionState, FormData>(action, initialImportState);
-  const [confirmationStatus, setConfirmationStatus] = useState<"idle" | "pending" | "done">("idle");
+  const [confirmationState, setConfirmationState] = useState<{
+    status: "idle" | "pending" | "done";
+    key: string | null;
+  }>({ status: "idle", key: null });
 
-  useEffect(() => {
-    setConfirmationStatus("idle");
-  }, [state.result?.importados.length, state.result?.duplicados.length, state.result?.comErros.length]);
+  const previewSignature = useMemo(() => {
+    if (!state.result) {
+      return null;
+    }
+    const importados = state.result.importados.length;
+    const duplicados = state.result.duplicados.length;
+    const comErros = state.result.comErros.length;
+    const filename = state.filename ?? "";
+    return `${importados}-${duplicados}-${comErros}-${filename}`;
+  }, [state.result, state.filename]);
+
+  const confirmationStatus = confirmationState.key === previewSignature ? confirmationState.status : "idle";
 
   const hasPreview = state.status === "success" && state.result;
 
@@ -53,10 +65,11 @@ export default function ImportForm({ action }: ImportFormProps) {
     if (!state.result) {
       return;
     }
-    setConfirmationStatus("pending");
+    const signature = previewSignature;
+    setConfirmationState({ status: "pending", key: signature });
     await new Promise((resolve) => setTimeout(resolve, 250));
     downloadJson(state.filename ?? "importacao", state.result.importados);
-    setConfirmationStatus("done");
+    setConfirmationState({ status: "done", key: signature });
   }
 
   return (

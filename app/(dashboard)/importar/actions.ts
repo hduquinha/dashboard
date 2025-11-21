@@ -1,7 +1,7 @@
 "use server";
 
 import { importSpreadsheet } from "@/lib/importSpreadsheet";
-import { initialImportState, type ImportActionState } from "./state";
+import type { ImportActionState } from "./state";
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15MB guard to avoid oversized uploads
 

@@ -103,7 +103,7 @@ function parseNotes(value: unknown): InscricaoNote[] {
     return [];
   }
 
-  return value
+  const mappedNotes = value
     .map((entry) => {
       if (!entry || typeof entry !== "object") {
         return null;
@@ -123,16 +123,19 @@ function parseNotes(value: unknown): InscricaoNote[] {
         ? record.whatsapp
         : null;
 
-      return {
+      const note: InscricaoNote = {
         id,
         content,
         createdAt,
         author,
         viaWhatsapp,
-      } satisfies InscricaoNote;
-    })
-    .filter((note): note is InscricaoNote => note !== null)
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      };
+      return note;
+    });
+
+  const normalizedNotes = mappedNotes.filter((note): note is InscricaoNote => note !== null);
+
+  return normalizedNotes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
 function appendNoteToPayload(

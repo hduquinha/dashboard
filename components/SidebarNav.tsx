@@ -2,7 +2,6 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import type { NavLink } from '@/lib/navLinks';
 import { NAV_LINKS } from '@/lib/navLinks';
 
 interface SidebarNavProps {
