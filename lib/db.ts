@@ -13,6 +13,7 @@ import {
 } from "@/lib/trainings";
 import type { TrainingOption } from "@/types/training";
 import type {
+  DuplicateGroup,
   InscricaoItem,
   InscricaoTipo,
   ListInscricoesResult,
@@ -69,6 +70,14 @@ interface DbRow {
   treinamento: string | null;
   traffic_source: string | null;
   total_count: number | string | null;
+}
+
+interface DuplicateDbRow extends DbRow {
+  telefone_normalizado: string | null;
+  email_normalizado: string | null;
+  nome_normalizado: string | null;
+  criado_dia: Date | string | null;
+  payload_hash: string | null;
 }
 
 function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
@@ -285,6 +294,35 @@ function buildTrainingFilterCandidates(value: string): string[] {
   }
 
   return Array.from(seen);
+}
+
+function formatNormalizedPhone(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const digits = value.replace(/\D+/g, "");
+  if (digits.length === 11) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
+  }
+  if (digits.length === 10) {
+    return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  }
+  return value;
+}
+
+function formatDateLabelPtBR(value: string | Date | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 export async function listInscricoes(
@@ -829,6 +867,176 @@ export async function listAllInscricoes(batchSize = 200): Promise<InscricaoItem[
   }
 
   return items;
+}
+
+export interface ListDuplicateSuspectsOptions {
+  windowDays?: number;
+  maxGroups?: number;
+  sampleSize?: number;
+}
+
+interface DuplicateEntry {
+  item: InscricaoItem;
+  createdDay: string | null;
+  phone: string | null;
+  email: string | null;
+  name: string | null;
+  payloadHash: string | null;
+}
+
+export async function listDuplicateSuspects(
+  options: ListDuplicateSuspectsOptions = {}
+): Promise<DuplicateGroup[]> {
+  const windowDays = Math.max(1, Math.trunc(options.windowDays ?? 30));
+  const maxGroups = Math.max(1, Math.min(50, Math.trunc(options.maxGroups ?? 8)));
+  const sampleSize = Math.max(200, Math.min(2000, Math.trunc(options.sampleSize ?? maxGroups * 40)));
+
+  const { rows } = await getPool().query<DuplicateDbRow>(
+    `
+      SELECT
+        i.id,
+        i.payload,
+        i.criado_em,
+        i.payload->>'nome' AS nome,
+        i.payload->>'telefone' AS telefone,
+        i.payload->>'cidade' AS cidade,
+        i.payload->>'profissao' AS profissao,
+        i.payload->>'treinamento' AS treinamento,
+        i.payload->>'traffic_source' AS traffic_source,
+        NULL::bigint AS total_count,
+        REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') AS telefone_normalizado,
+        LOWER(TRIM(COALESCE(i.payload->>'email', ''))) AS email_normalizado,
+        LOWER(TRIM(COALESCE(i.payload->>'nome', ''))) AS nome_normalizado,
+        DATE_TRUNC('day', i.criado_em) AS criado_dia,
+        MD5(CAST(i.payload AS TEXT)) AS payload_hash
+      FROM ${SCHEMA_NAME}.inscricoes AS i
+      WHERE i.criado_em >= NOW() - ($1::text || ' days')::interval
+      ORDER BY i.criado_em DESC
+      LIMIT $2
+    `,
+    [String(windowDays), sampleSize]
+  );
+
+  if (!rows.length) {
+    return [];
+  }
+
+  const entries: DuplicateEntry[] = rows.map((row) => {
+    const item = mapDbRowToInscricaoItem(row);
+    const createdDay =
+      row.criado_dia instanceof Date
+        ? row.criado_dia.toISOString().slice(0, 10)
+        : typeof row.criado_dia === "string"
+        ? row.criado_dia.slice(0, 10)
+        : null;
+
+    const normalizeValue = (value: string | null | undefined): string | null => {
+      if (!value) {
+        return null;
+      }
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    return {
+      item,
+      createdDay,
+      phone: normalizeValue(row.telefone_normalizado),
+      email: normalizeValue(row.email_normalizado),
+      name: normalizeValue(row.nome_normalizado),
+      payloadHash: normalizeValue(row.payload_hash),
+    };
+  });
+
+  const groups: DuplicateGroup[] = [];
+
+  const addToMap = (map: Map<string, DuplicateEntry[]>, key: string, entry: DuplicateEntry) => {
+    const current = map.get(key);
+    if (current) {
+      current.push(entry);
+    } else {
+      map.set(key, [entry]);
+    }
+  };
+
+  const phoneMap = new Map<string, DuplicateEntry[]>();
+  const emailMap = new Map<string, DuplicateEntry[]>();
+  const nameDayMap = new Map<string, DuplicateEntry[]>();
+  const payloadMap = new Map<string, DuplicateEntry[]>();
+
+  for (const entry of entries) {
+    if (entry.phone && entry.phone.length >= 8) {
+      addToMap(phoneMap, entry.phone, entry);
+    }
+    if (entry.email) {
+      addToMap(emailMap, entry.email, entry);
+    }
+    if (entry.name && entry.createdDay) {
+      addToMap(nameDayMap, `${entry.name}|${entry.createdDay}`, entry);
+    }
+    if (entry.payloadHash) {
+      addToMap(payloadMap, entry.payloadHash, entry);
+    }
+  }
+
+  const pushGroups = (
+    source: Map<string, DuplicateEntry[]>,
+    reason: "telefone" | "email" | "nome-dia" | "payload",
+    formatter: (key: string, bucket: DuplicateEntry[]) => { matchValue: string; hint?: string | null }
+  ) => {
+    for (const [key, bucket] of source.entries()) {
+      if (bucket.length < 2) {
+        continue;
+      }
+      const sortedBucket = bucket
+        .slice()
+        .sort((a, b) => b.item.criadoEm.localeCompare(a.item.criadoEm));
+      const { matchValue, hint } = formatter(key, sortedBucket);
+      groups.push({
+        id: `${reason}:${key}`,
+        reason,
+        matchValue,
+        hint: hint ?? null,
+        entries: sortedBucket.map((entry) => entry.item),
+        score: sortedBucket.length,
+      });
+    }
+  };
+
+  pushGroups(phoneMap, "telefone", (key) => ({
+    matchValue: formatNormalizedPhone(key),
+    hint: key,
+  }));
+
+  pushGroups(emailMap, "email", (key) => ({
+    matchValue: key,
+  }));
+
+  pushGroups(nameDayMap, "nome-dia", (key, bucket) => {
+    const [name, day] = key.split("|");
+    const displayName = bucket.find((entry) => entry.item.nome)?.item.nome ?? name ?? "Nome semelhante";
+    const formattedDay = formatDateLabelPtBR(day ?? null);
+    return {
+      matchValue: `${displayName} em ${formattedDay || day || "data semelhante"}`,
+      hint: day ?? null,
+    };
+  });
+
+  pushGroups(payloadMap, "payload", (key) => ({
+    matchValue: `Payload repetido (${key.slice(0, 8)})`,
+    hint: key,
+  }));
+
+  groups.sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    const latestA = a.entries[0]?.criadoEm ?? "";
+    const latestB = b.entries[0]?.criadoEm ?? "";
+    return latestB.localeCompare(latestA);
+  });
+
+  return groups.slice(0, maxGroups);
 }
 
 export type { ListInscricoesOptions };

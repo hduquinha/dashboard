@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
+import { listDuplicateSuspects, listInscricoes, listTrainingFilterOptions } from "@/lib/db";
 import { assertToken } from "@/lib/auth";
 import DashboardNav from "@/components/DashboardNav";
 import InscricoesTable from "@/components/InscricoesTable";
+import DuplicateAlerts from "@/components/DuplicateAlerts";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -120,7 +121,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   const recruiterOptions = listRecruiters();
 
-  const [trainingOptions, result] = await Promise.all([
+  const [trainingOptions, result, duplicateGroups] = await Promise.all([
     listTrainingFilterOptions(),
     listInscricoes({
       page,
@@ -134,6 +135,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
         treinamento: treinamentoSelecionado,
       },
     }),
+    listDuplicateSuspects(),
   ]);
 
   const indicatorDatalistId = "indicator-options";
@@ -166,6 +168,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
             Total: {result.total}
           </span>
         </header>
+
+        {duplicateGroups.length > 0 ? <DuplicateAlerts groups={duplicateGroups} /> : null}
 
         <section className="rounded-lg border border-neutral-200 bg-white shadow-sm">
           <div className="flex flex-col gap-4 border-b border-neutral-200 bg-neutral-50/60 px-6 py-4 md:flex-row md:items-center md:justify-between">

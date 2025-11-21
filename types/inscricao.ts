@@ -62,3 +62,14 @@ export type OrderableField =
   | "criado_em";
 
 export type OrderDirection = "asc" | "desc";
+
+export type DuplicateReason = "telefone" | "email" | "nome-dia" | "payload";
+
+export interface DuplicateGroup {
+  id: string;
+  reason: DuplicateReason;
+  matchValue: string;
+  hint?: string | null;
+  entries: InscricaoItem[];
+  score: number;
+}
