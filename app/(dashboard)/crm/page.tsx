@@ -94,11 +94,36 @@ export default async function CrmPage(props: CrmPageProps) {
   const indicacao = pickStringParam(searchParams?.indicacao) ?? "";
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
 
+  const baseSearchParams = new URLSearchParams();
+  if (searchParams && typeof searchParams === "object") {
+    for (const [key, value] of Object.entries(searchParams)) {
+      const normalized = Array.isArray(value) ? value[0] : value;
+      if (typeof normalized === "string" && normalized.length > 0) {
+        baseSearchParams.set(key, normalized);
+      }
+    }
+  }
+
+  const buildFiltersHref = (overrides: Record<string, string | null | undefined>) => {
+    const next = new URLSearchParams(baseSearchParams);
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === null || value === undefined || value === "") {
+        next.delete(key);
+      } else {
+        next.set(key, value);
+      }
+    }
+    const query = next.toString();
+    return query.length ? `/crm?${query}` : "/crm";
+  };
+
   const recruiterOptionsPromise = listRecruiters();
   const trainingOptions = await listTrainingFilterOptions();
   const latestTrainingOption = resolveLatestTrainingOption(trainingOptions);
-  const activeTreinamentoId = treinamentoSelecionado || latestTrainingOption?.id || "";
-  const aplicouPadrao = !treinamentoSelecionado && Boolean(latestTrainingOption);
+  const activeTreinamentoId = treinamentoSelecionado;
+  const isLatestTrainingActive = Boolean(
+    latestTrainingOption && activeTreinamentoId === latestTrainingOption.id
+  );
 
   const resultPromise = listInscricoes({
     page,
@@ -109,7 +134,7 @@ export default async function CrmPage(props: CrmPageProps) {
       nome,
       telefone,
       indicacao,
-      treinamento: activeTreinamentoId,
+      treinamento: activeTreinamentoId || undefined,
     },
   });
 
@@ -129,7 +154,7 @@ export default async function CrmPage(props: CrmPageProps) {
     activeTreinamentoId
       ? {
           label: "Treinamento",
-          value: aplicouPadrao ? `${trainingFilterLabel ?? activeTreinamentoId} (padrão)` : trainingFilterLabel ?? activeTreinamentoId,
+          value: trainingFilterLabel ?? activeTreinamentoId,
         }
       : null,
   ].filter((entry): entry is { label: string; value: string } => Boolean(entry));
@@ -143,6 +168,13 @@ export default async function CrmPage(props: CrmPageProps) {
   paramsForExport.set("orderBy", orderBy);
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
+
+  const latestTrainingToggleHref = latestTrainingOption
+    ? buildFiltersHref({
+        treinamento: isLatestTrainingActive ? null : latestTrainingOption.id,
+        page: "1",
+      })
+    : null;
 
   return (
     <main className="px-4 py-8 sm:px-6 lg:px-10">
@@ -186,18 +218,32 @@ export default async function CrmPage(props: CrmPageProps) {
                     : "Refine a lista usando os campos disponíveis."}
                 </p>
               </div>
-              {activeFiltersCount > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {activeFilters.map((filter) => (
-                    <span
-                      key={`${filter.label}-${filter.value}`}
-                      className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-neutral-700 shadow-sm"
-                    >
-                      {filter.label}: <span className="ml-1 text-neutral-900">{filter.value}</span>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
+              <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                {latestTrainingOption && latestTrainingToggleHref ? (
+                  <Link
+                    href={latestTrainingToggleHref}
+                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                      isLatestTrainingActive
+                        ? "border-neutral-900 bg-neutral-900 text-white"
+                        : "border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900"
+                    }`}
+                  >
+                    {isLatestTrainingActive ? "Remover treinamento atual" : "Treinamento atual"}
+                  </Link>
+                ) : null}
+                {activeFiltersCount > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {activeFilters.map((filter) => (
+                      <span
+                        key={`${filter.label}-${filter.value}`}
+                        className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-neutral-700 shadow-sm"
+                      >
+                        {filter.label}: <span className="ml-1 text-neutral-900">{filter.value}</span>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <details className="group" data-filter-state={activeFiltersCount > 0 ? "active" : "idle"}>
