@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import NetworkTree from "@/components/NetworkTree";
+import NetworkCanvas from "@/components/NetworkCanvas";
 import { assertToken } from "@/lib/auth";
 import { buildNetworkTree } from "@/lib/network";
 import { listTrainingFilterOptions } from "@/lib/db";
@@ -9,7 +9,7 @@ import { listRecruiters } from "@/lib/recruiters";
 
 export const metadata: Metadata = {
   title: "Rede | Painel de Inscrições",
-  description: "Visualize a rede de recrutadores e leads em formato de árvore.",
+  description: "Visualize a rede de recrutadores e leads em formato de workflow.",
 };
 
 interface RedePageProps {
@@ -45,28 +45,24 @@ export default async function RedePage(props: RedePageProps) {
   ]);
 
   return (
-    <main className="px-4 py-8 sm:px-6 lg:px-10">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header className="space-y-3">
-          <div className="space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Rede</p>
-            <h1 className="text-2xl font-semibold text-neutral-900">Rede de Recrutadores</h1>
-            <p className="text-sm text-neutral-600">
-              Explore a árvore completa de recrutadores e leads para mapear a estrutura do marketing multinível.
+    <main className="flex h-[calc(100vh-64px)] flex-col overflow-hidden bg-white">
+      <div className="flex h-full w-full flex-col">
+        <header className="flex flex-shrink-0 items-center justify-between border-b border-neutral-200 px-6 py-4">
+          <div>
+            <h1 className="text-lg font-semibold text-neutral-900">Rede de Recrutadores</h1>
+            <p className="text-xs text-neutral-500">
+              Visualização em workflow interativo. Use o scroll para zoom e arraste para navegar.
             </p>
           </div>
         </header>
 
-        <section className="rounded-2xl border border-neutral-200 bg-white/80 p-6 shadow-sm">
-          <NetworkTree
+        <div className="flex-1 overflow-hidden bg-neutral-50">
+          <NetworkCanvas
             roots={tree.roots}
-            orphans={tree.orphans}
-            stats={tree.stats}
-            focus={tree.focus}
             trainingOptions={trainingOptions}
             recruiterOptions={recruiterOptions}
           />
-        </section>
+        </div>
       </div>
     </main>
   );

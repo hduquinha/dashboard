@@ -1,16 +1,17 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import NetworkTree from "@/components/NetworkTree";
+import NetworkCanvas from "@/components/NetworkCanvas";
 import { buildNetworkTree } from "@/lib/network";
 import { listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
 
 interface PageProps {
-  params: { code: string };
+  params: Promise<{ code: string }>;
 }
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+export async function generateMetadata(props: PageProps): Promise<Metadata> {
+  const params = await props.params;
   const label = params.code?.toUpperCase() ?? "Recrutador";
   return {
     title: `${label} | Rede de recrutadores`,
@@ -18,7 +19,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function RecruiterDetailPage({ params }: PageProps) {
+export default async function RecruiterDetailPage(props: PageProps) {
+  const params = await props.params;
   const code = params.code ?? "";
   const [tree, trainingOptions, recruiterOptions] = await Promise.all([
     buildNetworkTree({ focus: code }),
@@ -31,34 +33,27 @@ export default async function RecruiterDetailPage({ params }: PageProps) {
   }
 
   return (
-    <main className="px-4 py-8 sm:px-6 lg:px-10">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <header className="space-y-3">
-          <div className="space-y-2">
+    <main className="flex h-[calc(100vh-64px)] flex-col overflow-hidden bg-white">
+      <div className="flex h-full w-full flex-col">
+        <header className="flex flex-shrink-0 items-center justify-between border-b border-neutral-200 px-6 py-4">
+          <div className="space-y-1">
             <Link
               href="/recrutadores"
-              className="inline-flex items-center text-sm font-semibold text-neutral-500 hover:text-neutral-900"
+              className="text-xs font-semibold text-neutral-500 hover:text-neutral-900"
             >
-              ← Voltar para recrutadores
+              ← Voltar
             </Link>
-            <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Rede</p>
-              <h1 className="text-2xl font-semibold text-neutral-900">Rede do recrutador {code.toUpperCase()}</h1>
-              <p className="text-sm text-neutral-600">
-                Utilize esta visão para revisar descendentes, detectar gargalos e compartilhar com o time.
-              </p>
-            </div>
+            <h1 className="text-lg font-semibold text-neutral-900">Rede de {code.toUpperCase()}</h1>
           </div>
         </header>
 
-        <NetworkTree
-          roots={tree.roots}
-          orphans={tree.orphans}
-          stats={tree.stats}
-          focus={tree.focus}
-          trainingOptions={trainingOptions}
-          recruiterOptions={recruiterOptions}
-        />
+        <div className="flex-1 overflow-hidden bg-neutral-50">
+          <NetworkCanvas
+            roots={tree.roots}
+            trainingOptions={trainingOptions}
+            recruiterOptions={recruiterOptions}
+          />
+        </div>
       </div>
     </main>
   );
