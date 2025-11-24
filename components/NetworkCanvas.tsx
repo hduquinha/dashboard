@@ -32,13 +32,19 @@ interface NetworkCanvasProps {
 }
 
 // Custom Node Component
-function CustomNode({ data }: NodeProps<{ node: NetworkNode; onDetails: (id: number) => void }>) {
-  const { node, onDetails } = data;
+function CustomNode({ data }: NodeProps<{ 
+  node: NetworkNode; 
+  onDetails: (id: number) => void;
+  isExpanded: boolean;
+  hasChildren: boolean;
+  onToggleExpand: () => void;
+}>) {
+  const { node, onDetails, isExpanded, hasChildren, onToggleExpand } = data;
   const isRecruiter = node.tipo === "recrutador";
 
   return (
     <div
-      className={`flex w-[250px] flex-col items-center rounded-xl border-2 bg-white p-4 shadow-md transition hover:shadow-lg ${
+      className={`relative flex w-[250px] flex-col items-center rounded-xl border-2 bg-white p-4 shadow-md transition hover:shadow-lg ${
         isRecruiter ? "border-emerald-200" : "border-sky-200"
       }`}
     >
@@ -87,6 +93,19 @@ function CustomNode({ data }: NodeProps<{ node: NetworkNode; onDetails: (id: num
           className="mt-3 w-full rounded-md bg-neutral-100 py-1.5 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-200"
         >
           Ver detalhes
+        </button>
+      )}
+
+      {hasChildren && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpand();
+          }}
+          className="absolute -bottom-3 left-1/2 z-10 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border border-neutral-300 bg-white text-sm font-bold text-neutral-600 shadow-sm hover:bg-neutral-50 hover:text-neutral-900"
+          title={isExpanded ? "Recolher" : "Expandir"}
+        >
+          {isExpanded ? "−" : "+"}
         </button>
       )}
 
@@ -185,18 +204,28 @@ function flattenNetwork(
   onDetails: (id: number) => void,
   limits: Record<string, number>,
   onLoadMore: (parentId: string) => void,
-  onOpenGroup: (leads: NetworkNode[]) => void
+  onOpenGroup: (leads: NetworkNode[]) => void,
+  expandedNodes: Record<string, boolean>,
+  onToggleExpand: (id: string) => void
 ): { nodes: Node[]; edges: Edge[] } {
   const resultNodes: Node[] = [];
   const resultEdges: Edge[] = [];
 
   function traverse(node: NetworkNode, parentId: string | null) {
     const nodeId = node.id.toString();
+    const isExpanded = expandedNodes[nodeId] || false;
+    const hasChildren = node.children.length > 0;
     
     resultNodes.push({
       id: nodeId,
       type: "custom",
-      data: { node, onDetails },
+      data: { 
+        node, 
+        onDetails,
+        isExpanded,
+        hasChildren,
+        onToggleExpand: () => onToggleExpand(nodeId)
+      },
       position: { x: 0, y: 0 },
     });
 
@@ -211,57 +240,59 @@ function flattenNetwork(
       });
     }
 
-    // Separate children
-    const recruiters = node.children.filter(c => c.tipo === "recrutador");
-    const leads = node.children.filter(c => c.tipo !== "recrutador");
+    if (isExpanded) {
+      // Separate children
+      const recruiters = node.children.filter(c => c.tipo === "recrutador");
+      const leads = node.children.filter(c => c.tipo !== "recrutador");
 
-    // Logic for Recruiters: Pagination
-    const limit = limits[nodeId] || 10; // Default 10 recruiters shown
-    const recruitersToShow = recruiters.slice(0, limit);
-    const remainingRecruiters = recruiters.length - limit;
+      // Logic for Recruiters: Pagination
+      const limit = limits[nodeId] || 10; // Default 10 recruiters shown
+      const recruitersToShow = recruiters.slice(0, limit);
+      const remainingRecruiters = recruiters.length - limit;
 
-    recruitersToShow.forEach((child) => {
-      traverse(child, nodeId);
-    });
-
-    if (remainingRecruiters > 0) {
-      const paginationId = `${nodeId}-pagination`;
-      resultNodes.push({
-        id: paginationId,
-        type: "pagination",
-        data: { count: remainingRecruiters, onClick: () => onLoadMore(nodeId) },
-        position: { x: 0, y: 0 },
+      recruitersToShow.forEach((child) => {
+        traverse(child, nodeId);
       });
-      resultEdges.push({
-        id: `${nodeId}-${paginationId}`,
-        source: nodeId,
-        target: paginationId,
-        type: "smoothstep",
-        style: { stroke: "#94a3b8", strokeDasharray: "5 5" },
-      });
-    }
 
-    // Logic for Leads: Grouping
-    if (leads.length > 0) {
-      if (leads.length <= 10) {
-        // Show normally if few
-        leads.forEach((child) => traverse(child, nodeId));
-      } else {
-        // Group if many
-        const groupId = `${nodeId}-leads-group`;
+      if (remainingRecruiters > 0) {
+        const paginationId = `${nodeId}-pagination`;
         resultNodes.push({
-          id: groupId,
-          type: "leadGroup",
-          data: { count: leads.length, onClick: () => onOpenGroup(leads) },
+          id: paginationId,
+          type: "pagination",
+          data: { count: remainingRecruiters, onClick: () => onLoadMore(nodeId) },
           position: { x: 0, y: 0 },
         });
         resultEdges.push({
-          id: `${nodeId}-${groupId}`,
+          id: `${nodeId}-${paginationId}`,
           source: nodeId,
-          target: groupId,
+          target: paginationId,
           type: "smoothstep",
-          style: { stroke: "#bae6fd" },
+          style: { stroke: "#94a3b8", strokeDasharray: "5 5" },
         });
+      }
+
+      // Logic for Leads: Grouping
+      if (leads.length > 0) {
+        if (leads.length <= 10) {
+          // Show normally if few
+          leads.forEach((child) => traverse(child, nodeId));
+        } else {
+          // Group if many
+          const groupId = `${nodeId}-leads-group`;
+          resultNodes.push({
+            id: groupId,
+            type: "leadGroup",
+            data: { count: leads.length, onClick: () => onOpenGroup(leads) },
+            position: { x: 0, y: 0 },
+          });
+          resultEdges.push({
+            id: `${nodeId}-${groupId}`,
+            source: nodeId,
+            target: groupId,
+            type: "smoothstep",
+            style: { stroke: "#bae6fd" },
+          });
+        }
       }
     }
   }
@@ -277,6 +308,37 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
   const [limits, setLimits] = useState<Record<string, number>>({});
   const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
   const [groupLeads, setGroupLeads] = useState<NetworkNode[] | null>(null);
+  
+  // Initialize expanded state: roots expanded by default
+  const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    roots.forEach(r => initial[r.id.toString()] = true);
+    return initial;
+  });
+
+  // Reset state when roots change (new entry)
+  useEffect(() => {
+    const initial: Record<string, boolean> = {};
+    roots.forEach(r => initial[r.id.toString()] = true);
+    setExpandedNodes(initial);
+    setLimits({});
+    setGroupLeads(null);
+  }, [roots]);
+
+  const handleToggleExpand = useCallback((id: string) => {
+    setExpandedNodes(prev => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  }, []);
+
+  const handleResetView = useCallback(() => {
+    const initial: Record<string, boolean> = {};
+    roots.forEach(r => initial[r.id.toString()] = true);
+    setExpandedNodes(initial);
+    setLimits({});
+    setGroupLeads(null);
+  }, [roots]);
 
   const handleDetails = useCallback(async (id: number) => {
     try {
@@ -307,7 +369,9 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
       handleDetails,
       limits,
       handleLoadMore,
-      handleOpenGroup
+      handleOpenGroup,
+      expandedNodes,
+      handleToggleExpand
     );
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
       initialNodes,
@@ -315,7 +379,7 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
     );
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
-  }, [roots, limits, handleDetails, handleLoadMore, handleOpenGroup, setNodes, setEdges]);
+  }, [roots, limits, handleDetails, handleLoadMore, handleOpenGroup, expandedNodes, handleToggleExpand, setNodes, setEdges]);
 
   return (
     <div className="relative h-full w-full bg-neutral-50">
@@ -333,6 +397,16 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
       >
         <Background color="#e5e7eb" gap={16} size={1} />
         <Controls />
+        
+        {/* Reset Button */}
+        <div className="absolute left-4 top-4 z-10">
+           <button 
+             onClick={handleResetView}
+             className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-md hover:bg-neutral-50"
+           >
+             Resetar Visualização
+           </button>
+        </div>
       </ReactFlow>
 
       {/* Sidebar for Grouped Leads */}
