@@ -5,6 +5,8 @@ import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
+import DashboardMetrics from "@/components/DashboardMetrics";
+import DashboardCharts from "@/components/DashboardCharts";
 
 export const dynamic = "force-dynamic";
 
@@ -177,180 +179,154 @@ export default async function CrmPage(props: CrmPageProps) {
     : null;
 
   return (
-    <main className="px-4 py-8 sm:px-6 lg:px-10">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
-        <header className="space-y-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">CRM</p>
-              <h1 className="text-3xl font-semibold text-neutral-900">Base completa de inscrições</h1>
-              <p className="text-sm text-neutral-600">
-                Utilize filtros avançados, exporte planilhas e revise cada inscrição com detalhes.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Link
-                href={exportUrl}
-                className="inline-flex items-center rounded-2xl border border-neutral-300 px-5 py-2.5 text-sm font-semibold text-neutral-800 transition hover:border-neutral-500"
-              >
-                Exportar CSV
-              </Link>
-              <Link
-                href="/importar"
-                className="inline-flex items-center rounded-2xl bg-neutral-900 px-5 py-2.5 text-sm font-semibold text-white shadow hover:bg-neutral-800"
-              >
-                Importar novas inscrições
-              </Link>
+    <main className="space-y-8">
+      {/* Header */}
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-neutral-900">Dashboard</h1>
+          <p className="text-sm text-neutral-500">Visão geral da operação e métricas de performance.</p>
+        </div>
+        <div className="flex gap-3">
+          <Link
+            href={exportUrl}
+            className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+          >
+            Exportar CSV
+          </Link>
+          <Link
+            href="/importar"
+            className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-neutral-800"
+          >
+            Importar Dados
+          </Link>
+        </div>
+      </header>
+
+      {/* Metrics Cards */}
+      <DashboardMetrics />
+
+      {/* Charts Section */}
+      <DashboardCharts />
+
+      {/* CRM Table Section */}
+      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+        <div className="border-b border-neutral-200 px-6 py-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-neutral-900">Inscrições Recentes</h2>
+              <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
             </div>
           </div>
-        </header>
+        </div>
 
-        <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
-          <div className="space-y-3 border-b border-neutral-200 bg-neutral-50/60 px-6 py-4">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Filtros</h2>
-                <p className="text-xs text-neutral-500">
-                  {activeFiltersCount > 0
-                    ? `${activeFiltersCount} filtro${activeFiltersCount > 1 ? "s" : ""} aplicado${
-                        activeFiltersCount > 1 ? "s" : ""
-                      }.`
-                    : "Refine a lista usando os campos disponíveis."}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 md:justify-end">
-                {latestTrainingOption && latestTrainingToggleHref ? (
+        {/* Filters (Collapsible) */}
+        <div className="border-b border-neutral-200 bg-neutral-50/50 px-6 py-4">
+          <details className="group">
+            <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-neutral-600 hover:text-neutral-900">
+              <span className="rounded bg-neutral-200 px-1.5 py-0.5 text-[10px] font-bold text-neutral-600 group-open:bg-neutral-900 group-open:text-white">
+                {activeFiltersCount}
+              </span>
+              Filtros avançados
+              <svg
+                className="h-4 w-4 transition-transform group-open:rotate-180"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            
+            <div className="mt-4">
+              <form className="grid gap-6">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
+                    Nome
+                    <input
+                      type="text"
+                      name="nome"
+                      defaultValue={nome}
+                      placeholder="Buscar por nome..."
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
+                    Telefone
+                    <input
+                      type="text"
+                      name="telefone"
+                      defaultValue={telefone}
+                      placeholder="Ex: 11999999999"
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
+                    Indicado por
+                    <input
+                      type="text"
+                      name="indicacao"
+                      defaultValue={indicacao}
+                      list="recruiters-list"
+                      placeholder="Nome ou código..."
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                    />
+                    <datalist id="recruiters-list">
+                      {recruiterOptions.map((r) => (
+                        <option key={r.code} value={r.code}>
+                          {r.name} ({r.code})
+                        </option>
+                      ))}
+                    </datalist>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
+                    Treinamento
+                    <select
+                      name="treinamento"
+                      defaultValue={activeTreinamentoId}
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                    >
+                      <option value="">Todos</option>
+                      {trainingOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="flex items-center justify-between border-t border-neutral-100 pt-4">
                   <Link
-                    href={latestTrainingToggleHref}
-                    className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                      isLatestTrainingActive
-                        ? "border-neutral-900 bg-neutral-900 text-white"
-                        : "border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900"
-                    }`}
+                    href="/crm"
+                    className="text-sm text-neutral-500 hover:text-neutral-900 hover:underline"
                   >
-                    {isLatestTrainingActive ? "Remover treinamento atual" : "Treinamento atual"}
+                    Limpar filtros
                   </Link>
-                ) : null}
-                {activeFiltersCount > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {activeFilters.map((filter) => (
-                      <span
-                        key={`${filter.label}-${filter.value}`}
-                        className="inline-flex items-center rounded-full bg-white px-3 py-1 text-xs font-semibold text-neutral-700 shadow-sm"
-                      >
-                        {filter.label}: <span className="ml-1 text-neutral-900">{filter.value}</span>
-                      </span>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+                  >
+                    Aplicar Filtros
+                  </button>
+                </div>
+              </form>
             </div>
+          </details>
+        </div>
 
-            <details className="group" data-filter-state={activeFiltersCount > 0 ? "active" : "idle"}>
-              <summary className="flex cursor-pointer items-center gap-2 rounded-md border border-neutral-300 bg-white px-4 py-2 text-sm font-semibold text-neutral-700 transition hover:border-neutral-400 hover:bg-white/70 hover:text-neutral-900">
-                Abrir filtros
-                {activeFiltersCount > 0 ? (
-                  <span className="inline-flex min-w-[1.75rem] justify-center rounded-full bg-neutral-900 px-2 py-1 text-xs font-semibold text-white">
-                    {activeFiltersCount}
-                  </span>
-                ) : null}
-                <span className="text-xs font-normal text-neutral-500">(mantém preferências atuais)</span>
-              </summary>
-              <div className="border-t border-neutral-200 px-2 py-4 sm:px-4">
-                <form method="get" className="space-y-4">
-                  <input type="hidden" name="orderBy" value={orderBy} />
-                  <input type="hidden" name="orderDirection" value={orderDirection} />
-                  <input type="hidden" name="pageSize" value={String(pageSize)} />
-                  <input type="hidden" name="page" value="1" />
-
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    <label className="flex flex-col gap-1 text-sm font-semibold text-neutral-700">
-                      Nome
-                      <input
-                        type="text"
-                        name="nome"
-                        defaultValue={nome}
-                        placeholder="Ex.: Maria Silva"
-                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-semibold text-neutral-700">
-                      Telefone
-                      <input
-                        type="tel"
-                        name="telefone"
-                        defaultValue={telefone}
-                        placeholder="(11) 99999-0000"
-                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-semibold text-neutral-700">
-                      Indicador
-                      <input
-                        type="text"
-                        name="indicacao"
-                        list={indicatorDatalistId}
-                        defaultValue={indicacao}
-                        placeholder="Código ou nome"
-                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      />
-                      <datalist id={indicatorDatalistId}>
-                        {recruiterOptions.map((recruiter) => (
-                          <option key={recruiter.code} value={recruiter.code} label={recruiter.name} />
-                        ))}
-                      </datalist>
-                    </label>
-                    <label className="flex flex-col gap-1 text-sm font-semibold text-neutral-700">
-                      Treinamento
-                      <select
-                        id="treinamento"
-                        name="treinamento"
-                        defaultValue={activeTreinamentoId}
-                        className="rounded-lg border border-neutral-200 bg-white px-3 py-2 text-sm shadow-sm transition focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                      >
-                        <option value="">Todos</option>
-                        {trainingOptions.map((option) => (
-                          <option key={option.id} value={option.id}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="flex flex-col gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
-                    <Link
-                      href="/crm"
-                      className="text-sm font-semibold text-neutral-500 underline-offset-4 hover:text-neutral-900 hover:underline"
-                    >
-                      Limpar filtros
-                    </Link>
-                    <button
-                      type="submit"
-                      className="inline-flex items-center justify-center rounded-md bg-neutral-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-neutral-800"
-                    >
-                      Aplicar filtros
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </details>
-          </div>
-
-          <div className="px-2 pb-6 sm:px-4">
-            <InscricoesTable
-              inscricoes={result.data}
-              page={page}
-              pageSize={pageSize}
-              total={result.total}
-              orderBy={orderBy}
-              orderDirection={orderDirection}
-              trainingOptions={trainingOptions}
-              recruiterOptions={recruiterOptions}
-            />
-          </div>
-        </section>
-      </div>
+        <div className="p-0">
+          <InscricoesTable
+            inscricoes={result.data}
+            page={page}
+            pageSize={pageSize}
+            total={result.total}
+            orderBy={orderBy}
+            orderDirection={orderDirection}
+            trainingOptions={trainingOptions}
+            recruiterOptions={recruiterOptions}
+          />
+        </div>
+      </section>
     </main>
   );
 }
