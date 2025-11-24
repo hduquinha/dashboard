@@ -12,7 +12,10 @@ import {
   ChevronLeft, 
   ChevronRight,
   Menu,
-  Database
+  Database,
+  LogOut,
+  Sun,
+  Moon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
@@ -38,36 +41,38 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
   return (
     <aside
       className={cn(
-        "relative flex flex-col border-r border-neutral-800 bg-neutral-950 text-white transition-all duration-300 ease-in-out",
+        "relative flex flex-col border-r border-slate-800 bg-[#0f172a] text-slate-400 transition-all duration-300 ease-in-out",
         isCollapsed ? "w-20" : "w-72"
       )}
     >
       {/* Header */}
       <div className="flex h-20 items-center justify-between px-6">
         {!isCollapsed && (
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tight text-white">
-              NEXUS<span className="text-cyan-400">.ADMIN</span>
-            </h1>
-            <p className="text-[10px] uppercase tracking-widest text-neutral-500">
-              System Control
-            </p>
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
+              <LayoutDashboard size={18} />
+            </div>
+            <span className="text-lg font-bold text-white">Nexus</span>
           </div>
         )}
         {isCollapsed && (
-           <div className="mx-auto font-bold text-cyan-400">NX</div>
+           <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
+             <LayoutDashboard size={18} />
+           </div>
         )}
         
-        <button
-          onClick={toggleSidebar}
-          className="absolute right-4 top-6 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white"
-        >
-          <Menu size={20} />
-        </button>
+        {!isCollapsed && (
+          <button
+            onClick={toggleSidebar}
+            className="text-slate-400 hover:text-white"
+          >
+            <Menu size={20} />
+          </button>
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-2 px-3 py-6">
+      <nav className="flex-1 space-y-1 px-3 py-6">
         {NAV_LINKS.filter(link => !['importar', 'duplicados'].includes(link.key)).map((link) => {
           const Icon = ICON_MAP[link.key] || LayoutDashboard;
           const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
@@ -78,19 +83,19 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
               key={link.key}
               href={link.href}
               className={cn(
-                "group flex items-center gap-3 rounded-xl px-3 py-3 transition-all duration-200",
+                "group flex items-center gap-3 rounded-lg px-3 py-3 transition-all duration-200",
                 isActive
-                  ? "bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
-                  : "text-neutral-400 hover:bg-neutral-900 hover:text-white"
+                  ? "bg-slate-800 text-white"
+                  : "text-slate-400 hover:bg-slate-800/50 hover:text-white"
               )}
               title={isCollapsed ? link.label : undefined}
             >
               <div className={cn("relative flex items-center justify-center", isCollapsed ? "w-full" : "")}>
                 <Icon
-                  size={22}
+                  size={20}
                   className={cn(
                     "transition-colors",
-                    isActive ? "text-cyan-400" : "text-neutral-500 group-hover:text-white"
+                    isActive ? "text-cyan-400" : "text-slate-400 group-hover:text-white"
                   )}
                 />
                 {showBadge && isCollapsed && (
@@ -113,19 +118,30 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
         })}
       </nav>
 
-      {/* Footer / User Profile */}
-      <div className="border-t border-neutral-800 p-4">
-        <div className={cn("flex items-center gap-3 rounded-xl bg-neutral-900/50 p-3", isCollapsed ? "justify-center" : "")}>
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-sm font-bold text-white shadow-lg">
-            AD
+      {/* Footer Actions */}
+      <div className="border-t border-slate-800 p-4 space-y-4">
+        {/* Theme Toggle (Visual) */}
+        {!isCollapsed && (
+          <div className="flex items-center justify-between rounded-lg bg-slate-900 p-1">
+            <button className="flex flex-1 items-center justify-center gap-2 rounded-md bg-slate-800 py-1.5 text-xs font-medium text-white shadow-sm">
+              <Moon size={14} />
+              <span>Dark</span>
+            </button>
+            <button className="flex flex-1 items-center justify-center gap-2 rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300">
+              <Sun size={14} />
+              <span>Light</span>
+            </button>
           </div>
-          {!isCollapsed && (
-            <div className="overflow-hidden">
-              <p className="truncate text-sm font-medium text-white">Admin User</p>
-              <p className="truncate text-xs text-neutral-500">admin@nexus.com</p>
-            </div>
-          )}
-        </div>
+        )}
+
+        {/* Logout */}
+        <button className={cn(
+          "flex w-full items-center gap-3 rounded-lg px-3 py-3 text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-400",
+          isCollapsed ? "justify-center" : ""
+        )}>
+          <LogOut size={20} />
+          {!isCollapsed && <span className="text-sm font-medium">Logout</span>}
+        </button>
       </div>
     </aside>
   );
