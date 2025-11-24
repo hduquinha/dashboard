@@ -1865,7 +1865,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   // 3. Top Recruiters
   const topRecruitersRes = await pool.query(`
     SELECT 
-      COALESCE(payload->>'traffic_source', 'Desconhecido') as name,
+      COALESCE(payload->>'traffic_source', 'Desconhecido') as code,
       COUNT(*) as recruits
     FROM ${SCHEMA_NAME}.inscricoes
     WHERE payload->>'traffic_source' IS NOT NULL
@@ -1874,10 +1874,13 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     LIMIT 5
   `);
 
-  const topRecruiters = topRecruitersRes.rows.map(row => ({
-    name: row.name,
-    recruits: parseInt(row.recruits, 10)
-  }));
+  const topRecruiters = topRecruitersRes.rows.map(row => {
+    const recruiter = getRecruiterByCode(row.code);
+    return {
+      name: recruiter ? recruiter.name : `Recrutador ${row.code}`,
+      recruits: parseInt(row.recruits, 10)
+    };
+  });
 
   // 4. Distribution (Mocked based on total)
   const distributionData = [

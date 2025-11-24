@@ -60,15 +60,15 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
         
         <button
           onClick={toggleSidebar}
-          className="absolute -right-3 top-8 flex h-6 w-6 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-400 hover:bg-cyan-500 hover:text-white"
+          className="absolute right-4 top-6 flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white"
         >
-          {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          <Menu size={20} />
         </button>
       </div>
 
       {/* Navigation */}
       <nav className="flex-1 space-y-2 px-3 py-6">
-        {NAV_LINKS.map((link) => {
+        {NAV_LINKS.filter(link => !['importar', 'duplicados'].includes(link.key)).map((link) => {
           const Icon = ICON_MAP[link.key] || LayoutDashboard;
           const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
           const showBadge = link.key === "duplicados" && duplicateCount > 0;

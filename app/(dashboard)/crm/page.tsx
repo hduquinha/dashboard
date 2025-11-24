@@ -1,12 +1,10 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
-import { listInscricoes, listTrainingFilterOptions, getDashboardStats } from "@/lib/db";
+import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
-import DashboardMetrics from "@/components/DashboardMetrics";
-import DashboardCharts from "@/components/DashboardCharts";
 
 export const dynamic = "force-dynamic";
 
@@ -140,9 +138,7 @@ export default async function CrmPage(props: CrmPageProps) {
     },
   });
 
-  const statsPromise = getDashboardStats();
-
-  const [recruiterOptions, result, stats] = await Promise.all([recruiterOptionsPromise, resultPromise, statsPromise]);
+  const [recruiterOptions, result] = await Promise.all([recruiterOptionsPromise, resultPromise]);
 
   const indicatorDatalistId = "indicator-options";
   const selectedTrainingOption = activeTreinamentoId.length
@@ -185,8 +181,8 @@ export default async function CrmPage(props: CrmPageProps) {
       {/* Header */}
       <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Dashboard</h1>
-          <p className="text-sm text-neutral-500">Visão geral da operação e métricas de performance.</p>
+          <h1 className="text-2xl font-bold text-neutral-900">CRM</h1>
+          <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
         </div>
         <div className="flex gap-3">
           <Link
@@ -204,28 +200,13 @@ export default async function CrmPage(props: CrmPageProps) {
         </div>
       </header>
 
-      {/* Metrics Cards */}
-      <DashboardMetrics 
-        totalLeads={stats.totalLeads}
-        newLeadsToday={stats.newLeadsToday}
-        conversionRate={stats.conversionRate}
-        graduados={stats.graduados}
-      />
-
-      {/* Charts Section */}
-      <DashboardCharts 
-        growthData={stats.growthData}
-        distributionData={stats.distributionData}
-        topRecruiters={stats.topRecruiters}
-      />
-
       {/* CRM Table Section */}
       <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
         <div className="border-b border-neutral-200 px-6 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-bold text-neutral-900">Inscrições Recentes</h2>
-              <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
+              <h2 className="text-lg font-bold text-neutral-900">Inscrições</h2>
+              <p className="text-sm text-neutral-500">Lista completa de registros.</p>
             </div>
           </div>
         </div>
