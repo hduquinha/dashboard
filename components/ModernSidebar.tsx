@@ -14,13 +14,8 @@ import {
   Menu,
   Database
 } from "lucide-react";
-import { cn } from "@/lib/utils"; // Assuming utils exists, if not I'll define a helper or use clsx directly
+import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
-
-// Helper for class names if lib/utils doesn't exist
-function classNames(...classes: (string | undefined | null | false)[]) {
-  return classes.filter(Boolean).join(" ");
-}
 
 const ICON_MAP: Record<string, any> = {
   home: LayoutDashboard,
@@ -42,7 +37,7 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
 
   return (
     <aside
-      className={classNames(
+      className={cn(
         "relative flex flex-col border-r border-neutral-800 bg-neutral-950 text-white transition-all duration-300 ease-in-out",
         isCollapsed ? "w-20" : "w-72"
       )}
@@ -82,7 +77,7 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
             <Link
               key={link.key}
               href={link.href}
-              className={classNames(
+              className={cn(
                 "group flex items-center gap-3 rounded-xl px-3 py-3 transition-all duration-200",
                 isActive
                   ? "bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.15)]"
@@ -90,10 +85,10 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
               )}
               title={isCollapsed ? link.label : undefined}
             >
-              <div className={classNames("relative flex items-center justify-center", isCollapsed ? "w-full" : "")}>
+              <div className={cn("relative flex items-center justify-center", isCollapsed ? "w-full" : "")}>
                 <Icon
                   size={22}
-                  className={classNames(
+                  className={cn(
                     "transition-colors",
                     isActive ? "text-cyan-400" : "text-neutral-500 group-hover:text-white"
                   )}
@@ -120,7 +115,7 @@ export default function ModernSidebar({ duplicateCount = 0, isCollapsed, toggleS
 
       {/* Footer / User Profile */}
       <div className="border-t border-neutral-800 p-4">
-        <div className={classNames("flex items-center gap-3 rounded-xl bg-neutral-900/50 p-3", isCollapsed ? "justify-center" : "")}>
+        <div className={cn("flex items-center gap-3 rounded-xl bg-neutral-900/50 p-3", isCollapsed ? "justify-center" : "")}>
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 text-sm font-bold text-white shadow-lg">
             AD
           </div>
