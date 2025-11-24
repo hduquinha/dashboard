@@ -95,8 +95,57 @@ function CustomNode({ data }: NodeProps<{ node: NetworkNode; onDetails: (id: num
   );
 }
 
+// Pagination Node Component
+function PaginationNode({ data }: NodeProps<{ count: number; onClick: () => void }>) {
+  return (
+    <div className="flex w-[120px] flex-col items-center justify-center">
+      <Handle type="target" position={Position.Top} className="!bg-neutral-400" />
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          data.onClick();
+        }}
+        className="flex h-12 w-12 items-center justify-center rounded-full border-2 border-dashed border-neutral-300 bg-neutral-50 text-xl font-bold text-neutral-500 transition hover:border-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+        title="Carregar mais"
+      >
+        +
+      </button>
+      <span className="mt-2 text-xs font-medium text-neutral-500">
+        Mais {data.count}
+      </span>
+    </div>
+  );
+}
+
+// Lead Group Node Component
+function LeadGroupNode({ data }: NodeProps<{ count: number; onClick: () => void }>) {
+  return (
+    <div className="flex w-[180px] flex-col items-center rounded-xl border-2 border-sky-100 bg-white p-3 shadow-sm transition hover:shadow-md">
+      <Handle type="target" position={Position.Top} className="!bg-neutral-400" />
+      <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-sky-50 text-lg text-sky-600">
+        👥
+      </div>
+      <div className="text-center">
+        <h3 className="text-sm font-bold text-neutral-900">{data.count} Leads</h3>
+        <p className="text-[10px] text-neutral-500">Agrupados</p>
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          data.onClick();
+        }}
+        className="mt-2 w-full rounded bg-sky-50 py-1 text-[10px] font-semibold text-sky-700 hover:bg-sky-100"
+      >
+        Ver lista
+      </button>
+    </div>
+  );
+}
+
 const nodeTypes = {
   custom: CustomNode,
+  pagination: PaginationNode,
+  leadGroup: LeadGroupNode,
 };
 
 function getLayoutedElements(
@@ -134,7 +183,9 @@ function getLayoutedElements(
 function flattenNetwork(
   nodes: NetworkNode[],
   onDetails: (id: number) => void,
-  maxSiblings: number
+  limits: Record<string, number>,
+  onLoadMore: (parentId: string) => void,
+  onOpenGroup: (leads: NetworkNode[]) => void
 ): { nodes: Node[]; edges: Edge[] } {
   const resultNodes: Node[] = [];
   const resultEdges: Edge[] = [];
@@ -146,7 +197,7 @@ function flattenNetwork(
       id: nodeId,
       type: "custom",
       data: { node, onDetails },
-      position: { x: 0, y: 0 }, // Initial position, will be set by dagre
+      position: { x: 0, y: 0 },
     });
 
     if (parentId) {
@@ -160,14 +211,59 @@ function flattenNetwork(
       });
     }
 
-    // Limit children
-    const childrenToShow = node.children.slice(0, maxSiblings);
-    
-    childrenToShow.forEach((child) => {
+    // Separate children
+    const recruiters = node.children.filter(c => c.tipo === "recrutador");
+    const leads = node.children.filter(c => c.tipo !== "recrutador");
+
+    // Logic for Recruiters: Pagination
+    const limit = limits[nodeId] || 10; // Default 10 recruiters shown
+    const recruitersToShow = recruiters.slice(0, limit);
+    const remainingRecruiters = recruiters.length - limit;
+
+    recruitersToShow.forEach((child) => {
       traverse(child, nodeId);
     });
-    
-    // If there are more children, we could add a "more" node, but for now let's just limit
+
+    if (remainingRecruiters > 0) {
+      const paginationId = `${nodeId}-pagination`;
+      resultNodes.push({
+        id: paginationId,
+        type: "pagination",
+        data: { count: remainingRecruiters, onClick: () => onLoadMore(nodeId) },
+        position: { x: 0, y: 0 },
+      });
+      resultEdges.push({
+        id: `${nodeId}-${paginationId}`,
+        source: nodeId,
+        target: paginationId,
+        type: "smoothstep",
+        style: { stroke: "#94a3b8", strokeDasharray: "5 5" },
+      });
+    }
+
+    // Logic for Leads: Grouping
+    if (leads.length > 0) {
+      if (leads.length <= 10) {
+        // Show normally if few
+        leads.forEach((child) => traverse(child, nodeId));
+      } else {
+        // Group if many
+        const groupId = `${nodeId}-leads-group`;
+        resultNodes.push({
+          id: groupId,
+          type: "leadGroup",
+          data: { count: leads.length, onClick: () => onOpenGroup(leads) },
+          position: { x: 0, y: 0 },
+        });
+        resultEdges.push({
+          id: `${nodeId}-${groupId}`,
+          source: nodeId,
+          target: groupId,
+          type: "smoothstep",
+          style: { stroke: "#bae6fd" },
+        });
+      }
+    }
   }
 
   nodes.forEach((root) => traverse(root, null));
@@ -178,8 +274,9 @@ function flattenNetwork(
 function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: NetworkCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [maxSiblings, setMaxSiblings] = useState(5);
+  const [limits, setLimits] = useState<Record<string, number>>({});
   const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
+  const [groupLeads, setGroupLeads] = useState<NetworkNode[] | null>(null);
 
   const handleDetails = useCallback(async (id: number) => {
     try {
@@ -193,18 +290,35 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
     }
   }, []);
 
+  const handleLoadMore = useCallback((parentId: string) => {
+    setLimits((prev) => ({
+      ...prev,
+      [parentId]: (prev[parentId] || 10) + 10,
+    }));
+  }, []);
+
+  const handleOpenGroup = useCallback((leads: NetworkNode[]) => {
+    setGroupLeads(leads);
+  }, []);
+
   useEffect(() => {
-    const { nodes: initialNodes, edges: initialEdges } = flattenNetwork(roots, handleDetails, maxSiblings);
+    const { nodes: initialNodes, edges: initialEdges } = flattenNetwork(
+      roots,
+      handleDetails,
+      limits,
+      handleLoadMore,
+      handleOpenGroup
+    );
     const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
       initialNodes,
       initialEdges
     );
     setNodes(layoutedNodes);
     setEdges(layoutedEdges);
-  }, [roots, maxSiblings, handleDetails, setNodes, setEdges]);
+  }, [roots, limits, handleDetails, handleLoadMore, handleOpenGroup, setNodes, setEdges]);
 
   return (
-    <div className="h-full w-full bg-neutral-50">
+    <div className="relative h-full w-full bg-neutral-50">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -219,23 +333,44 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
       >
         <Background color="#e5e7eb" gap={16} size={1} />
         <Controls />
-        <div className="absolute left-4 top-4 z-10 rounded-lg bg-white p-4 shadow-md">
-          <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-            Máximo de conexões por linha: {maxSiblings}
-            <input
-              type="range"
-              min="1"
-              max="50"
-              value={maxSiblings}
-              onChange={(e) => setMaxSiblings(Number(e.target.value))}
-              className="h-2 w-full cursor-pointer appearance-none rounded-lg bg-neutral-200 accent-neutral-900"
-            />
-          </label>
-          <p className="mt-2 text-xs text-neutral-500">
-            Ajuste para melhorar a performance e visualização.
-          </p>
-        </div>
       </ReactFlow>
+
+      {/* Sidebar for Grouped Leads */}
+      {groupLeads && (
+        <div className="absolute right-0 top-0 h-full w-80 overflow-y-auto border-l border-neutral-200 bg-white p-4 shadow-xl">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-bold text-neutral-900">Leads ({groupLeads.length})</h2>
+            <button
+              onClick={() => setGroupLeads(null)}
+              className="rounded-full p-1 text-neutral-500 hover:bg-neutral-100"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="space-y-3">
+            {groupLeads.map((lead) => (
+              <div
+                key={lead.id}
+                className="rounded-lg border border-neutral-100 p-3 shadow-sm transition hover:border-sky-200 hover:shadow-md"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-sm">🧲</span>
+                  <div>
+                    <p className="font-semibold text-neutral-900">{lead.displayName}</p>
+                    {lead.telefone && <p className="text-xs text-neutral-500">{lead.telefone}</p>}
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDetails(lead.id)}
+                  className="mt-2 w-full rounded bg-neutral-50 py-1 text-xs font-medium text-neutral-600 hover:bg-neutral-100"
+                >
+                  Ver detalhes
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <InscricaoDetails
         inscricao={selectedInscricao}
