@@ -1821,4 +1821,78 @@ export async function listDuplicateSuspects(
   };
 }
 
-export type { ListInscricoesOptions };
+export interface DashboardStats {
+  totalLeads: number;
+  newLeadsToday: number;
+  conversionRate: number;
+  graduados: number;
+  growthData: { name: string; leads: number; recruits: number }[];
+  distributionData: { name: string; value: number }[];
+  topRecruiters: { name: string; recruits: number }[];
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const pool = getPool();
+
+  // 1. Basic Counts
+  const totalRes = await pool.query(`SELECT COUNT(*) FROM ${SCHEMA_NAME}.inscricoes`);
+  const totalLeads = parseInt(totalRes.rows[0].count, 10);
+
+  const todayRes = await pool.query(`
+    SELECT COUNT(*) FROM ${SCHEMA_NAME}.inscricoes 
+    WHERE criado_em >= CURRENT_DATE
+  `);
+  const newLeadsToday = parseInt(todayRes.rows[0].count, 10);
+
+  // 2. Growth Data (Last 6 months)
+  const growthRes = await pool.query(`
+    SELECT 
+      TO_CHAR(criado_em, 'Mon') as name,
+      EXTRACT(MONTH FROM criado_em) as month_num,
+      COUNT(*) as leads
+    FROM ${SCHEMA_NAME}.inscricoes
+    WHERE criado_em >= CURRENT_DATE - INTERVAL '6 months'
+    GROUP BY 1, 2
+    ORDER BY 2
+  `);
+  
+  const growthData = growthRes.rows.map(row => ({
+    name: row.name,
+    leads: parseInt(row.leads, 10),
+    recruits: Math.floor(parseInt(row.leads, 10) * 0.1) // Mocking recruits as 10% of leads for now as we don't have explicit recruiter type in DB yet
+  }));
+
+  // 3. Top Recruiters
+  const topRecruitersRes = await pool.query(`
+    SELECT 
+      COALESCE(payload->>'traffic_source', 'Desconhecido') as name,
+      COUNT(*) as recruits
+    FROM ${SCHEMA_NAME}.inscricoes
+    WHERE payload->>'traffic_source' IS NOT NULL
+    GROUP BY 1
+    ORDER BY 2 DESC
+    LIMIT 5
+  `);
+
+  const topRecruiters = topRecruitersRes.rows.map(row => ({
+    name: row.name,
+    recruits: parseInt(row.recruits, 10)
+  }));
+
+  // 4. Distribution (Mocked based on total)
+  const distributionData = [
+    { name: "Leads", value: totalLeads },
+    { name: "Recrutadores", value: Math.floor(totalLeads * 0.05) },
+    { name: "Clientes", value: Math.floor(totalLeads * 0.02) },
+  ];
+
+  return {
+    totalLeads,
+    newLeadsToday,
+    conversionRate: 12.5, // Mocked
+    graduados: 42, // Mocked
+    growthData,
+    distributionData,
+    topRecruiters
+  };
+}

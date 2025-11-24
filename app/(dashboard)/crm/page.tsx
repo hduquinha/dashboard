@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
-import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
+import { listInscricoes, listTrainingFilterOptions, getDashboardStats } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -140,7 +140,9 @@ export default async function CrmPage(props: CrmPageProps) {
     },
   });
 
-  const [recruiterOptions, result] = await Promise.all([recruiterOptionsPromise, resultPromise]);
+  const statsPromise = getDashboardStats();
+
+  const [recruiterOptions, result, stats] = await Promise.all([recruiterOptionsPromise, resultPromise, statsPromise]);
 
   const indicatorDatalistId = "indicator-options";
   const selectedTrainingOption = activeTreinamentoId.length
@@ -203,10 +205,19 @@ export default async function CrmPage(props: CrmPageProps) {
       </header>
 
       {/* Metrics Cards */}
-      <DashboardMetrics />
+      <DashboardMetrics 
+        totalLeads={stats.totalLeads}
+        newLeadsToday={stats.newLeadsToday}
+        conversionRate={stats.conversionRate}
+        graduados={stats.graduados}
+      />
 
       {/* Charts Section */}
-      <DashboardCharts />
+      <DashboardCharts 
+        growthData={stats.growthData}
+        distributionData={stats.distributionData}
+        topRecruiters={stats.topRecruiters}
+      />
 
       {/* CRM Table Section */}
       <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">

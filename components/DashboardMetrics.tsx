@@ -1,41 +1,48 @@
 import { Users, TrendingUp, Award, Target } from "lucide-react";
 
-const metrics = [
-  {
-    label: "Total na Rede",
-    value: "12,345",
-    change: "+12%",
-    icon: Users,
-    color: "text-cyan-500",
-    bg: "bg-cyan-50",
-  },
-  {
-    label: "Novos Leads (Hoje)",
-    value: "142",
-    change: "+5%",
-    icon: Target,
-    color: "text-emerald-500",
-    bg: "bg-emerald-50",
-  },
-  {
-    label: "Taxa de Conversão",
-    value: "24.8%",
-    change: "+2.1%",
-    icon: TrendingUp,
-    color: "text-blue-500",
-    bg: "bg-blue-50",
-  },
-  {
-    label: "Graduados",
-    value: "89",
-    change: "+4",
-    icon: Award,
-    color: "text-purple-500",
-    bg: "bg-purple-50",
-  },
-];
+interface DashboardMetricsProps {
+  totalLeads: number;
+  newLeadsToday: number;
+  conversionRate: number;
+  graduados: number;
+}
 
-export default function DashboardMetrics() {
+export default function DashboardMetrics({ totalLeads, newLeadsToday, conversionRate, graduados }: DashboardMetricsProps) {
+  const metrics = [
+    {
+      label: "Total na Rede",
+      value: totalLeads.toLocaleString(),
+      change: "+12%", // Mocked for now
+      icon: Users,
+      color: "text-cyan-500",
+      bg: "bg-cyan-50",
+    },
+    {
+      label: "Novos Leads (Hoje)",
+      value: newLeadsToday.toLocaleString(),
+      change: "+5%", // Mocked
+      icon: Target,
+      color: "text-emerald-500",
+      bg: "bg-emerald-50",
+    },
+    {
+      label: "Taxa de Conversão",
+      value: `${conversionRate}%`,
+      change: "+2.1%", // Mocked
+      icon: TrendingUp,
+      color: "text-blue-500",
+      bg: "bg-blue-50",
+    },
+    {
+      label: "Graduados",
+      value: graduados.toLocaleString(),
+      change: "+4", // Mocked
+      icon: Award,
+      color: "text-purple-500",
+      bg: "bg-purple-50",
+    },
+  ];
+
   return (
     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
       {metrics.map((metric) => (
