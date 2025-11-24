@@ -50,9 +50,9 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   }
 
   return (
-    <div className="flex min-h-screen bg-white">
+    <div className="flex min-h-screen bg-neutral-50">
       <SidebarNav duplicateCount={duplicateCount} />
-      <div className="flex-1">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <div className="sticky top-0 z-20 border-b border-neutral-200 bg-white/80 px-4 py-3 shadow-sm backdrop-blur lg:hidden">
           <nav className="flex items-center gap-3 overflow-x-auto text-sm font-semibold text-neutral-600" aria-label="Navegação mobile">
             {NAV_LINKS.map((link) => (
@@ -62,7 +62,11 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
             ))}
           </nav>
         </div>
-        {children}
+        <div className="flex-1 overflow-y-auto p-8">
+          <div className="mx-auto max-w-7xl">
+            {children}
+          </div>
+        </div>
       </div>
     </div>
   );

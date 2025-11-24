@@ -8,7 +8,7 @@ export default async function DashboardPage() {
   const stats = await getDashboardStats();
 
   return (
-    <main className="space-y-8">
+    <main className="space-y-6">
       {/* Header */}
       <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>

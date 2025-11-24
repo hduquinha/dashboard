@@ -117,32 +117,6 @@ export default function SidebarNav({ duplicateCount = 0 }: SidebarNavProps) {
           );
         })}
       </nav>
-
-      {/* Footer Actions */}
-      <div className="border-t border-slate-800 p-4 space-y-4">
-        {/* Theme Toggle (Visual) */}
-        {!isCollapsed && (
-          <div className="flex items-center justify-between rounded-lg bg-slate-900 p-1">
-            <button className="flex flex-1 items-center justify-center gap-2 rounded-md bg-slate-800 py-1.5 text-xs font-medium text-white shadow-sm">
-              <Moon size={14} />
-              <span>Dark</span>
-            </button>
-            <button className="flex flex-1 items-center justify-center gap-2 rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300">
-              <Sun size={14} />
-              <span>Light</span>
-            </button>
-          </div>
-        )}
-
-        {/* Logout */}
-        <button className={cn(
-          "flex w-full items-center gap-3 rounded-lg px-3 py-3 text-slate-400 transition-colors hover:bg-red-500/10 hover:text-red-400",
-          isCollapsed ? "justify-center" : ""
-        )}>
-          <LogOut size={20} />
-          {!isCollapsed && <span className="text-sm font-medium">Logout</span>}
-        </button>
-      </div>
     </aside>
   );
 }
