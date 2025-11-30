@@ -2,13 +2,16 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import NetworkCanvas from "@/components/NetworkCanvas";
+import RecruiterAnamneseList from "@/components/RecruiterAnamneseList";
 import { buildNetworkTree } from "@/lib/network";
 import { listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
+import { getAnamneseByRecruiter } from "@/lib/anamnese";
 
 interface PageProps {
   params: Promise<{ code: string }>;
 }
+
 
 export async function generateMetadata(props: PageProps): Promise<Metadata> {
   const params = await props.params;
@@ -22,10 +25,11 @@ export async function generateMetadata(props: PageProps): Promise<Metadata> {
 export default async function RecruiterDetailPage(props: PageProps) {
   const params = await props.params;
   const code = params.code ?? "";
-  const [tree, trainingOptions, recruiterOptions] = await Promise.all([
+  const [tree, trainingOptions, recruiterOptions, anamneses] = await Promise.all([
     buildNetworkTree({ focus: code }),
     listTrainingFilterOptions(),
     Promise.resolve(listRecruiters()),
+    getAnamneseByRecruiter(code),
   ]);
 
   if (!tree.focus?.nodeId) {
@@ -34,7 +38,7 @@ export default async function RecruiterDetailPage(props: PageProps) {
 
   return (
     <main className="flex h-[calc(100vh-64px)] flex-col overflow-hidden bg-white">
-      <div className="flex h-full w-full flex-col">
+      <div className="flex h-full w-full flex-col overflow-y-auto">
         <header className="flex flex-shrink-0 items-center justify-between border-b border-neutral-200 px-6 py-4">
           <div className="space-y-1">
             <Link
@@ -47,13 +51,15 @@ export default async function RecruiterDetailPage(props: PageProps) {
           </div>
         </header>
 
-        <div className="flex-1 overflow-hidden bg-neutral-50">
+        <div className="flex-1 bg-neutral-50 min-h-[500px]">
           <NetworkCanvas
             roots={tree.roots}
             trainingOptions={trainingOptions}
             recruiterOptions={recruiterOptions}
           />
         </div>
+
+        <RecruiterAnamneseList anamneses={anamneses} />
       </div>
     </main>
   );

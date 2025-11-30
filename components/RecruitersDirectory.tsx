@@ -7,14 +7,17 @@ import type { RecruiterDirectoryEntry } from "@/app/(dashboard)/recrutadores/pag
 import type { InscricaoItem } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import { RECRUITERS_BASE_URL, type Recruiter } from "@/lib/recruiters";
+import type { AnamneseResposta } from "@/lib/anamnese";
 
 interface RecruitersDirectoryProps {
   recruiters: RecruiterDirectoryEntry[];
   trainingOptions: TrainingOption[];
   recruiterOptions: Recruiter[];
+  unlinkedAnamneses: AnamneseResposta[];
 }
 
 type FormMode = 'create' | 'link';
+
 
 function normalizeCodeInput(value: string): string {
   const digits = value.replace(/\D+/g, '');
@@ -79,8 +82,9 @@ function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry 
   };
 }
 
-export default function RecruitersDirectory({ recruiters, trainingOptions, recruiterOptions }: RecruitersDirectoryProps) {
+export default function RecruitersDirectory({ recruiters, trainingOptions, recruiterOptions, unlinkedAnamneses }: RecruitersDirectoryProps) {
   const [entries, setEntries] = useState<RecruiterDirectoryEntry[]>(() => recruiters.slice());
+  const [anamneses, setAnamneses] = useState<AnamneseResposta[]>(unlinkedAnamneses);
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<FormMode>('link');
   const [name, setName] = useState('');
@@ -249,6 +253,28 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
       searchInputRef.current?.focus();
     });
   }, [mode, resetForm]);
+
+  const handleLinkAnamnese = async (anamneseId: number, recruiterCode: string) => {
+    try {
+      const response = await fetch('/api/anamnese/link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ anamneseId, recruiterCode }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to link anamnese');
+      }
+
+      setAnamneses(prev => prev.filter(a => a.id !== anamneseId));
+      setSuccessMessage('Anamnese vinculada com sucesso!');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (error) {
+      console.error(error);
+      setErrorMessage('Erro ao vincular anamnese.');
+      setTimeout(() => setErrorMessage(null), 3000);
+    }
+  };
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -645,6 +671,55 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
           {detailsError}
         </p>
       ) : null}
+
+      {anamneses.length > 0 && (
+        <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
+          <header className="flex flex-col gap-1 mb-4">
+            <h2 className="text-lg font-semibold text-neutral-900">Anamneses Pendentes</h2>
+            <p className="text-sm text-neutral-600">
+              Respostas de anamnese que precisam ser vinculadas a um recrutador.
+            </p>
+          </header>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {anamneses.map((anamnese) => (
+              <div key={anamnese.id} className="flex flex-col gap-3 rounded-lg border border-neutral-200 p-4">
+                <div>
+                  <h3 className="font-semibold text-neutral-900">{anamnese.nome || "Sem nome"}</h3>
+                  <p className="text-xs text-neutral-500">
+                    {anamnese.cidade} • {anamnese.telefone}
+                  </p>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Enviado em: {anamnese.data_envio ? new Date(anamnese.data_envio).toLocaleDateString() : '-'}
+                  </p>
+                </div>
+                <div className="mt-auto">
+                  <label className="text-xs font-medium text-neutral-700">Vincular a:</label>
+                  <select
+                    className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        if (confirm(`Vincular anamnese de ${anamnese.nome} ao recrutador ${e.target.options[e.target.selectedIndex].text}?`)) {
+                          handleLinkAnamnese(anamnese.id, e.target.value);
+                        } else {
+                          e.target.value = "";
+                        }
+                      }
+                    }}
+                    defaultValue=""
+                  >
+                    <option value="" disabled>Selecione...</option>
+                    {entries.map(recruiter => (
+                      <option key={recruiter.code} value={recruiter.code}>
+                        {recruiter.code} - {recruiter.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
         <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

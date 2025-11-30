@@ -3,6 +3,7 @@ import RecruitersDirectory from "@/components/RecruitersDirectory";
 import { buildNetworkTree, type NetworkNode } from "@/lib/network";
 import { RECRUITERS_BASE_URL, listRecruiters } from "@/lib/recruiters";
 import { listTrainingFilterOptions } from "@/lib/db";
+import { listUnlinkedAnamneses } from "@/lib/anamnese";
 
 export interface RecruiterDirectoryEntry {
   id: number;
@@ -70,9 +71,10 @@ export const metadata: Metadata = {
 export default async function RecruitersPage() {
   const tree = await buildNetworkTree();
   const recruiters = flattenRecruiters(tree.roots, tree.orphans);
-  const [trainingOptions, recruiterOptions] = await Promise.all([
+  const [trainingOptions, recruiterOptions, unlinkedAnamneses] = await Promise.all([
     listTrainingFilterOptions(),
     Promise.resolve(listRecruiters()),
+    listUnlinkedAnamneses(),
   ]);
 
   return (
@@ -92,6 +94,7 @@ export default async function RecruitersPage() {
           recruiters={recruiters}
           trainingOptions={trainingOptions}
           recruiterOptions={recruiterOptions}
+          unlinkedAnamneses={unlinkedAnamneses}
         />
       </div>
     </main>
