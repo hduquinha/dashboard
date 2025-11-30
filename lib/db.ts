@@ -336,7 +336,7 @@ function createPool(): Pool {
   });
 }
 
-function getPool(): Pool {
+export function getPool(): Pool {
   if (!global.pgPool) {
     global.pgPool = createPool();
   }
