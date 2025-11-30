@@ -13,7 +13,8 @@ import {
   Database,
   LogOut,
   Sun,
-  Moon
+  Moon,
+  FileText
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
@@ -25,6 +26,7 @@ const ICON_MAP: Record<string, any> = {
   recrutadores: Users,
   rede: Network,
   importar: Upload,
+  anamnese: FileText,
 };
 
 interface SidebarNavProps {
