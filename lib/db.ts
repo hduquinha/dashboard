@@ -1425,8 +1425,37 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
       });
     }
 
-    extras.sort((a, b) => a.label.localeCompare(b.label, "pt-BR"));
-    return [...orderedOptions, ...extras];
+    const allOptions = [...orderedOptions, ...extras];
+
+    // Helper to get timestamp for sorting
+    const getTimestamp = (option: TrainingOption) => {
+      if (option.startsAt) {
+        const t = new Date(option.startsAt).getTime();
+        if (!Number.isNaN(t)) return t;
+      }
+      // Try to parse from ID or Label if startsAt is missing
+      const candidates = [option.id, option.label];
+      for (const candidate of candidates) {
+        const t = Date.parse(candidate);
+        if (!Number.isNaN(t)) return t;
+      }
+      return 0;
+    };
+
+    allOptions.sort((a, b) => {
+      const timeA = getTimestamp(a);
+      const timeB = getTimestamp(b);
+
+      if (timeA > 0 && timeB > 0) {
+        return timeB - timeA; // Descending (newest first)
+      }
+      if (timeA > 0) return -1; // A has date, B doesn't -> A first
+      if (timeB > 0) return 1;  // B has date, A doesn't -> B first
+
+      return a.label.localeCompare(b.label, "pt-BR");
+    });
+
+    return allOptions;
   } catch (error) {
     console.error("Failed to list training filter options", error);
     return orderedOptions;

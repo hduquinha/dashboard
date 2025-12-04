@@ -61,23 +61,6 @@ function buildExportUrl(params: URLSearchParams): string {
   return query.length ? `/api/export?${query}` : "/api/export";
 }
 
-function resolveLatestTrainingOption(options: TrainingOption[]): TrainingOption | undefined {
-  if (!options.length) {
-    return undefined;
-  }
-
-  return [...options]
-    .map((option) => {
-      const candidates = [option.startsAt, option.id, option.label];
-      const timestamps = candidates
-        .map((candidate) => (typeof candidate === "string" ? Date.parse(candidate) : Number.NaN))
-        .filter((value) => Number.isFinite(value)) as number[];
-      const best = timestamps.length ? Math.max(...timestamps) : Number.NEGATIVE_INFINITY;
-      return { option, score: best };
-    })
-    .sort((a, b) => b.score - a.score)[0]?.option;
-}
-
 export const metadata: Metadata = {
   title: "CRM de Inscrições",
   description: "Gerencie toda a base com filtros avançados e exportação completa.",
@@ -119,11 +102,7 @@ export default async function CrmPage(props: CrmPageProps) {
 
   const recruiterOptionsPromise = listRecruiters();
   const trainingOptions = await listTrainingFilterOptions();
-  const latestTrainingOption = resolveLatestTrainingOption(trainingOptions);
   const activeTreinamentoId = treinamentoSelecionado;
-  const isLatestTrainingActive = Boolean(
-    latestTrainingOption && activeTreinamentoId === latestTrainingOption.id
-  );
 
   const resultPromise = listInscricoes({
     page,
@@ -168,13 +147,6 @@ export default async function CrmPage(props: CrmPageProps) {
   paramsForExport.set("orderBy", orderBy);
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
-
-  const latestTrainingToggleHref = latestTrainingOption
-    ? buildFiltersHref({
-        treinamento: isLatestTrainingActive ? null : latestTrainingOption.id,
-        page: "1",
-      })
-    : null;
 
   return (
     <main className="space-y-6">
