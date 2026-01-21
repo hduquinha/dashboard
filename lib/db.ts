@@ -1405,8 +1405,21 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
       }
 
       const configuredInfo = baseTrainingId ? getTrainingById(baseTrainingId) : null;
-      const fallbackLabel = baseTrainingId || cityLabel || "";
-      const baseLabel = configuredInfo?.label ?? fallbackLabel;
+      
+      // Garantir que datas ISO sejam formatadas corretamente
+      let baseLabel = configuredInfo?.label ?? baseTrainingId;
+      let startsAt = configuredInfo?.startsAt ?? null;
+      
+      // Se o baseLabel ainda for igual ao ID e parece ser uma data, formatar
+      if (baseLabel === baseTrainingId && baseTrainingId) {
+        const formatted = formatTrainingDateLabel(baseTrainingId);
+        if (formatted) {
+          baseLabel = formatted;
+          startsAt = baseTrainingId;
+        }
+      }
+      
+      const fallbackLabel = baseLabel || cityLabel || "";
       const labelParts = [];
       if (cityLabel) {
         labelParts.push(cityLabel);
@@ -1421,7 +1434,7 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
       extras.push({
         id: compositeId,
         label,
-        startsAt: configuredInfo?.startsAt,
+        startsAt: startsAt ?? configuredInfo?.startsAt,
       });
     }
 
@@ -1902,10 +1915,23 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       const treinamentoId = row.treinamento_id || "Sem Treinamento";
       const trainingInfo = getTrainingById(treinamentoId);
       
+      // Tentar formatar como data se o ID parecer uma data
+      let label = trainingInfo?.label ?? treinamentoId;
+      let startsAt = trainingInfo?.startsAt ?? null;
+      
+      // Se o label ainda for igual ao ID e parece ser uma data ISO, formatar
+      if (label === treinamentoId && treinamentoId !== "Sem Treinamento") {
+        const formatted = formatTrainingDateLabel(treinamentoId);
+        if (formatted) {
+          label = formatted;
+          startsAt = treinamentoId;
+        }
+      }
+      
       return {
         id: treinamentoId,
-        label: trainingInfo?.label ?? treinamentoId,
-        startsAt: trainingInfo?.startsAt ?? null,
+        label,
+        startsAt,
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
