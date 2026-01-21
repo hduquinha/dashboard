@@ -8,6 +8,7 @@ export interface NavLink {
 
 export const NAV_LINKS: NavLink[] = [
   { key: "home", href: "/", label: "Início", description: "Treinamento atual", icon: "🏠" },
+  { key: "treinamentos", href: "/treinamentos", label: "Treinamentos", description: "Por data", icon: "📅" },
   { key: "crm", href: "/crm", label: "CRM", description: "Base completa", icon: "📋" },
   { key: "duplicados", href: "/duplicados", label: "Duplicados", description: "Higienização", icon: "⚠️" },
   { key: "recrutadores", href: "/recrutadores", label: "Recrutadores", description: "Gerencie códigos", icon: "🧭" },

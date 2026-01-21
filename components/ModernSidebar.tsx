@@ -17,13 +17,15 @@ import {
   Sun,
   Moon,
   FileText,
-  X
+  X,
+  CalendarDays
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
 
 const ICON_MAP: Record<string, any> = {
   home: LayoutDashboard,
+  treinamentos: CalendarDays,
   crm: Database,
   duplicados: AlertTriangle,
   recrutadores: Users,

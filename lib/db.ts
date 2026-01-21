@@ -1860,6 +1860,64 @@ export interface DashboardStats {
   topRecruiters: { name: string; recruits: number }[];
 }
 
+export interface TrainingWithStats {
+  id: string;
+  label: string;
+  startsAt: string | null;
+  totalInscritos: number;
+  leads: number;
+  recrutadores: number;
+  last24h: number;
+}
+
+export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
+  const pool = getPool();
+
+  const query = `
+    SELECT
+      TRIM(COALESCE(i.payload->>'treinamento', 'Sem Treinamento')) AS treinamento_id,
+      COUNT(*)::bigint AS total_inscritos,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
+      COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
+      COUNT(*) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
+      MIN(i.criado_em) AS first_inscrito,
+      MAX(i.criado_em) AS last_inscrito
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    GROUP BY TRIM(COALESCE(i.payload->>'treinamento', 'Sem Treinamento'))
+    ORDER BY MAX(i.criado_em) DESC
+  `;
+
+  try {
+    const { rows } = await pool.query<{
+      treinamento_id: string;
+      total_inscritos: string;
+      recrutadores: string;
+      leads: string;
+      last_24h: string;
+      first_inscrito: Date | string | null;
+      last_inscrito: Date | string | null;
+    }>(query);
+
+    return rows.map((row) => {
+      const treinamentoId = row.treinamento_id || "Sem Treinamento";
+      const trainingInfo = getTrainingById(treinamentoId);
+      
+      return {
+        id: treinamentoId,
+        label: trainingInfo?.label ?? treinamentoId,
+        startsAt: trainingInfo?.startsAt ?? null,
+        totalInscritos: Number(row.total_inscritos) || 0,
+        leads: Number(row.leads) || 0,
+        recrutadores: Number(row.recrutadores) || 0,
+        last24h: Number(row.last_24h) || 0,
+      };
+    });
+  } catch (error) {
+    console.error("Failed to list trainings with stats", error);
+    return [];
+  }
+}
+
 export async function getDashboardStats(): Promise<DashboardStats> {
   const pool = getPool();
 
