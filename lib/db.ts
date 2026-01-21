@@ -1359,82 +1359,42 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   const orderedOptions: TrainingOption[] = [...configured];
   const seen = new Set(orderedOptions.map((option) => option.id));
 
+  // Query simplificada: buscar todos os valores únicos do campo treinamento
   const query = `
     SELECT DISTINCT
-      TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento,
-      TRIM(COALESCE(i.payload->>'treinamento_label', '')) AS treinamento_label,
-      TRIM(COALESCE(i.payload->>'treinamento_nome', '')) AS treinamento_nome,
-      TRIM(COALESCE(i.payload->>'treinamento_cidade', '')) AS treinamento_cidade,
-      TRIM(COALESCE(i.payload->>'cidade', '')) AS cidade
+      TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE TRIM(COALESCE(
-      i.payload->>'treinamento',
-      i.payload->>'treinamento_label',
-      i.payload->>'treinamento_nome',
-      i.payload->>'treinamento_cidade',
-      i.payload->>'cidade',
-      ''
-    )) <> ''
-    ORDER BY 1, 5
+    WHERE TRIM(COALESCE(i.payload->>'treinamento', '')) <> ''
+    ORDER BY 1
   `;
 
   try {
     const { rows } = await getPool().query<{
       treinamento: string | null;
-      treinamento_label: string | null;
-      treinamento_nome: string | null;
-      treinamento_cidade: string | null;
-      cidade: string | null;
     }>(query);
     const extras: TrainingOption[] = [];
 
     for (const row of rows) {
-      const baseTrainingId =
-        row.treinamento?.trim() ??
-        row.treinamento_label?.trim() ??
-        row.treinamento_nome?.trim() ??
-        "";
-      const cityLabel = formatCityLabel(row.treinamento_cidade ?? row.cidade);
-      const compositeId = buildCompositeTrainingId(baseTrainingId, cityLabel);
-      if (!compositeId) {
+      const treinamentoId = row.treinamento?.trim() ?? "";
+      if (!treinamentoId) {
         continue;
       }
 
-      if (seen.has(compositeId)) {
+      if (seen.has(treinamentoId)) {
         continue;
       }
 
-      const configuredInfo = baseTrainingId ? getTrainingById(baseTrainingId) : null;
-      
-      // Garantir que datas ISO sejam formatadas corretamente
-      let baseLabel = configuredInfo?.label ?? baseTrainingId;
-      let startsAt = configuredInfo?.startsAt ?? null;
-      
-      // Se o baseLabel ainda for igual ao ID e parece ser uma data, formatar
-      if (baseLabel === baseTrainingId && baseTrainingId) {
-        const formatted = formatTrainingDateLabel(baseTrainingId);
-        if (formatted) {
-          baseLabel = formatted;
-          startsAt = baseTrainingId;
-        }
-      }
-      
-      const fallbackLabel = baseLabel || cityLabel || "";
-      const labelParts = [];
-      if (cityLabel) {
-        labelParts.push(cityLabel);
-      }
-      if (baseLabel && (!cityLabel || baseLabel !== cityLabel)) {
-        labelParts.push(baseLabel);
-      }
+      seen.add(treinamentoId);
 
-      const label = labelParts.length > 0 ? labelParts.join(" – ") : compositeId;
-      seen.add(compositeId);
+      // Tentar formatar como data se parecer ser uma data ISO
+      const formatted = formatTrainingDateLabel(treinamentoId);
+      const label = formatted ?? treinamentoId;
+      const startsAt = formatted ? treinamentoId : null;
 
       extras.push({
-        id: compositeId,
+        id: treinamentoId,
         label,
-        startsAt: startsAt ?? configuredInfo?.startsAt,
+        startsAt,
       });
     }
 
