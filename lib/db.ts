@@ -1359,12 +1359,36 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   const orderedOptions: TrainingOption[] = [...configured];
   const seen = new Set(orderedOptions.map((option) => option.id));
 
-  // Query simplificada: buscar todos os valores únicos do campo treinamento
+  // Query que busca de todos os campos possíveis de treinamento
   const query = `
     SELECT DISTINCT
-      TRIM(COALESCE(i.payload->>'treinamento', '')) AS treinamento
+      TRIM(COALESCE(
+        NULLIF(TRIM(i.payload->>'treinamento'), ''),
+        NULLIF(TRIM(i.payload->>'training'), ''),
+        NULLIF(TRIM(i.payload->>'training_date'), ''),
+        NULLIF(TRIM(i.payload->>'trainingDate'), ''),
+        NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
+        NULLIF(TRIM(i.payload->>'training_id'), ''),
+        NULLIF(TRIM(i.payload->>'trainingId'), ''),
+        NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
+        NULLIF(TRIM(i.payload->>'training_option'), ''),
+        NULLIF(TRIM(i.payload->>'trainingOption'), ''),
+        ''
+      )) AS treinamento
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE TRIM(COALESCE(i.payload->>'treinamento', '')) <> ''
+    WHERE TRIM(COALESCE(
+      NULLIF(TRIM(i.payload->>'treinamento'), ''),
+      NULLIF(TRIM(i.payload->>'training'), ''),
+      NULLIF(TRIM(i.payload->>'training_date'), ''),
+      NULLIF(TRIM(i.payload->>'trainingDate'), ''),
+      NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
+      NULLIF(TRIM(i.payload->>'training_id'), ''),
+      NULLIF(TRIM(i.payload->>'trainingId'), ''),
+      NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
+      NULLIF(TRIM(i.payload->>'training_option'), ''),
+      NULLIF(TRIM(i.payload->>'trainingOption'), ''),
+      ''
+    )) <> ''
     ORDER BY 1
   `;
 
@@ -1846,9 +1870,24 @@ export interface TrainingWithStats {
 export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
   const pool = getPool();
 
+  // Expressão para extrair treinamento de múltiplos campos possíveis
+  const treinamentoExpr = `TRIM(COALESCE(
+    NULLIF(TRIM(i.payload->>'treinamento'), ''),
+    NULLIF(TRIM(i.payload->>'training'), ''),
+    NULLIF(TRIM(i.payload->>'training_date'), ''),
+    NULLIF(TRIM(i.payload->>'trainingDate'), ''),
+    NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
+    NULLIF(TRIM(i.payload->>'training_id'), ''),
+    NULLIF(TRIM(i.payload->>'trainingId'), ''),
+    NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
+    NULLIF(TRIM(i.payload->>'training_option'), ''),
+    NULLIF(TRIM(i.payload->>'trainingOption'), ''),
+    'Sem Treinamento'
+  ))`;
+
   const query = `
     SELECT
-      TRIM(COALESCE(i.payload->>'treinamento', 'Sem Treinamento')) AS treinamento_id,
+      ${treinamentoExpr} AS treinamento_id,
       COUNT(*)::bigint AS total_inscritos,
       COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
       COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
@@ -1856,7 +1895,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       MIN(i.criado_em) AS first_inscrito,
       MAX(i.criado_em) AS last_inscrito
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    GROUP BY TRIM(COALESCE(i.payload->>'treinamento', 'Sem Treinamento'))
+    GROUP BY ${treinamentoExpr}
     ORDER BY MAX(i.criado_em) DESC
   `;
 
