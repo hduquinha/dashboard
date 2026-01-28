@@ -17,7 +17,7 @@ export async function GET() {
       ORDER BY total DESC
     `);
 
-    // Buscar exemplos do treinamento problemático (2025-11-13)
+    // Buscar exemplos do treinamento problemático (13/11/2025 - formato BR)
     const problematicExamples = await pool.query(`
       SELECT 
         id, 
@@ -27,9 +27,10 @@ export async function GET() {
         payload->>'dataHora' as dataHora,
         payload->>'created_at' as created_at,
         payload->>'data_treinamento' as data_treinamento,
+        payload->>'Treinamento' as treinamento_original,
         criado_em
       FROM inscricoes.inscricoes 
-      WHERE payload->>'treinamento' = '2025-11-13'
+      WHERE payload->>'treinamento' = '13/11/2025'
       LIMIT 20
     `);
 
@@ -37,23 +38,23 @@ export async function GET() {
     const fullPayloadSample = await pool.query(`
       SELECT id, payload
       FROM inscricoes.inscricoes 
-      WHERE payload->>'treinamento' = '2025-11-13'
-      LIMIT 3
+      WHERE payload->>'treinamento' = '13/11/2025'
+      LIMIT 5
     `);
 
-    // Verificar se existe algum campo de data real no payload
-    const possibleDateFields = await pool.query(`
+    // Verificar todos os campos únicos no payload dos registros problemáticos
+    const allFieldsQuery = await pool.query(`
       SELECT DISTINCT jsonb_object_keys(payload) as field_name
       FROM inscricoes.inscricoes
-      WHERE payload->>'treinamento' = '2025-11-13'
-      LIMIT 1
+      WHERE payload->>'treinamento' = '13/11/2025'
     `);
 
     return NextResponse.json({
       trainingDistribution: trainingDistribution.rows,
+      problematicCount: problematicExamples.rows.length,
       problematicExamples: problematicExamples.rows,
       fullPayloadSamples: fullPayloadSample.rows,
-      availableFields: possibleDateFields.rows,
+      availableFields: allFieldsQuery.rows,
     });
   } catch (error) {
     console.error("Failed to analyze trainings", error);
