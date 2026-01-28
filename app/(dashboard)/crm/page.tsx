@@ -8,8 +8,8 @@ import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
+const DEFAULT_PAGE_SIZE = 10000;
+const MAX_PAGE_SIZE = 10000;
 
 interface CrmPageProps {
   searchParams:
