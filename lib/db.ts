@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
+
+// Permite certificados auto-assinados do Aiven
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
 import {
