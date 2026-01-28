@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { pool } from "@/lib/db";
+import { getPool } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  const pool = getPool();
+  
   try {
     // Buscar distribuição de treinamentos
     const trainingDistribution = await pool.query(`
