@@ -323,16 +323,16 @@ function createPool(): Pool {
     throw new Error("DATABASE_URL is not configured");
   }
 
-  const sslEnabled = process.env.PG_SSL === "true";
+  const sslDisabled = process.env.PG_SSL === "false";
 
   return new Pool({
     connectionString,
     application_name: "painel-inscricoes",
-    ssl: sslEnabled
-      ? {
+    ssl: sslDisabled
+      ? false
+      : {
           rejectUnauthorized: false,
-        }
-      : undefined,
+        },
   });
 }
 
