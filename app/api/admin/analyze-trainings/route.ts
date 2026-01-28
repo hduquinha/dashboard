@@ -5,10 +5,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const pool = getPool();
+  const client = await pool.connect();
   
   try {
     // Buscar distribuição de treinamentos
-    const trainingDistribution = await pool.query(`
+    const trainingDistribution = await client.query(`
       SELECT 
         payload->>'treinamento' as treinamento,
         COUNT(*) as total
@@ -18,7 +19,7 @@ export async function GET() {
     `);
 
     // Buscar exemplos do treinamento problemático (13/11/2025 - formato BR)
-    const problematicExamples = await pool.query(`
+    const problematicExamples = await client.query(`
       SELECT 
         id, 
         payload->>'treinamento' as treinamento, 
@@ -35,7 +36,7 @@ export async function GET() {
     `);
 
     // Buscar um payload completo para análise
-    const fullPayloadSample = await pool.query(`
+    const fullPayloadSample = await client.query(`
       SELECT id, payload
       FROM inscricoes.inscricoes 
       WHERE payload->>'treinamento' = '13/11/2025'
@@ -43,7 +44,7 @@ export async function GET() {
     `);
 
     // Verificar todos os campos únicos no payload dos registros problemáticos
-    const allFieldsQuery = await pool.query(`
+    const allFieldsQuery = await client.query(`
       SELECT DISTINCT jsonb_object_keys(payload) as field_name
       FROM inscricoes.inscricoes
       WHERE payload->>'treinamento' = '13/11/2025'
@@ -62,5 +63,7 @@ export async function GET() {
       { error: "Failed to analyze trainings", details: String(error) },
       { status: 500 }
     );
+  } finally {
+    client.release();
   }
 }
