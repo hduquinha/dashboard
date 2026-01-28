@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Main circle -->
+  <circle cx="45" cy="45" r="40" fill="#2DBDC2"/>
+  
+  <!-- Small circles (bubble effect) -->
+  <circle cx="80" cy="75" r="8" fill="#2DBDC2"/>
+  <circle cx="90" cy="90" r="5" fill="#2DBDC2"/>
+  
+  <!-- UP text stylized -->
+  <text x="22" y="58" font-family="Brush Script MT, cursive" font-size="40" fill="white" font-weight="bold" font-style="italic">up</text>
+</svg>

@@ -211,7 +211,7 @@ export default async function CrmPage(props: CrmPageProps) {
                       name="nome"
                       defaultValue={nome}
                       placeholder="Buscar por nome..."
-                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-[#2DBDC2] focus:ring-[#2DBDC2]"
                     />
                   </label>
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
@@ -221,7 +221,7 @@ export default async function CrmPage(props: CrmPageProps) {
                       name="telefone"
                       defaultValue={telefone}
                       placeholder="Ex: 11999999999"
-                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-[#2DBDC2] focus:ring-[#2DBDC2]"
                     />
                   </label>
                   <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
@@ -232,7 +232,7 @@ export default async function CrmPage(props: CrmPageProps) {
                       defaultValue={indicacao}
                       list="recruiters-list"
                       placeholder="Nome ou código..."
-                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-[#2DBDC2] focus:ring-[#2DBDC2]"
                     />
                     <datalist id="recruiters-list">
                       {recruiterOptions.map((r) => (
@@ -247,7 +247,7 @@ export default async function CrmPage(props: CrmPageProps) {
                     <select
                       name="treinamento"
                       defaultValue={activeTreinamentoId}
-                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-cyan-500 focus:ring-cyan-500"
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-[#2DBDC2] focus:ring-[#2DBDC2]"
                     >
                       <option value="">Todos</option>
                       {trainingOptions.map((option) => (
@@ -268,7 +268,7 @@ export default async function CrmPage(props: CrmPageProps) {
                   </Link>
                   <button
                     type="submit"
-                    className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800"
+                    className="rounded-lg bg-[#2DBDC2] px-4 py-2 text-sm font-medium text-white hover:bg-[#1A9A9E]"
                   >
                     Aplicar Filtros
                   </button>

@@ -50,14 +50,14 @@ export default function SidebarNav({ duplicateCount = 0 }: SidebarNavProps) {
       <div className="flex h-20 items-center justify-between px-6">
         {!isCollapsed && (
           <div className="flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2DBDC2] text-white">
               <LayoutDashboard size={18} />
             </div>
-            <span className="text-lg font-bold text-white">Nexus</span>
+            <span className="text-lg font-bold text-white">Instituto UP</span>
           </div>
         )}
         {isCollapsed && (
-           <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
+           <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-[#2DBDC2] text-white">
              <LayoutDashboard size={18} />
            </div>
         )}
@@ -97,7 +97,7 @@ export default function SidebarNav({ duplicateCount = 0 }: SidebarNavProps) {
                   size={20}
                   className={cn(
                     "transition-colors",
-                    isActive ? "text-cyan-400" : "text-slate-400 group-hover:text-white"
+                    isActive ? "text-[#2DBDC2]" : "text-slate-400 group-hover:text-[#2DBDC2]"
                   )}
                 />
                 {showBadge && isCollapsed && (

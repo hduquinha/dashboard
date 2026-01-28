@@ -3,11 +3,39 @@
 :root {
   --background: #ffffff;
   --foreground: #0f172a;
+  
+  /* Instituto UP Brand Colors */
+  --up-cyan: #2DBDC2;
+  --up-cyan-light: #4DD0D5;
+  --up-cyan-dark: #1A9A9E;
+  --up-cyan-50: #E6F9FA;
+  --up-cyan-100: #C2F0F2;
+  --up-cyan-200: #8FE4E7;
+  --up-cyan-300: #5CD8DC;
+  --up-cyan-400: #3ACCD0;
+  --up-cyan-500: #2DBDC2;
+  --up-cyan-600: #24999D;
+  --up-cyan-700: #1B7578;
+  --up-cyan-800: #125153;
+  --up-cyan-900: #092D2E;
+  
+  --up-dark: #0f172a;
+  --up-dark-light: #1e293b;
+  --up-white: #ffffff;
+  --up-gray-50: #f8fafc;
+  --up-gray-100: #f1f5f9;
+  --up-gray-200: #e2e8f0;
+  --up-gray-300: #cbd5e1;
+  --up-gray-400: #94a3b8;
+  --up-gray-500: #64748b;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-up-cyan: var(--up-cyan);
+  --color-up-cyan-light: var(--up-cyan-light);
+  --color-up-cyan-dark: var(--up-cyan-dark);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -18,7 +46,7 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
-/* Custom Scrollbar */
+/* Custom Scrollbar with UP colors */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -27,9 +55,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--up-cyan-300);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--up-cyan-500);
 }

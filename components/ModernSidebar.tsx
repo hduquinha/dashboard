@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { 
   LayoutDashboard, 
@@ -64,7 +65,7 @@ export default function ModernSidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-slate-800 bg-[#0f172a] text-slate-400 transition-all duration-300 ease-in-out lg:static",
+          "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-[#1e293b] bg-[#0f172a] text-slate-400 transition-all duration-300 ease-in-out lg:static",
           "w-72", // Mobile width
           isCollapsed ? "lg:w-20" : "lg:w-72", // Desktop width
           isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
@@ -73,23 +74,34 @@ export default function ModernSidebar({
         {/* Header */}
         <div className="flex h-20 items-center justify-between px-6">
           {showFullContent && (
-            <div className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
-                <LayoutDashboard size={18} />
+            <div className="flex items-center gap-3">
+              <Image 
+                src="/logo-up.svg" 
+                alt="Instituto UP" 
+                width={40} 
+                height={40}
+                className="flex-shrink-0"
+              />
+              <div className="flex flex-col">
+                <span className="text-lg font-bold text-white">Instituto UP</span>
+                <span className="text-[10px] text-[#2DBDC2]">Desenvolvimento Humano</span>
               </div>
-              <span className="text-lg font-bold text-white">Nexus</span>
             </div>
           )}
           {!showFullContent && (
-             <div className="mx-auto flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-500 text-white">
-               <LayoutDashboard size={18} />
-             </div>
+            <Image 
+              src="/logo-up.svg" 
+              alt="Instituto UP" 
+              width={36} 
+              height={36}
+              className="mx-auto"
+            />
           )}
           
           {/* Desktop Toggle */}
           <button
             onClick={toggleSidebar}
-            className="hidden lg:block text-slate-400 hover:text-white"
+            className="hidden lg:block text-slate-400 hover:text-[#2DBDC2]"
           >
             <Menu size={20} />
           </button>
@@ -97,7 +109,7 @@ export default function ModernSidebar({
           {/* Mobile Close */}
           <button
             onClick={closeMobileSidebar}
-            className="lg:hidden text-slate-400 hover:text-white"
+            className="lg:hidden text-slate-400 hover:text-[#2DBDC2]"
           >
             <X size={20} />
           </button>
@@ -117,8 +129,8 @@ export default function ModernSidebar({
                 className={cn(
                   "group flex items-center gap-3 rounded-lg px-3 py-3 transition-all duration-200",
                   isActive
-                    ? "bg-slate-800 text-white"
-                    : "text-slate-400 hover:bg-slate-800/50 hover:text-white"
+                    ? "bg-[#2DBDC2]/20 text-white"
+                    : "text-slate-400 hover:bg-[#2DBDC2]/10 hover:text-white"
                 )}
                 title={!showFullContent ? link.label : undefined}
               >
@@ -127,7 +139,7 @@ export default function ModernSidebar({
                     size={20}
                     className={cn(
                       "transition-colors",
-                      isActive ? "text-cyan-400" : "text-slate-400 group-hover:text-white"
+                      isActive ? "text-[#2DBDC2]" : "text-slate-400 group-hover:text-[#2DBDC2]"
                     )}
                   />
                   {showBadge && !showFullContent && (
@@ -151,15 +163,15 @@ export default function ModernSidebar({
         </nav>
 
         {/* Footer Actions */}
-        <div className="border-t border-slate-800 p-4 space-y-4">
+        <div className="border-t border-[#1e293b] p-4 space-y-4">
           {/* Theme Toggle (Visual) */}
           {showFullContent && (
-            <div className="flex items-center justify-between rounded-lg bg-slate-900 p-1">
-              <button className="flex flex-1 items-center justify-center gap-2 rounded-md bg-slate-800 py-1.5 text-xs font-medium text-white shadow-sm">
+            <div className="flex items-center justify-between rounded-lg bg-[#1e293b] p-1">
+              <button className="flex flex-1 items-center justify-center gap-2 rounded-md bg-[#0f172a] py-1.5 text-xs font-medium text-white shadow-sm">
                 <Moon size={14} />
                 <span>Dark</span>
               </button>
-              <button className="flex flex-1 items-center justify-center gap-2 rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300">
+              <button className="flex flex-1 items-center justify-center gap-2 rounded-md py-1.5 text-xs font-medium text-slate-500 hover:text-[#2DBDC2]">
                 <Sun size={14} />
                 <span>Light</span>
               </button>

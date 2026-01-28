@@ -44,7 +44,7 @@ export default function RecentInscricoesTable({ inscricoes }: RecentInscricoesTa
           {inscricoes.map((inscricao, index) => (
             <tr 
               key={inscricao.id} 
-              className={`transition-colors hover:bg-cyan-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}`}
+              className={`transition-colors hover:bg-[#2DBDC2]/10 ${index % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}`}
             >
               <td className="px-3 py-3 text-neutral-500 font-medium">
                 {index + 1}

@@ -16,7 +16,7 @@ import {
   Legend
 } from "recharts";
 
-const COLORS = ["#06b6d4", "#0f172a", "#94a3b8"]; // Cyan-500, Slate-900, Slate-400
+const COLORS = ["#2DBDC2", "#0f172a", "#94a3b8"]; // UP Cyan, Slate-900, Slate-400
 
 interface DashboardChartsProps {
   growthData: { name: string; leads: number; recruits: number }[];
@@ -45,7 +45,7 @@ export default function DashboardCharts({ growthData, distributionData, topRecru
               />
               <Legend />
               <Line type="monotone" dataKey="leads" stroke="#0f172a" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Leads" />
-              <Line type="monotone" dataKey="recruits" stroke="#06b6d4" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Recrutadores" />
+              <Line type="monotone" dataKey="recruits" stroke="#2DBDC2" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Recrutadores" />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -92,7 +92,7 @@ export default function DashboardCharts({ growthData, distributionData, topRecru
               <XAxis type="number" hide />
               <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} width={100} />
               <Tooltip cursor={{ fill: '#f8fafc' }} />
-              <Bar dataKey="recruits" fill="#06b6d4" radius={[0, 4, 4, 0]} barSize={20} name="Cadastros" />
+              <Bar dataKey="recruits" fill="#2DBDC2" radius={[0, 4, 4, 0]} barSize={20} name="Cadastros" />
             </BarChart>
           </ResponsiveContainer>
         </div>

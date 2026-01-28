@@ -49,8 +49,8 @@ export default async function TreinamentosPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-50">
-            <Calendar className="h-6 w-6 text-cyan-500" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#2DBDC2]/10">
+            <Calendar className="h-6 w-6 text-[#2DBDC2]" />
           </div>
           <div>
             <p className="text-sm font-medium text-neutral-500">Total Treinamentos</p>
@@ -141,7 +141,7 @@ export default async function TreinamentosPage() {
               
               <Link
                 href={`/crm?treinamento=${encodeURIComponent(training.id)}`}
-                className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-700 transition hover:bg-cyan-500 hover:text-white group-hover:bg-cyan-500 group-hover:text-white"
+                className="mt-4 flex items-center justify-center gap-2 rounded-xl bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-700 transition hover:bg-[#2DBDC2] hover:text-white group-hover:bg-[#2DBDC2] group-hover:text-white"
               >
                 Ver inscritos
                 <ArrowRight className="h-4 w-4" />

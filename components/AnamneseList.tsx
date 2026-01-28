@@ -85,7 +85,7 @@ export default function AnamneseList({ initialAnamneses, recruiters }: AnamneseL
 
             <div className="flex items-center gap-3">
               <select
-                className="h-10 rounded-lg border border-neutral-300 bg-white px-3 text-sm text-neutral-700 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/20"
+                className="h-10 rounded-lg border border-neutral-300 bg-white px-3 text-sm text-neutral-700 focus:border-[#2DBDC2] focus:outline-none focus:ring-2 focus:ring-[#2DBDC2]/20"
                 value={selectedRecruiter[item.id] || ""}
                 onChange={(e) => handleRecruiterChange(item.id, e.target.value)}
                 disabled={isSubmitting === item.id}

@@ -14,8 +14,8 @@ export default function DashboardMetrics({ totalLeads, newLeadsToday, conversion
       value: totalLeads.toLocaleString(),
       change: "+12%", // Mocked for now
       icon: Users,
-      color: "text-cyan-500",
-      bg: "bg-cyan-50",
+      color: "text-[#2DBDC2]",
+      bg: "bg-[#2DBDC2]/10",
     },
     {
       label: "Novos Leads (Hoje)",
@@ -30,16 +30,16 @@ export default function DashboardMetrics({ totalLeads, newLeadsToday, conversion
       value: `${conversionRate}%`,
       change: "+2.1%", // Mocked
       icon: TrendingUp,
-      color: "text-blue-500",
-      bg: "bg-blue-50",
+      color: "text-[#1A9A9E]",
+      bg: "bg-[#2DBDC2]/10",
     },
     {
       label: "Graduados",
       value: graduados.toLocaleString(),
       change: "+4", // Mocked
       icon: Award,
-      color: "text-purple-500",
-      bg: "bg-purple-50",
+      color: "text-[#0f172a]",
+      bg: "bg-slate-100",
     },
   ];
 

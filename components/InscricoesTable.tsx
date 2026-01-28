@@ -207,7 +207,7 @@ export default function InscricoesTable({
               records.map((inscricao, index) => (
                 <tr 
                   key={inscricao.id} 
-                  className={`transition-colors hover:bg-cyan-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}`}
+                  className={`transition-colors hover:bg-[#2DBDC2]/10 ${index % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}`}
                 >
                   <td className="whitespace-nowrap px-3 py-3 text-sm font-medium text-neutral-500">
                     {index + 1}
@@ -319,7 +319,7 @@ export default function InscricoesTable({
                   <td className="whitespace-nowrap px-3 py-3 text-right text-sm">
                     <button
                       type="button"
-                      className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:border-cyan-400 hover:bg-cyan-50 hover:text-cyan-700 sm:px-3 sm:text-sm"
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:border-[#2DBDC2] hover:bg-[#2DBDC2]/10 hover:text-[#1A9A9E] sm:px-3 sm:text-sm"
                       onClick={() => setSelectedInscricao(inscricao)}
                     >
                       <span className="hidden sm:inline">Ver detalhes</span>
