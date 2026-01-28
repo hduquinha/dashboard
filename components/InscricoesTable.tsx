@@ -29,7 +29,7 @@ interface ColumnConfig {
 }
 
 const COLUMNS: ColumnConfig[] = [
-  { key: 'id', label: 'ID', sortable: true },
+  { key: 'id', label: '#', sortable: false },
   { key: 'nome', label: 'Nome', sortable: true },
   { key: 'telefone', label: 'Telefone', sortable: true },
   { key: 'cidade', label: 'Cidade', sortable: true },
@@ -160,17 +160,20 @@ export default function InscricoesTable({
               {COLUMNS.map((column) => {
                 const isActive = column.sortable && orderBy === column.key;
                 const label = column.sortable && isActive ? `${column.label} (${orderDirection.toUpperCase()})` : column.label;
+                // Esconder colunas menos importantes em mobile
+                const hiddenOnMobile = column.key === 'cidade' || column.key === 'profissao';
+                const hiddenOnTablet = column.key === 'telefone';
                 return (
                   <th
                     key={column.key}
                     scope="col"
-                    className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-neutral-600 ${
+                    className={`px-3 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-600 ${
                       column.align === 'right'
                         ? 'text-right'
                         : column.align === 'center'
                         ? 'text-center'
                         : 'text-left'
-                    }`}
+                    } ${hiddenOnMobile ? 'hidden md:table-cell' : ''} ${hiddenOnTablet ? 'hidden lg:table-cell' : ''}`}
                   >
                     {column.sortable ? (
                       <button
@@ -188,12 +191,12 @@ export default function InscricoesTable({
                   </th>
                 );
               })}
-              <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-neutral-600">
+              <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-neutral-600">
                 Ações
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-neutral-200 bg-white">
+          <tbody className="divide-y divide-neutral-100">
             {records.length === 0 ? (
               <tr>
                 <td colSpan={COLUMNS.length + 1} className="px-4 py-12 text-center text-sm text-neutral-500">
@@ -201,19 +204,28 @@ export default function InscricoesTable({
                 </td>
               </tr>
             ) : (
-              records.map((inscricao) => (
-                <tr key={inscricao.id} className="hover:bg-neutral-50">
-                  <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-neutral-900">
-                    #{inscricao.id}
+              records.map((inscricao, index) => (
+                <tr 
+                  key={inscricao.id} 
+                  className={`transition-colors hover:bg-cyan-50/50 ${index % 2 === 0 ? 'bg-white' : 'bg-neutral-50/50'}`}
+                >
+                  <td className="whitespace-nowrap px-3 py-3 text-sm font-medium text-neutral-500">
+                    {(page - 1) * pageSize + index + 1}
                   </td>
-                  <td className="px-4 py-3 text-sm text-neutral-700">
-                    <span className="mr-2 font-medium text-neutral-900">
-                      {inscricao.nome ?? 'Indisponível'}
+                  <td className="px-3 py-3 text-sm text-neutral-700">
+                    <div className="flex flex-col">
+                      <span className="font-medium text-neutral-900">
+                        {inscricao.nome ?? 'Indisponível'}
+                      </span>
                       {inscricao.tipo === 'recrutador' && inscricao.codigoProprio ? (
-                        <span className="ml-2 text-xs font-normal text-neutral-500">Código {inscricao.codigoProprio}</span>
+                        <span className="text-xs text-neutral-500">Código {inscricao.codigoProprio}</span>
                       ) : null}
-                    </span>
-                    <span className="inline-flex gap-1">
+                      {/* Mostrar telefone inline em mobile */}
+                      <span className="text-xs text-neutral-500 lg:hidden">
+                        {inscricao.telefone ?? ''}
+                      </span>
+                    </div>
+                    <span className="mt-1 inline-flex flex-wrap gap-1">
                       {inscricao.tipo === 'recrutador' ? (
                         <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                           Recrutador
@@ -226,23 +238,23 @@ export default function InscricoesTable({
                       ) : null}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-sm text-neutral-700">
-                    {inscricao.telefone ?? 'Indisponível'}
+                  <td className="hidden px-3 py-3 text-sm text-neutral-700 lg:table-cell">
+                    {inscricao.telefone ?? '—'}
                   </td>
-                  <td className="px-4 py-3 text-sm text-neutral-700">
-                    {inscricao.cidade ?? 'Indisponível'}
+                  <td className="hidden px-3 py-3 text-sm text-neutral-700 md:table-cell">
+                    {inscricao.cidade ?? '—'}
                   </td>
-                  <td className="px-4 py-3 text-center text-sm">
+                  <td className="px-3 py-3 text-center text-sm">
                     {(() => {
                       const status = getStatusInfo(inscricao);
                       return (
-                        <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${status.badgeClass}`}>
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:px-3 sm:py-1 sm:text-xs ${status.badgeClass}`}>
                           {status.label}
                         </span>
                       );
                     })()}
                   </td>
-                  <td className="px-4 py-3 text-sm text-neutral-700">
+                  <td className="px-3 py-3 text-sm text-neutral-700">
                     {(() => {
                       const trainingInfo = inscricao.treinamentoId
                         ? trainingById[inscricao.treinamentoId]
@@ -257,12 +269,12 @@ export default function InscricoesTable({
                         null;
 
                       if (!displayText) {
-                        return <span className="text-neutral-400">Sem treinamento selecionado</span>;
+                        return <span className="text-xs text-neutral-400">—</span>;
                       }
 
                       return (
                         <span
-                          className="inline-flex w-max items-center rounded-md bg-neutral-900 px-3 py-1 text-xs font-semibold text-white shadow-sm"
+                          className="inline-flex w-max items-center rounded-md bg-neutral-900 px-2 py-0.5 text-[10px] font-semibold text-white shadow-sm sm:px-3 sm:py-1 sm:text-xs"
                           title={trainingRawDate ?? undefined}
                         >
                           {displayText}
@@ -270,25 +282,26 @@ export default function InscricoesTable({
                       );
                     })()}
                   </td>
-                  <td className="px-4 py-3 text-sm text-neutral-700">
-                    <div className="flex flex-col gap-1">
-                      <span className="font-medium text-neutral-800">
+                  <td className="px-3 py-3 text-sm text-neutral-700">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs font-medium text-neutral-800 sm:text-sm">
                         {inscricao.recrutadorNome ?? 'Sem indicador'}
                       </span>
                       {inscricao.recrutadorCodigo ? (
-                        <span className="inline-flex w-max items-center rounded-full bg-neutral-900/5 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-neutral-700">
-                          Código {inscricao.recrutadorCodigo}
+                        <span className="inline-flex w-max items-center rounded-full bg-neutral-900/5 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
+                          {inscricao.recrutadorCodigo}
                         </span>
                       ) : null}
                     </div>
                   </td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right text-sm">
+                  <td className="whitespace-nowrap px-3 py-3 text-right text-sm">
                     <button
                       type="button"
-                      className="rounded-md border border-neutral-300 px-3 py-1 text-sm font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
+                      className="rounded-md border border-neutral-300 px-2 py-1 text-xs font-semibold text-neutral-700 transition hover:border-cyan-400 hover:bg-cyan-50 hover:text-cyan-700 sm:px-3 sm:text-sm"
                       onClick={() => setSelectedInscricao(inscricao)}
                     >
-                      Ver detalhes
+                      <span className="hidden sm:inline">Ver detalhes</span>
+                      <span className="sm:hidden">Ver</span>
                     </button>
                   </td>
                 </tr>
