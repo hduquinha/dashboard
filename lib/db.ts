@@ -34,6 +34,80 @@ import type {
 
 const SCHEMA_NAME = "inscricoes";
 
+// Cache de recrutadores do banco de dados
+interface RecruiterCache {
+  code: string;
+  name: string;
+  id: number;
+}
+const recruiterDbCache = new Map<string, RecruiterCache | null>();
+let recruiterCacheLoaded = false;
+
+async function loadRecruiterCache(): Promise<void> {
+  if (recruiterCacheLoaded) {
+    return;
+  }
+  
+  try {
+    const query = `
+      SELECT 
+        i.id,
+        i.payload->>'nome' AS nome,
+        COALESCE(
+          NULLIF(TRIM(i.payload->>'codigoRecrutador'), ''),
+          NULLIF(TRIM(i.payload->>'codigo_recrutador'), ''),
+          NULLIF(TRIM(i.payload->>'codigo'), ''),
+          NULLIF(TRIM(i.payload->>'codigoProprio'), ''),
+          NULLIF(TRIM(i.payload->>'codigo_indicador_proprio'), '')
+        ) AS codigo_proprio
+      FROM ${SCHEMA_NAME}.inscricoes i
+      WHERE (
+        NULLIF(TRIM(i.payload->>'codigoRecrutador'), '') IS NOT NULL OR
+        NULLIF(TRIM(i.payload->>'codigo_recrutador'), '') IS NOT NULL OR
+        NULLIF(TRIM(i.payload->>'codigo'), '') IS NOT NULL OR
+        NULLIF(TRIM(i.payload->>'codigoProprio'), '') IS NOT NULL OR
+        NULLIF(TRIM(i.payload->>'codigo_indicador_proprio'), '') IS NOT NULL
+      )
+    `;
+    
+    const { rows } = await getPool().query<{ id: number; nome: string | null; codigo_proprio: string | null }>(query);
+    
+    for (const row of rows) {
+      if (row.codigo_proprio && row.nome) {
+        const normalized = normalizeRecruiterCode(row.codigo_proprio);
+        if (normalized && !recruiterDbCache.has(normalized)) {
+          recruiterDbCache.set(normalized, {
+            code: normalized,
+            name: row.nome.trim(),
+            id: row.id,
+          });
+        }
+      }
+    }
+    
+    recruiterCacheLoaded = true;
+  } catch (error) {
+    console.error("Failed to load recruiter cache from database:", error);
+  }
+}
+
+function getRecruiterFromCache(code: string | null): RecruiterCache | null {
+  if (!code) {
+    return null;
+  }
+  const normalized = normalizeRecruiterCode(code);
+  if (!normalized) {
+    return null;
+  }
+  return recruiterDbCache.get(normalized) ?? null;
+}
+
+// Função para invalidar cache (chamar quando adicionar novo recrutador)
+export function invalidateRecruiterCache(): void {
+  recruiterDbCache.clear();
+  recruiterCacheLoaded = false;
+}
+
 const RECRUITER_CODE_FIELDS = [
   "codigoRecrutador",
   "codigo_recrutador",
@@ -184,7 +258,11 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
   const rowTrafficSource = typeof row.traffic_source === "string" ? row.traffic_source : undefined;
   const codeCandidate = parsedTrafficSource ?? rowTrafficSource ?? null;
   const recruiterCode = normalizeRecruiterCode(codeCandidate);
-  const recruiter = getRecruiterByCode(codeCandidate);
+  
+  // Buscar primeiro no cache do banco, depois na lista fixa
+  const recruiterFromDb = getRecruiterFromCache(codeCandidate);
+  const recruiterFromList = getRecruiterByCode(codeCandidate);
+  const recruiterName = recruiterFromDb?.name ?? recruiterFromList?.name ?? null;
 
   const parsedProfissao =
     typeof parsed.profissao === "string" && parsed.profissao.trim().length > 0
@@ -303,9 +381,9 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     cidade: typeof row.cidade === "string" ? row.cidade : null,
     profissao: parsedProfissao ?? rowProfissao ?? null,
     recrutadorCodigo: recruiterCode ?? (codeCandidate ? codeCandidate.trim() : null),
-    recrutadorNome: recruiter?.name ?? null,
+    recrutadorNome: recruiterName,
     recrutadorUrl:
-      recruiter?.url ?? (recruiterCode ? `${RECRUITERS_BASE_URL}${recruiterCode}` : null),
+      recruiterFromList?.url ?? (recruiterCode ? `${RECRUITERS_BASE_URL}${recruiterCode}` : null),
     treinamentoId,
     treinamentoNome: treinamentoLabel,
     treinamentoData,
@@ -531,6 +609,9 @@ function formatDateLabelPtBR(value: string | Date | null | undefined): string {
 export async function listInscricoes(
   options: ListInscricoesOptions = {}
 ): Promise<ListInscricoesResult> {
+  // Carregar cache de recrutadores do banco
+  await loadRecruiterCache();
+  
   const {
     page = 1,
     pageSize = 10,
@@ -688,6 +769,8 @@ export async function searchInscricoesByName(
   term: string,
   limit = 8
 ): Promise<InscricaoItem[]> {
+  await loadRecruiterCache();
+  
   const needle = term.trim();
   if (!needle) {
     return [];
@@ -725,6 +808,8 @@ export async function searchInscricoesByName(
 }
 
 export async function getInscricaoById(id: number): Promise<InscricaoItem | null> {
+  await loadRecruiterCache();
+  
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Invalid inscrição id");
   }
