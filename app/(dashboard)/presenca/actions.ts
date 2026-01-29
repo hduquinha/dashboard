@@ -26,12 +26,63 @@ interface InscricaoDbRow {
 }
 
 /**
+ * Extrai a data base (YYYY-MM-DD) de um valor de treinamento
+ */
+function extractDateFromTraining(value: string): string | null {
+  // Formato ISO: 2026-01-07T19:00:00-03:00
+  const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) {
+    return isoMatch[1];
+  }
+  
+  // Formato BR: 07/01/2026
+  const brMatch = value.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (brMatch) {
+    return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
+  }
+  
+  return null;
+}
+
+/**
  * Busca inscrições de um treinamento específico
  */
 async function getInscricoesByTreinamento(treinamentoId: string): Promise<InscricaoItem[]> {
   const pool = getPool();
 
-  // Busca inscrições que correspondem ao treinamento
+  // Extrai a data base para busca mais flexível
+  const dateBase = extractDateFromTraining(treinamentoId);
+  
+  // Monta as condições de busca
+  const conditions: string[] = [];
+  const params: string[] = [];
+  let paramIndex = 1;
+
+  // Busca exata
+  conditions.push(`i.payload->>'treinamento' = $${paramIndex}`);
+  params.push(treinamentoId);
+  paramIndex++;
+
+  // Busca por LIKE
+  conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
+  params.push(`%${treinamentoId}%`);
+  paramIndex++;
+
+  // Se temos uma data base, busca também por ela
+  if (dateBase) {
+    conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
+    params.push(`%${dateBase}%`);
+    paramIndex++;
+    
+    // Formato BR da data
+    const [year, month, day] = dateBase.split('-');
+    const brDate = `${day}/${month}/${year}`;
+    conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
+    params.push(`%${brDate}%`);
+    paramIndex++;
+  }
+
+  // Busca também em campos alternativos de treinamento
   const query = `
     SELECT 
       i.id,
@@ -41,16 +92,20 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
       i.payload->>'telefone' AS telefone,
       i.payload->>'cidade' AS cidade,
       i.payload->>'profissao' AS profissao,
-      i.payload->>'treinamento' AS treinamento,
+      COALESCE(
+        NULLIF(TRIM(i.payload->>'treinamento'), ''),
+        NULLIF(TRIM(i.payload->>'training'), ''),
+        NULLIF(TRIM(i.payload->>'training_date'), ''),
+        NULLIF(TRIM(i.payload->>'trainingDate'), ''),
+        NULLIF(TRIM(i.payload->>'data_treinamento'), '')
+      ) AS treinamento,
       i.payload->>'traffic_source' AS traffic_source
     FROM ${SCHEMA_NAME}.inscricoes i
-    WHERE 
-      i.payload->>'treinamento' = $1
-      OR i.payload->>'treinamento' LIKE $2
+    WHERE ${conditions.join(' OR ')}
     ORDER BY i.criado_em DESC
   `;
 
-  const { rows } = await pool.query<InscricaoDbRow>(query, [treinamentoId, `%${treinamentoId}%`]);
+  const { rows } = await pool.query<InscricaoDbRow>(query, params);
 
   return rows.map((row: InscricaoDbRow) => {
     const payload = (row.payload ?? {}) as Record<string, unknown>;
