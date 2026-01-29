@@ -233,7 +233,10 @@ function shouldExcludeName(normalized: string, excludeList: string[]): boolean {
 }
 
 /**
- * Consolida participantes com mesmo nome (múltiplas entradas/saídas)
+ * Consolida participantes com mesmo nome EXATO (múltiplas entradas/saídas)
+ * - Agrupa apenas nomes IDÊNTICOS (case-sensitive)
+ * - NÃO ignora nomes "genéricos" como iPhone - todos aparecem
+ * - Permite exclusão opcional de nomes específicos (equipe)
  */
 export function consolidateParticipants(
   participants: ZoomParticipantRaw[],
@@ -243,18 +246,15 @@ export function consolidateParticipants(
 
   for (const p of participants) {
     const normalized = normalizeNameForMatch(p.nome);
+    // Usamos o nome original exato como chave para agrupar
+    const originalNameKey = p.nome.trim();
     
-    // Ignora nomes genéricos
-    if (isGenericName(normalized)) {
-      continue;
-    }
-
-    // Ignora nomes na lista de exclusão (equipe)
+    // Ignora apenas nomes na lista de exclusão (equipe) - não ignora mais nomes genéricos
     if (excludeNames.length > 0 && shouldExcludeName(normalized, excludeNames)) {
       continue;
     }
 
-    const existing = byName.get(normalized);
+    const existing = byName.get(originalNameKey);
 
     if (existing) {
       existing.entradas.push({
@@ -276,7 +276,7 @@ export function consolidateParticipants(
         existing.email = p.email;
       }
     } else {
-      byName.set(normalized, {
+      byName.set(originalNameKey, {
         nomeOriginal: p.nome,
         nomeNormalizado: normalized,
         email: p.email,

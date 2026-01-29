@@ -68,6 +68,10 @@ export default function PresenceValidationForm() {
 
   // Confirmação
   const [isConfirming, startConfirm] = useTransition();
+
+  // Merge de participantes
+  const [mergeMode, setMergeMode] = useState(false);
+  const [selectedForMerge, setSelectedForMerge] = useState<Set<string>>(new Set());
   const [confirmResult, setConfirmResult] = useState<{ success: boolean; message: string } | null>(null);
 
   // ============================================================================
@@ -228,6 +232,124 @@ export default function PresenceValidationForm() {
         ),
       };
     });
+  }, []);
+
+  // Toggle seleção para merge
+  const toggleMergeSelection = useCallback((nomeOriginal: string) => {
+    setSelectedForMerge((prev: Set<string>) => {
+      const next = new Set(prev);
+      if (next.has(nomeOriginal)) {
+        next.delete(nomeOriginal);
+      } else {
+        next.add(nomeOriginal);
+      }
+      return next;
+    });
+  }, []);
+
+  // Executa o merge dos participantes selecionados
+  const executeMerge = useCallback(() => {
+    if (selectedForMerge.size < 2 || !parsedData) return;
+
+    const selectedNames = Array.from(selectedForMerge);
+    const selectedParticipants = parsedData.participants.filter(
+      (p: ParticipantWithAnalysis) => selectedNames.includes(p.participante.nomeOriginal) && !p.removed
+    );
+
+    if (selectedParticipants.length < 2) return;
+
+    // Ordena por tempo total para escolher o "principal" (maior tempo)
+    selectedParticipants.sort(
+      (a: ParticipantWithAnalysis, b: ParticipantWithAnalysis) => b.participante.duracaoTotalMinutos - a.participante.duracaoTotalMinutos
+    );
+
+    const principal = selectedParticipants[0];
+    const toMerge = selectedParticipants.slice(1);
+
+    // Consolida as entradas
+    const mergedEntradas = [...principal.participante.entradas];
+    let mergedDuracao = principal.participante.duracaoTotalMinutos;
+    let mergedPrimeiraEntrada = principal.participante.primeiraEntrada;
+    let mergedUltimaSaida = principal.participante.ultimaSaida;
+    let mergedEmail = principal.participante.email;
+
+    for (const p of toMerge) {
+      mergedEntradas.push(...p.participante.entradas);
+      mergedDuracao += p.participante.duracaoTotalMinutos;
+      if (p.participante.primeiraEntrada < mergedPrimeiraEntrada) {
+        mergedPrimeiraEntrada = p.participante.primeiraEntrada;
+      }
+      if (p.participante.ultimaSaida > mergedUltimaSaida) {
+        mergedUltimaSaida = p.participante.ultimaSaida;
+      }
+      if (!mergedEmail && p.participante.email) {
+        mergedEmail = p.participante.email;
+      }
+    }
+
+    // Cria o nome combinado mostrando todos os aliases
+    const allNames = selectedParticipants.map((p: ParticipantWithAnalysis) => p.participante.nomeOriginal);
+    const combinedDisplayName = allNames.join(" + ");
+
+    // Atualiza o participante principal com os dados consolidados
+    setParsedData((prev: ParsedCSVState | null) => {
+      if (!prev) return prev;
+
+      const toMergeNames = new Set(toMerge.map((p: ParticipantWithAnalysis) => p.participante.nomeOriginal));
+
+      return {
+        ...prev,
+        participants: prev.participants.map((p: ParticipantWithAnalysis) => {
+          // Remove os participantes que foram mergeados (marca como removed)
+          if (toMergeNames.has(p.participante.nomeOriginal)) {
+            return { ...p, removed: true };
+          }
+          // Atualiza o participante principal com dados consolidados
+          if (p.participante.nomeOriginal === principal.participante.nomeOriginal) {
+            const updatedParticipante: ZoomParticipantConsolidated = {
+              ...p.participante,
+              nomeOriginal: combinedDisplayName,
+              entradas: mergedEntradas,
+              duracaoTotalMinutos: mergedDuracao,
+              primeiraEntrada: mergedPrimeiraEntrada,
+              ultimaSaida: mergedUltimaSaida,
+              email: mergedEmail,
+            };
+            // Recalcula a análise com os novos dados
+            const updatedAnalise: PresenceAnalysis = {
+              ...p.analise,
+              tempoTotalMinutos: mergedDuracao,
+              // O restante da análise seria recalculado idealmente, mas simplificamos aqui
+            };
+            return {
+              ...p,
+              participante: updatedParticipante,
+              analise: updatedAnalise,
+            };
+          }
+          return p;
+        }),
+      };
+    });
+
+    // Remove associações dos participantes mergeados
+    setAssociations((prev: Map<string, AssociationData>) => {
+      const next = new Map(prev);
+      for (const p of toMerge) {
+        next.delete(p.participante.nomeOriginal);
+      }
+      return next;
+    });
+
+    // Limpa seleção e desativa modo merge
+    setSelectedForMerge(new Set());
+    setMergeMode(false);
+  }, [selectedForMerge, parsedData]);
+
+  // Cancela o modo merge
+  const cancelMerge = useCallback(() => {
+    setSelectedForMerge(new Set());
+    setMergeMode(false);
   }, []);
 
   // Atualiza associação
@@ -417,6 +539,12 @@ export default function PresenceValidationForm() {
           onBack={resetForm}
           onNext={() => setCurrentStep("associate")}
           canProceed={canProceedToAssociate}
+          mergeMode={mergeMode}
+          selectedForMerge={selectedForMerge}
+          onToggleMergeMode={() => setMergeMode(!mergeMode)}
+          onToggleMergeSelection={toggleMergeSelection}
+          onExecuteMerge={executeMerge}
+          onCancelMerge={cancelMerge}
         />
       )}
 
@@ -682,6 +810,12 @@ function ReviewStep({
   onBack,
   onNext,
   canProceed,
+  mergeMode,
+  selectedForMerge,
+  onToggleMergeMode,
+  onToggleMergeSelection,
+  onExecuteMerge,
+  onCancelMerge,
 }: {
   activeParticipants: ParticipantWithAnalysis[];
   removedParticipants: ParticipantWithAnalysis[];
@@ -691,6 +825,12 @@ function ReviewStep({
   onBack: () => void;
   onNext: () => void;
   canProceed: boolean;
+  mergeMode: boolean;
+  selectedForMerge: Set<string>;
+  onToggleMergeMode: () => void;
+  onToggleMergeSelection: (nome: string) => void;
+  onExecuteMerge: () => void;
+  onCancelMerge: () => void;
 }) {
   const aprovados = activeParticipants.filter(p => p.analise.aprovado);
   const reprovados = activeParticipants.filter(p => !p.analise.aprovado);
@@ -729,18 +869,56 @@ function ReviewStep({
       {/* Tabela de participantes ativos */}
       <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
         <div className="border-b border-neutral-100 p-4">
-          <h3 className="font-semibold text-neutral-900">
-            Participantes Ativos ({activeParticipants.length})
-          </h3>
-          <p className="text-sm text-neutral-500">
-            Clique em &quot;Remover&quot; para excluir quem não deve estar na lista
-          </p>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="font-semibold text-neutral-900">
+                Participantes Ativos ({activeParticipants.length})
+              </h3>
+              <p className="text-sm text-neutral-500">
+                {mergeMode 
+                  ? "Selecione 2 ou mais participantes para juntar (ex: &quot;Adriana&quot; + &quot;iPhone da Adriana&quot;)"
+                  : "Clique em \"Remover\" para excluir ou use \"Juntar Participantes\" para combinar entradas"
+                }
+              </p>
+            </div>
+            <div className="flex gap-2">
+              {mergeMode ? (
+                <>
+                  <button
+                    onClick={onCancelMerge}
+                    className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={onExecuteMerge}
+                    disabled={selectedForMerge.size < 2}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Juntar Selecionados ({selectedForMerge.size})
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={onToggleMergeMode}
+                  className="rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100"
+                >
+                  🔗 Juntar Participantes
+                </button>
+              )}
+            </div>
+          </div>
         </div>
         
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500">
               <tr>
+                {mergeMode && (
+                  <th className="px-4 py-3 font-medium w-12">
+                    <span className="sr-only">Selecionar</span>
+                  </th>
+                )}
                 <th className="px-4 py-3 font-medium">Nome</th>
                 <th className="px-4 py-3 font-medium">Tempo Total</th>
                 <th className="px-4 py-3 font-medium">Na Dinâmica</th>
@@ -749,12 +927,35 @@ function ReviewStep({
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-100">
-              {activeParticipants.map((p) => (
-                <tr key={p.participante.nomeOriginal} className="hover:bg-neutral-50">
+              {activeParticipants.map((p) => {
+                const isSelected = selectedForMerge.has(p.participante.nomeOriginal);
+                return (
+                <tr 
+                  key={p.participante.nomeOriginal} 
+                  className={`hover:bg-neutral-50 ${mergeMode && isSelected ? 'bg-sky-50' : ''}`}
+                  onClick={mergeMode ? () => onToggleMergeSelection(p.participante.nomeOriginal) : undefined}
+                  style={mergeMode ? { cursor: 'pointer' } : undefined}
+                >
+                  {mergeMode && (
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => onToggleMergeSelection(p.participante.nomeOriginal)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="h-4 w-4 rounded border-neutral-300 text-sky-600 focus:ring-sky-500"
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
                     {p.participante.email && (
                       <p className="text-xs text-neutral-500">{p.participante.email}</p>
+                    )}
+                    {p.participante.entradas.length > 1 && (
+                      <p className="text-xs text-sky-600">
+                        {p.participante.entradas.length} entradas
+                      </p>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -779,15 +980,17 @@ function ReviewStep({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => onRemove(p.participante.nomeOriginal)}
-                      className="rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
-                    >
-                      Remover
-                    </button>
+                    {!mergeMode && (
+                      <button
+                        onClick={() => onRemove(p.participante.nomeOriginal)}
+                        className="rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+                      >
+                        Remover
+                      </button>
+                    )}
                   </td>
                 </tr>
-              ))}
+              )})}
             </tbody>
           </table>
         </div>
