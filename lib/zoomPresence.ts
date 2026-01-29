@@ -212,10 +212,32 @@ function parseCSVLine(line: string): string[] {
 }
 
 /**
+ * Verifica se um nome deve ser excluído (equipe, hosts, etc.)
+ */
+function shouldExcludeName(normalized: string, excludeList: string[]): boolean {
+  for (const exclude of excludeList) {
+    const excludeNormalized = normalizeNameForMatch(exclude);
+    if (!excludeNormalized) continue;
+    
+    // Match exato ou se o nome começa com o termo de exclusão
+    if (normalized === excludeNormalized || normalized.startsWith(excludeNormalized + " ")) {
+      return true;
+    }
+    
+    // Match parcial (contém o termo)
+    if (normalized.includes(excludeNormalized)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Consolida participantes com mesmo nome (múltiplas entradas/saídas)
  */
 export function consolidateParticipants(
-  participants: ZoomParticipantRaw[]
+  participants: ZoomParticipantRaw[],
+  excludeNames: string[] = []
 ): ZoomParticipantConsolidated[] {
   const byName = new Map<string, ZoomParticipantConsolidated>();
 
@@ -224,6 +246,11 @@ export function consolidateParticipants(
     
     // Ignora nomes genéricos
     if (isGenericName(normalized)) {
+      continue;
+    }
+
+    // Ignora nomes na lista de exclusão (equipe)
+    if (excludeNames.length > 0 && shouldExcludeName(normalized, excludeNames)) {
       continue;
     }
 

@@ -93,6 +93,7 @@ export async function processPresenceAction(
     const fimDinamicaStr = formData.get("fimDinamica") as string;
     const tempoMinimoStr = formData.get("tempoMinimo") as string;
     const percentualMinimoStr = formData.get("percentualMinimo") as string;
+    const excluirNomesStr = formData.get("excluirNomes") as string;
 
     // Validações básicas
     if (!file || file.size === 0) {
@@ -135,8 +136,11 @@ export async function processPresenceAction(
       };
     }
 
-    // Consolida participantes
-    const consolidated = consolidateParticipants(rawParticipants);
+    // Consolida participantes (excluindo equipe)
+    const excludeNames = excluirNomesStr
+      ? excluirNomesStr.split(/[,\n]/).map((n) => n.trim()).filter(Boolean)
+      : [];
+    const consolidated = consolidateParticipants(rawParticipants, excludeNames);
 
     // Parse das datas
     const inicioLive = new Date(inicioLiveStr);

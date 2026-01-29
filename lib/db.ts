@@ -410,6 +410,9 @@ function createPool(): Pool {
   return new Pool({
     connectionString,
     application_name: "painel-inscricoes",
+    max: 5, // Limita conexões para evitar esgotar o pool do servidor
+    idleTimeoutMillis: 30000, // Fecha conexões ociosas após 30s
+    connectionTimeoutMillis: 10000, // Timeout de 10s para conexão
     ssl: sslDisabled
       ? false
       : {

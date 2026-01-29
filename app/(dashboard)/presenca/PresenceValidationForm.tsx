@@ -207,6 +207,22 @@ export default function PresenceValidationForm() {
               </label>
               <p className="mt-1 text-xs text-neutral-500">Padrão: 90% de presença na dinâmica</p>
             </div>
+
+            {/* Excluir nomes (equipe) */}
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-neutral-700">
+                Excluir da análise (equipe)
+                <textarea
+                  name="excluirNomes"
+                  rows={2}
+                  placeholder="Rodrigo Damaceno, Admin, Leonardo Augusto..."
+                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                />
+              </label>
+              <p className="mt-1 text-xs text-neutral-500">
+                Nomes separados por vírgula ou um por linha. Hosts, coordenadores, etc.
+              </p>
+            </div>
           </div>
 
           <div className="flex justify-end pt-2">
