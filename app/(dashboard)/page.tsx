@@ -1,8 +1,7 @@
-import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot, getDuplicateSummaryCount } from "@/lib/db";
+import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot } from "@/lib/db";
 import DashboardMetrics from "@/components/DashboardMetrics";
 import DashboardCharts from "@/components/DashboardCharts";
 import TrainingSwitcher from "@/components/TrainingSwitcher";
-import DuplicateNotification from "@/components/DuplicateNotification";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 
@@ -24,14 +23,6 @@ function pickStringParam(value: string | string[] | undefined): string | undefin
 export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
-  
-  // Busca duplicados separadamente com tratamento de erro
-  let duplicateSummary = { totalGroups: 0, topReasons: [] as Array<{ reason: "telefone" | "email" | "nome-dia" | "payload"; count: number }> };
-  try {
-    duplicateSummary = await getDuplicateSummaryCount({ windowDays: 30 });
-  } catch (error) {
-    console.error("Erro ao buscar duplicados:", error);
-  }
 
   const [stats, trainingOptions, trainingSnapshot] = await Promise.all([
     getDashboardStats(),
@@ -94,14 +85,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </Link>
         </div>
       </header>
-
-      {/* Duplicate Alert Notification */}
-      {duplicateSummary.totalGroups > 0 && (
-        <DuplicateNotification
-          totalGroups={duplicateSummary.totalGroups}
-          topReasons={duplicateSummary.topReasons}
-        />
-      )}
 
       {/* Metrics Cards */}
       <DashboardMetrics 
