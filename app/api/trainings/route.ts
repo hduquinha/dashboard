@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { listTrainingOptions } from "@/lib/trainings";
+import { listTrainingsWithStats } from "@/lib/db";
 
 export async function GET() {
   try {
-    const trainings = listTrainingOptions();
+    const trainings = await listTrainingsWithStats();
     
     return NextResponse.json({
       trainings: trainings.map((t) => ({
