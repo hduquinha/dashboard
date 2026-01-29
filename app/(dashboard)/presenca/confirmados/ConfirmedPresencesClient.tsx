@@ -13,6 +13,8 @@ import {
   ChevronDown,
   UserCheck,
   UserX,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 
 interface PresenceRecord {
@@ -74,6 +76,49 @@ export default function ConfirmedPresencesClient() {
   // Stats
   const [totalAprovados, setTotalAprovados] = useState(0);
   const [totalReprovados, setTotalReprovados] = useState(0);
+
+  // Remoção de presença
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  // Função para remover presença
+  const handleRemovePresence = async (inscricaoId: number, nome: string) => {
+    if (!confirm(`Tem certeza que deseja desassociar a presença de "${nome}"?\n\nIsso irá remover a validação de presença e descontabilizar do ranking.`)) {
+      return;
+    }
+
+    setRemovingId(inscricaoId);
+
+    try {
+      const response = await fetch("/api/presence/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inscricaoId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "Erro ao remover presença");
+      }
+
+      // Remove da lista local
+      setPresences((prev) => prev.filter((p) => p.inscricaoId !== inscricaoId));
+      
+      // Atualiza contadores
+      const removed = presences.find((p) => p.inscricaoId === inscricaoId);
+      if (removed) {
+        if (removed.aprovado) {
+          setTotalAprovados((prev) => prev - 1);
+        } else {
+          setTotalReprovados((prev) => prev - 1);
+        }
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erro ao remover presença");
+    } finally {
+      setRemovingId(null);
+    }
+  };
 
   // Carregar dados
   useEffect(() => {
@@ -366,6 +411,7 @@ export default function ConfirmedPresencesClient() {
                   <th className="px-6 py-3">Dinâmica</th>
                   <th className="px-6 py-3">Status</th>
                   <th className="px-6 py-3">Validado</th>
+                  <th className="px-6 py-3">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-neutral-100">
@@ -435,6 +481,22 @@ export default function ConfirmedPresencesClient() {
                     </td>
                     <td className="px-6 py-4 text-xs text-neutral-500">
                       {formatDate(p.validadoEm)}
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={() => handleRemovePresence(p.inscricaoId, p.nome)}
+                        disabled={removingId === p.inscricaoId}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Desassociar presença"
+                      >
+                        {removingId === p.inscricaoId ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-4 w-4" />
+                        )}
+                        Desassociar
+                      </button>
                     </td>
                   </tr>
                 ))}
