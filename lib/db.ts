@@ -43,7 +43,7 @@ interface RecruiterCache {
 const recruiterDbCache = new Map<string, RecruiterCache | null>();
 let recruiterCacheLoaded = false;
 
-async function loadRecruiterCache(): Promise<void> {
+export async function loadRecruiterCache(): Promise<void> {
   if (recruiterCacheLoaded) {
     return;
   }
@@ -91,7 +91,7 @@ async function loadRecruiterCache(): Promise<void> {
   }
 }
 
-function getRecruiterFromCache(code: string | null): RecruiterCache | null {
+export function getRecruiterFromCache(code: string | null): RecruiterCache | null {
   if (!code) {
     return null;
   }
@@ -2076,6 +2076,9 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
 export async function getDashboardStats(): Promise<DashboardStats> {
   const pool = getPool();
 
+  // Carregar cache de recrutadores do banco
+  await loadRecruiterCache();
+
   // 1. Basic Counts
   const totalRes = await pool.query(`SELECT COUNT(*) FROM ${SCHEMA_NAME}.inscricoes`);
   const totalLeads = parseInt(totalRes.rows[0].count, 10);
@@ -2133,9 +2136,12 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   `);
 
   const topRecruiters = topRecruitersRes.rows.map(row => {
-    const recruiter = getRecruiterByCode(row.code);
+    // Primeiro tenta a lista estática, depois o cache do banco
+    const recruiterStatic = getRecruiterByCode(row.code);
+    const recruiterDb = getRecruiterFromCache(row.code);
+    const name = recruiterStatic?.name ?? recruiterDb?.name ?? `Recrutador ${row.code}`;
     return {
-      name: recruiter ? recruiter.name : `Recrutador ${row.code}`,
+      name,
       recruits: parseInt(row.recruits, 10)
     };
   });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "@/lib/db";
+import { getPool, loadRecruiterCache, getRecruiterFromCache } from "@/lib/db";
 import { getRecruiterByCode } from "@/lib/recruiters";
 
 const SCHEMA_NAME = "inscricoes";
@@ -25,6 +25,9 @@ export async function GET(
         { status: 400 }
       );
     }
+
+    // Carrega cache de recrutadores do banco
+    await loadRecruiterCache();
 
     const pool = getPool();
 
@@ -70,7 +73,8 @@ export async function GET(
 
     type RankingRow = typeof rows[number];
     const ranking: RecruiterRanking[] = rows.map((row: RankingRow) => {
-      const recruiter = getRecruiterByCode(row.recrutador_codigo);
+      const recruiterStatic = getRecruiterByCode(row.recrutador_codigo);
+      const recruiterDb = getRecruiterFromCache(row.recrutador_codigo);
       const percentual =
         row.total_inscritos > 0
           ? Math.round((row.total_aprovados / row.total_inscritos) * 100)
@@ -78,7 +82,7 @@ export async function GET(
 
       return {
         recrutadorCodigo: row.recrutador_codigo,
-        recrutadorNome: recruiter?.name ?? `Recrutador ${row.recrutador_codigo}`,
+        recrutadorNome: recruiterStatic?.name ?? recruiterDb?.name ?? `Recrutador ${row.recrutador_codigo}`,
         totalInscritos: row.total_inscritos,
         totalAprovados: row.total_aprovados,
         percentualAprovacao: percentual,
