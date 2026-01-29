@@ -30,9 +30,10 @@ export default function PresenceValidationForm() {
     status: AssociationStatus;
   }>>(new Map());
 
-  // Estado para busca na lista de inscrições
-  const [inscricaoSearch, setInscricaoSearch] = useState("");
-  const [showInscricaoList, setShowInscricaoList] = useState(false);
+  // Estado para modal de seleção de inscrição
+  const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [searchModalParticipante, setSearchModalParticipante] = useState<string | null>(null);
+  const [searchModalQuery, setSearchModalQuery] = useState("");
 
   // Calcula inscrições já usadas (confirmadas ou auto-matched)
   const usedInscricaoIds = useMemo(() => {
@@ -56,23 +57,6 @@ export default function PresenceValidationForm() {
     }
     return firstNames;
   }, [state.result?.inscricoesDisponiveis]);
-
-  // Filtra inscrições disponíveis (não usadas e que correspondem à busca)
-  const filteredInscricoes = useMemo(() => {
-    if (!state.result?.inscricoesDisponiveis) return [];
-    
-    return state.result.inscricoesDisponiveis
-      .filter((insc) => !usedInscricaoIds.has(insc.id))
-      .filter((insc) => {
-        if (!inscricaoSearch.trim()) return true;
-        const search = inscricaoSearch.toLowerCase();
-        return (
-          insc.nome.toLowerCase().includes(search) ||
-          insc.telefone?.includes(search) ||
-          insc.cidade?.toLowerCase().includes(search)
-        );
-      });
-  }, [state.result?.inscricoesDisponiveis, usedInscricaoIds, inscricaoSearch]);
 
   // Carrega treinamentos
   useEffect(() => {
@@ -132,6 +116,55 @@ export default function PresenceValidationForm() {
       return next;
     });
   };
+
+  // Abre modal de busca para um participante
+  const openSearchModal = (participanteNome: string) => {
+    const firstName = participanteNome.split(" ")[0];
+    setSearchModalParticipante(participanteNome);
+    setSearchModalQuery(firstName); // Pré-preenche com primeiro nome
+    setSearchModalOpen(true);
+  };
+
+  // Seleciona uma inscrição no modal
+  const selectFromModal = (inscricaoId: number) => {
+    if (searchModalParticipante) {
+      updateAssociation(searchModalParticipante, inscricaoId, "confirmed");
+    }
+    setSearchModalOpen(false);
+    setSearchModalParticipante(null);
+    setSearchModalQuery("");
+  };
+
+  // Inscrições filtradas para o modal
+  const modalFilteredInscricoes = useMemo(() => {
+    if (!state.result?.inscricoesDisponiveis) return [];
+    
+    const query = searchModalQuery.toLowerCase().trim();
+    
+    return state.result.inscricoesDisponiveis
+      .map((insc) => {
+        const firstName = insc.nome.split(" ")[0].toLowerCase();
+        const matchesQuery = !query || 
+          insc.nome.toLowerCase().includes(query) ||
+          insc.telefone?.includes(query) ||
+          insc.cidade?.toLowerCase().includes(query);
+        
+        // Calcula relevância para ordenação
+        const relevance = query && insc.nome.toLowerCase().startsWith(query) ? 2 :
+                         query && firstName === query ? 1 : 0;
+        
+        return { ...insc, matchesQuery, relevance, isUsed: usedInscricaoIds.has(insc.id) };
+      })
+      .filter((insc) => insc.matchesQuery)
+      .sort((a, b) => {
+        // Não usadas primeiro
+        if (a.isUsed !== b.isUsed) return a.isUsed ? 1 : -1;
+        // Maior relevância primeiro
+        if (a.relevance !== b.relevance) return b.relevance - a.relevance;
+        // Alfabético
+        return a.nome.localeCompare(b.nome);
+      });
+  }, [state.result?.inscricoesDisponiveis, searchModalQuery, usedInscricaoIds]);
 
   const hasResult = state.status === "success" && state.result;
 
@@ -335,86 +368,6 @@ export default function PresenceValidationForm() {
             </div>
           </div>
 
-          {/* Lista de Inscrições Disponíveis */}
-          <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setShowInscricaoList(!showInscricaoList)}
-              className="w-full flex items-center justify-between p-4 text-left hover:bg-neutral-50"
-            >
-              <div>
-                <h3 className="font-semibold text-neutral-900">
-                  📋 Lista de Inscrições ({filteredInscricoes.length} disponíveis)
-                </h3>
-                <p className="text-sm text-neutral-500">
-                  {usedInscricaoIds.size} já associadas • Clique para {showInscricaoList ? "ocultar" : "expandir"}
-                </p>
-              </div>
-              <span className="text-neutral-400">{showInscricaoList ? "▲" : "▼"}</span>
-            </button>
-            
-            {showInscricaoList && (
-              <div className="border-t border-neutral-100 p-4">
-                <input
-                  type="text"
-                  placeholder="Buscar por nome, telefone ou cidade..."
-                  value={inscricaoSearch}
-                  onChange={(e) => setInscricaoSearch(e.target.value)}
-                  className="mb-4 w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-                />
-                
-                <div className="max-h-80 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500 sticky top-0">
-                      <tr>
-                        <th className="px-3 py-2 font-medium">Nome</th>
-                        <th className="px-3 py-2 font-medium">Telefone</th>
-                        <th className="px-3 py-2 font-medium">Cidade</th>
-                        <th className="px-3 py-2 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-neutral-100">
-                      {filteredInscricoes.map((insc) => {
-                        const firstName = insc.nome.split(" ")[0].toLowerCase();
-                        const duplicateCount = nameDuplicates.get(firstName) || 0;
-                        const isUsed = usedInscricaoIds.has(insc.id);
-                        
-                        return (
-                          <tr key={insc.id} className={isUsed ? "bg-emerald-50 opacity-60" : "hover:bg-neutral-50"}>
-                            <td className="px-3 py-2">
-                              <span className="font-medium text-neutral-900">{insc.nome}</span>
-                              {duplicateCount > 1 && (
-                                <span className="ml-2 text-xs text-amber-600 font-medium">
-                                  ({duplicateCount} {firstName}s)
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-neutral-600">{insc.telefone || "-"}</td>
-                            <td className="px-3 py-2 text-neutral-600">{insc.cidade || "-"}</td>
-                            <td className="px-3 py-2">
-                              {isUsed ? (
-                                <span className="text-xs text-emerald-600 font-medium">✓ Associada</span>
-                              ) : (
-                                <span className="text-xs text-neutral-400">Disponível</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                      {filteredInscricoes.length === 0 && (
-                        <tr>
-                          <td colSpan={4} className="px-3 py-8 text-center text-neutral-500">
-                            Nenhuma inscrição encontrada
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* Tabela de Aprovados */}
           <PresenceTable
             title="✅ Participantes Aprovados"
@@ -422,8 +375,7 @@ export default function PresenceValidationForm() {
             data={state.result!.aprovados}
             associations={associations}
             onUpdateAssociation={updateAssociation}
-            inscricoesDisponiveis={filteredInscricoes}
-            usedInscricaoIds={usedInscricaoIds}
+            onOpenSearch={openSearchModal}
             showActions
           />
 
@@ -434,6 +386,7 @@ export default function PresenceValidationForm() {
             data={state.result!.reprovados}
             associations={associations}
             onUpdateAssociation={updateAssociation}
+            onOpenSearch={openSearchModal}
           />
 
           {/* Botão de Confirmar */}
@@ -466,6 +419,112 @@ export default function PresenceValidationForm() {
               {confirmResult.message}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal de Busca de Inscrição */}
+      {searchModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-neutral-200 p-4">
+              <div>
+                <h3 className="text-lg font-semibold text-neutral-900">Buscar Inscrição</h3>
+                <p className="text-sm text-neutral-500">
+                  Associar a: <strong>{searchModalParticipante}</strong>
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setSearchModalOpen(false);
+                  setSearchModalParticipante(null);
+                  setSearchModalQuery("");
+                }}
+                className="rounded-lg p-2 hover:bg-neutral-100"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Search */}
+            <div className="border-b border-neutral-100 p-4">
+              <input
+                type="text"
+                placeholder="Buscar por nome, telefone ou cidade..."
+                value={searchModalQuery}
+                onChange={(e) => setSearchModalQuery(e.target.value)}
+                autoFocus
+                className="w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+              />
+              <p className="mt-2 text-xs text-neutral-500">
+                {modalFilteredInscricoes.length} resultados • 
+                {usedInscricaoIds.size} já associadas
+              </p>
+            </div>
+
+            {/* Lista */}
+            <div className="max-h-96 overflow-y-auto p-2">
+              {modalFilteredInscricoes.length === 0 ? (
+                <p className="py-8 text-center text-neutral-500">Nenhuma inscrição encontrada</p>
+              ) : (
+                <div className="space-y-1">
+                  {modalFilteredInscricoes.map((insc) => {
+                    const firstName = insc.nome.split(" ")[0].toLowerCase();
+                    const duplicateCount = nameDuplicates.get(firstName) || 0;
+                    
+                    return (
+                      <button
+                        key={insc.id}
+                        onClick={() => !insc.isUsed && selectFromModal(insc.id)}
+                        disabled={insc.isUsed}
+                        className={`w-full rounded-lg p-3 text-left transition ${
+                          insc.isUsed
+                            ? "cursor-not-allowed bg-neutral-50 opacity-50"
+                            : "hover:bg-neutral-100"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="font-medium text-neutral-900">
+                              {insc.nome}
+                              {duplicateCount > 1 && (
+                                <span className="ml-2 text-xs font-normal text-amber-600">
+                                  ⚠ {duplicateCount} pessoas com nome &quot;{firstName}&quot;
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-sm text-neutral-500">
+                              {insc.telefone || "Sem telefone"}
+                              {insc.cidade && ` • ${insc.cidade}`}
+                            </p>
+                          </div>
+                          {insc.isUsed ? (
+                            <span className="text-xs text-neutral-400">Já associada</span>
+                          ) : (
+                            <span className="text-xs text-emerald-600">Selecionar →</span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-neutral-200 p-4">
+              <button
+                onClick={() => {
+                  setSearchModalOpen(false);
+                  setSearchModalParticipante(null);
+                  setSearchModalQuery("");
+                }}
+                className="w-full rounded-lg border border-neutral-300 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -506,8 +565,7 @@ function PresenceTable({
   data,
   associations,
   onUpdateAssociation,
-  inscricoesDisponiveis = [],
-  usedInscricaoIds = new Set(),
+  onOpenSearch,
   showActions = false,
 }: {
   title: string;
@@ -515,8 +573,7 @@ function PresenceTable({
   data: PresenceAssociation[];
   associations: Map<string, { inscricaoId: number | null; status: AssociationStatus }>;
   onUpdateAssociation: (nome: string, inscricaoId: number | null, status: AssociationStatus) => void;
-  inscricoesDisponiveis?: InscricaoSimplificada[];
-  usedInscricaoIds?: Set<number>;
+  onOpenSearch?: (participanteNome: string) => void;
   showActions?: boolean;
 }) {
   if (data.length === 0) {
@@ -577,57 +634,34 @@ function PresenceTable({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    {(() => {
-                      const currentAssocId = currentAssoc?.inscricaoId || item.inscricaoId;
-                      const currentInsc = inscricoesDisponiveis.find(i => i.id === currentAssocId);
-                      const displayName = currentInsc?.nome || item.inscricaoNome;
-                      const displayPhone = currentInsc?.telefone || item.inscricaoTelefone;
-                      
-                      return (
-                        <div className="space-y-1">
-                          {displayName ? (
-                            <div>
-                              <p className="text-neutral-900">{displayName}</p>
-                              {displayPhone && (
-                                <p className="text-xs text-neutral-500">{displayPhone}</p>
-                              )}
-                              {item.matchScore && (
-                                <p className="text-xs text-neutral-400">
-                                  Score: {item.matchScore}% {item.matchReason && `(${item.matchReason})`}
-                                </p>
-                              )}
-                            </div>
-                          ) : (
-                            <span className="text-amber-600 italic">Sem correspondência</span>
+                    <div className="space-y-1">
+                      {item.inscricaoNome ? (
+                        <div>
+                          <p className="text-neutral-900">{item.inscricaoNome}</p>
+                          {item.inscricaoTelefone && (
+                            <p className="text-xs text-neutral-500">{item.inscricaoTelefone}</p>
                           )}
-                          
-                          {/* Dropdown para seleção manual */}
-                          {showActions && inscricoesDisponiveis.length > 0 && (
-                            <select
-                              value={currentAssocId || ""}
-                              onChange={(e) => {
-                                const newId = e.target.value ? parseInt(e.target.value, 10) : null;
-                                onUpdateAssociation(
-                                  item.participanteNome,
-                                  newId,
-                                  newId ? "confirmed" : "manual-pending"
-                                );
-                              }}
-                              className="mt-1 w-full rounded border border-neutral-200 px-2 py-1 text-xs focus:border-neutral-400 focus:outline-none"
-                            >
-                              <option value="">-- Selecionar manualmente --</option>
-                              {inscricoesDisponiveis
-                                .filter(i => i.id === currentAssocId || !usedInscricaoIds.has(i.id))
-                                .map((insc) => (
-                                  <option key={insc.id} value={insc.id}>
-                                    {insc.nome}{insc.cidade ? ` (${insc.cidade})` : ""}
-                                  </option>
-                                ))}
-                            </select>
+                          {item.matchScore && (
+                            <p className="text-xs text-neutral-400">
+                              Score: {item.matchScore}% {item.matchReason && `(${item.matchReason})`}
+                            </p>
                           )}
                         </div>
-                      );
-                    })()}
+                      ) : (
+                        <span className="text-amber-600 italic">Sem correspondência</span>
+                      )}
+                      
+                      {/* Botão para abrir modal de busca */}
+                      {onOpenSearch && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSearch(item.participanteNome)}
+                          className="mt-1 rounded border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
+                        >
+                          🔍 Buscar inscrição
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={status} />
