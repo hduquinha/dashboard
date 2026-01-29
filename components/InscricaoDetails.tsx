@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { Recruiter } from "@/lib/recruiters";
+import type { AnamneseResposta } from "@/lib/anamnese";
 
 interface InscricaoDetailsProps {
   inscricao: InscricaoItem | null;
@@ -86,6 +87,8 @@ export default function InscricaoDetails({
   const [noteContent, setNoteContent] = useState("");
   const [noteWhatsapp, setNoteWhatsapp] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
+  const [anamneses, setAnamneses] = useState<AnamneseResposta[]>([]);
+  const [isLoadingAnamnese, setIsLoadingAnamnese] = useState(false);
   const recruiterFieldId = useId();
 
   useEffect(() => {
@@ -119,7 +122,34 @@ export default function InscricaoDetails({
     setNoteContent("");
     setNoteWhatsapp(false);
     setIsSavingNote(false);
+    setAnamneses([]);
+    setIsLoadingAnamnese(false);
   }, [inscricao]);
+
+  // Carregar anamnese quando a inscrição é de um recrutador (tem código próprio)
+  useEffect(() => {
+    if (!inscricao || !inscricao.codigoProprio) {
+      setAnamneses([]);
+      return;
+    }
+
+    const fetchAnamnese = async () => {
+      setIsLoadingAnamnese(true);
+      try {
+        const response = await fetch(`/api/anamnese/${encodeURIComponent(inscricao.codigoProprio!)}`);
+        if (response.ok) {
+          const data = await response.json();
+          setAnamneses(data.anamneses ?? []);
+        }
+      } catch (error) {
+        console.error("Failed to load anamnese:", error);
+      } finally {
+        setIsLoadingAnamnese(false);
+      }
+    };
+
+    fetchAnamnese();
+  }, [inscricao?.codigoProprio]);
 
   const createdAt = useMemo(() => {
     if (!inscricao) {
@@ -780,6 +810,85 @@ export default function InscricaoDetails({
             </div>
           )}
 
+          {/* Seção de Anamnese - aparece quando o recrutador tem anamnese vinculada */}
+          {inscricao.codigoProprio && (
+            <section className="space-y-3 rounded-xl border border-purple-200 bg-gradient-to-r from-purple-50 to-purple-100/50 p-4 shadow-sm">
+              <header className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🧠</span>
+                  <h3 className="text-sm font-bold text-purple-900">Anamnese</h3>
+                </div>
+                {isLoadingAnamnese ? (
+                  <span className="text-xs text-purple-600">Carregando...</span>
+                ) : (
+                  <span className="rounded-full bg-purple-200 px-2.5 py-0.5 text-xs font-semibold text-purple-800">
+                    {anamneses.length} resposta{anamneses.length === 1 ? "" : "s"}
+                  </span>
+                )}
+              </header>
+              
+              {isLoadingAnamnese ? (
+                <div className="flex justify-center py-6">
+                  <div className="h-6 w-6 animate-spin rounded-full border-2 border-purple-300 border-t-purple-600"></div>
+                </div>
+              ) : anamneses.length === 0 ? (
+                <p className="py-4 text-center text-sm text-purple-600">
+                  Nenhuma anamnese vinculada a este recrutador.
+                </p>
+              ) : (
+                <div className="space-y-4">
+                  {anamneses.map((anamnese) => (
+                    <div key={anamnese.id} className="rounded-lg border border-purple-200 bg-white p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <span className="text-xs font-semibold text-purple-700">
+                          Enviada em {anamnese.data_envio ? new Date(anamnese.data_envio).toLocaleDateString("pt-BR") : "Data desconhecida"}
+                        </span>
+                        <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700">
+                          ID #{anamnese.id}
+                        </span>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {anamnese.momento_atual && (
+                          <AnamneseField label="Momento Atual" value={anamnese.momento_atual} />
+                        )}
+                        {anamnese.dificuldade_barreira && (
+                          <AnamneseField label="Maior Dificuldade" value={anamnese.dificuldade_barreira} />
+                        )}
+                        {anamnese.maior_medo && (
+                          <AnamneseField label="Maior Medo" value={anamnese.maior_medo} />
+                        )}
+                        {anamnese.tempo_disponivel && (
+                          <AnamneseField label="Tempo Disponível" value={anamnese.tempo_disponivel} />
+                        )}
+                        {anamnese.visao_instituto && (
+                          <AnamneseField label="Visão do Instituto" value={anamnese.visao_instituto} />
+                        )}
+                        {anamnese.visao_futuro && (
+                          <AnamneseField label="Visão de Futuro" value={anamnese.visao_futuro} />
+                        )}
+                        {anamnese.contribuicao && (
+                          <AnamneseField label="Contribuição" value={anamnese.contribuicao} />
+                        )}
+                        {anamnese.sonhos_objetivos && (
+                          <AnamneseField label="Sonhos e Objetivos" value={anamnese.sonhos_objetivos} />
+                        )}
+                        {anamnese.o_que_falta && (
+                          <AnamneseField label="O que Falta" value={anamnese.o_que_falta} />
+                        )}
+                        {anamnese.como_ajudar && (
+                          <AnamneseField label="Como Podemos Ajudar" value={anamnese.como_ajudar} />
+                        )}
+                        {anamnese.renda_necessaria && (
+                          <AnamneseField label="Renda Necessária" value={anamnese.renda_necessaria} />
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           <details className="group rounded-xl border border-neutral-200 bg-white shadow-sm" open>
             <summary className="cursor-pointer rounded-t-xl bg-gradient-to-r from-[#0f172a] to-[#1e293b] px-4 py-3 text-sm font-bold text-white hover:from-[#1e293b] hover:to-[#0f172a]">
               📋 Informações do Formulário
@@ -815,6 +924,15 @@ export default function InscricaoDetails({
           </details>
         </div>
       </div>
+    </div>
+  );
+}
+
+function AnamneseField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg bg-purple-50 p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-purple-700">{label}</p>
+      <p className="mt-1 text-sm text-purple-900">{value}</p>
     </div>
   );
 }

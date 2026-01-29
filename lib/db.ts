@@ -2103,3 +2103,55 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     topRecruiters
   };
 }
+
+/**
+ * Busca uma inscrição pelo código próprio do recrutador.
+ * Usado para encontrar a inscrição de um recrutador quando vinculamos uma anamnese.
+ */
+export async function getInscricaoByRecruiterCode(code: string): Promise<InscricaoItem | null> {
+  if (!code || typeof code !== "string") {
+    return null;
+  }
+
+  const normalizedCode = normalizeRecruiterCode(code);
+  if (!normalizedCode) {
+    return null;
+  }
+
+  await loadRecruiterCache();
+
+  const pool = getPool();
+
+  const query = `
+    SELECT 
+      i.id,
+      i.payload,
+      i.criado_em,
+      i.payload->>'nome' AS nome,
+      i.payload->>'telefone' AS telefone,
+      i.payload->>'cidade' AS cidade,
+      i.payload->>'profissao' AS profissao,
+      i.payload->>'treinamento' AS treinamento,
+      i.payload->>'traffic_source' AS traffic_source
+    FROM ${SCHEMA_NAME}.inscricoes i
+    WHERE (
+      LOWER(TRIM(COALESCE(i.payload->>'codigoRecrutador', ''))) = LOWER($1) OR
+      LOWER(TRIM(COALESCE(i.payload->>'codigo_recrutador', ''))) = LOWER($1) OR
+      LOWER(TRIM(COALESCE(i.payload->>'codigo', ''))) = LOWER($1) OR
+      LOWER(TRIM(COALESCE(i.payload->>'codigoProprio', ''))) = LOWER($1) OR
+      LOWER(TRIM(COALESCE(i.payload->>'codigo_indicador_proprio', ''))) = LOWER($1)
+    )
+    LIMIT 1
+  `;
+
+  try {
+    const { rows } = await pool.query<DbRow>(query, [normalizedCode.toLowerCase()]);
+    if (rows.length === 0) {
+      return null;
+    }
+    return mapDbRowToInscricaoItem(rows[0]);
+  } catch (error) {
+    console.error("Failed to get inscricao by recruiter code:", error);
+    return null;
+  }
+}

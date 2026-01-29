@@ -1,4 +1,5 @@
 import { getPool } from "@/lib/db";
+import { getInscricaoByRecruiterCode, updateInscricao } from "@/lib/db";
 
 export interface AnamneseResposta {
   id: number;
@@ -81,10 +82,50 @@ export async function linkAnamneseToRecruiter(anamneseId: number, recruiterCode:
   try {
     await ensureTable();
     const pool = getPool();
+    
+    // 1. Buscar os dados da anamnese
+    const anamneseResult = await pool.query(
+      `SELECT nome, telefone, cidade FROM anamnese_respostas WHERE id = $1`,
+      [anamneseId]
+    );
+    
+    if (anamneseResult.rows.length === 0) {
+      throw new Error("Anamnese não encontrada");
+    }
+    
+    const anamneseData = anamneseResult.rows[0];
+    
+    // 2. Vincular a anamnese ao recrutador
     await pool.query(
       `UPDATE anamnese_respostas SET recrutador_codigo = $1 WHERE id = $2`,
       [recruiterCode, anamneseId]
     );
+    
+    // 3. Buscar a inscrição do recrutador e atualizar com dados da anamnese
+    const inscricao = await getInscricaoByRecruiterCode(recruiterCode);
+    
+    if (inscricao) {
+      // Sobrepor os dados da inscrição com os dados da anamnese
+      const updates: { nome?: string; telefone?: string; cidade?: string } = {};
+      
+      if (anamneseData.nome && anamneseData.nome.trim()) {
+        updates.nome = anamneseData.nome.trim();
+      }
+      if (anamneseData.telefone && anamneseData.telefone.trim()) {
+        updates.telefone = anamneseData.telefone.trim();
+      }
+      if (anamneseData.cidade && anamneseData.cidade.trim()) {
+        updates.cidade = anamneseData.cidade.trim();
+      }
+      
+      // Só atualiza se tiver algo para atualizar
+      if (Object.keys(updates).length > 0) {
+        await updateInscricao(inscricao.id, updates);
+        console.log(`Inscrição ${inscricao.id} atualizada com dados da anamnese ${anamneseId}`);
+      }
+    } else {
+      console.warn(`Nenhuma inscrição encontrada para o recrutador ${recruiterCode} ao vincular anamnese`);
+    }
   } catch (error) {
     console.error("Failed to link anamnese.", error);
     throw error;
