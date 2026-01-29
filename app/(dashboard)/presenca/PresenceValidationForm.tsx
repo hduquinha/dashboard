@@ -1,44 +1,117 @@
 "use client";
 
-import { useState, useTransition, useEffect, useMemo } from "react";
-import { useFormState } from "react-dom";
-import { processPresenceAction, confirmPresenceAction } from "./actions";
-import type { PresenceFormState, PresenceAssociation, AssociationStatus, InscricaoSimplificada } from "@/types/presence";
+import React, { useState, useTransition, useEffect, useMemo, useCallback } from "react";
+import type { 
+  PresenceConfig, 
+  AssociationStatus, 
+  InscricaoSimplificada,
+  ZoomParticipantConsolidated,
+  PresenceAnalysis
+} from "@/types/presence";
 import { formatDuration } from "@/lib/zoomPresence";
 
-const initialState: PresenceFormState = {
-  status: "idle",
-  message: null,
-  result: null,
-  filename: null,
-};
+// ============================================================================
+// TIPOS LOCAIS
+// ============================================================================
 
 interface TrainingOption {
   id: string;
   label: string;
 }
 
-export default function PresenceValidationForm() {
-  const [state, formAction] = useFormState(processPresenceAction, initialState);
-  const [trainings, setTrainings] = useState<TrainingOption[]>([]);
-  const [isConfirming, startConfirm] = useTransition();
-  const [confirmResult, setConfirmResult] = useState<{ success: boolean; message: string } | null>(null);
-  
-  // Estado para associações editáveis
-  const [associations, setAssociations] = useState<Map<string, {
-    inscricaoId: number | null;
-    status: AssociationStatus;
-  }>>(new Map());
+type Step = "upload" | "review" | "associate" | "confirm";
 
-  // Estado para modal de seleção de inscrição
+interface ParticipantWithAnalysis {
+  participante: ZoomParticipantConsolidated;
+  analise: PresenceAnalysis;
+  removed: boolean;
+}
+
+interface AssociationData {
+  inscricaoId: number | null;
+  inscricaoNome: string | null;
+  inscricaoTelefone: string | null;
+  status: AssociationStatus;
+  matchScore: number;
+  matchReason: string | null;
+}
+
+interface ParsedCSVState {
+  participants: ParticipantWithAnalysis[];
+  config: PresenceConfig | null;
+  inscricoesDisponiveis: InscricaoSimplificada[];
+  filename: string;
+}
+
+// ============================================================================
+// COMPONENTE PRINCIPAL
+// ============================================================================
+
+export default function PresenceValidationForm() {
+  // Estado de navegação
+  const [currentStep, setCurrentStep] = useState<Step>("upload");
+  
+  // Estado dos dados
+  const [trainings, setTrainings] = useState<TrainingOption[]>([]);
+  const [parsedData, setParsedData] = useState<ParsedCSVState | null>(null);
+  const [associations, setAssociations] = useState<Map<string, AssociationData>>(new Map());
+  
+  // Estado de UI
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  
+  // Modal de busca
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchModalParticipante, setSearchModalParticipante] = useState<string | null>(null);
   const [searchModalQuery, setSearchModalQuery] = useState("");
 
-  // Calcula inscrições já usadas (confirmadas ou auto-matched)
+  // Confirmação
+  const [isConfirming, startConfirm] = useTransition();
+  const [confirmResult, setConfirmResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // ============================================================================
+  // DADOS COMPUTADOS
+  // ============================================================================
+
+  // Participantes ativos (não removidos)
+  const activeParticipants = useMemo((): ParticipantWithAnalysis[] => {
+    if (!parsedData) return [];
+    return parsedData.participants.filter((p: ParticipantWithAnalysis) => !p.removed);
+  }, [parsedData]);
+
+  // Participantes removidos
+  const removedParticipants = useMemo((): ParticipantWithAnalysis[] => {
+    if (!parsedData) return [];
+    return parsedData.participants.filter((p: ParticipantWithAnalysis) => p.removed);
+  }, [parsedData]);
+
+  // Estatísticas de associação
+  const associationStats = useMemo(() => {
+    let confirmed = 0;
+    let pending = 0;
+    let autoMatched = 0;
+
+    activeParticipants.forEach((p: ParticipantWithAnalysis) => {
+      const assoc = associations.get(p.participante.nomeOriginal);
+      if (!assoc || !assoc.inscricaoId) {
+        pending++;
+      } else if (assoc.status === "confirmed") {
+        confirmed++;
+      } else if (assoc.status === "auto-matched") {
+        autoMatched++;
+      } else {
+        pending++;
+      }
+    });
+
+    return { confirmed, pending, autoMatched, total: activeParticipants.length };
+  }, [activeParticipants, associations]);
+
+  // IDs de inscrições já usadas
   const usedInscricaoIds = useMemo(() => {
     const used = new Set<number>();
-    associations.forEach((value) => {
+    associations.forEach((value: AssociationData) => {
       if (value.inscricaoId && (value.status === "confirmed" || value.status === "auto-matched")) {
         used.add(value.inscricaoId);
       }
@@ -46,19 +119,14 @@ export default function PresenceValidationForm() {
     return used;
   }, [associations]);
 
-  // Conta nomes duplicados (primeiro nome)
-  const nameDuplicates = useMemo(() => {
-    if (!state.result?.inscricoesDisponiveis) return new Map<string, number>();
-    
-    const firstNames = new Map<string, number>();
-    for (const insc of state.result.inscricoesDisponiveis) {
-      const firstName = insc.nome.split(" ")[0].toLowerCase();
-      firstNames.set(firstName, (firstNames.get(firstName) || 0) + 1);
-    }
-    return firstNames;
-  }, [state.result?.inscricoesDisponiveis]);
+  // Verifica se pode avançar para próxima etapa
+  const canProceedToAssociate = activeParticipants.length > 0;
+  const canProceedToConfirm = associationStats.pending === 0 && associationStats.total > 0;
 
-  // Carrega treinamentos
+  // ============================================================================
+  // CARREGA TREINAMENTOS
+  // ============================================================================
+
   useEffect(() => {
     fetch("/api/trainings")
       .then((res) => res.json())
@@ -66,472 +134,994 @@ export default function PresenceValidationForm() {
       .catch(() => setTrainings([]));
   }, []);
 
-  // Inicializa associações quando resultado muda
-  useEffect(() => {
-    if (state.result) {
-      const newAssociations = new Map<string, { inscricaoId: number | null; status: AssociationStatus }>();
-      
-      for (const assoc of [...state.result.aprovados, ...state.result.reprovados]) {
-        newAssociations.set(assoc.participanteNome, {
-          inscricaoId: assoc.inscricaoId,
-          status: assoc.status,
-        });
-      }
-      
-      setAssociations(newAssociations);
-      setConfirmResult(null);
-    }
-  }, [state.result]);
+  // ============================================================================
+  // HANDLERS
+  // ============================================================================
 
-  const handleConfirm = () => {
-    if (!state.result) return;
+  // Upload e parse do CSV
+  const handleUpload = async (formData: FormData) => {
+    setIsLoading(true);
+    setError(null);
 
-    const toSave = [...state.result.aprovados]
-      .filter((a) => {
-        const current = associations.get(a.participanteNome);
-        return current?.inscricaoId && current.status !== "rejected";
-      })
-      .map((a) => {
-        const current = associations.get(a.participanteNome);
-        return {
-          inscricaoId: current?.inscricaoId || a.inscricaoId!,
-          participanteNome: a.participanteNome,
-          aprovado: a.analise.aprovado,
-          tempoTotal: a.analise.tempoTotalMinutos,
-          tempoDinamica: a.analise.tempoDinamicaMinutos,
-          percentualDinamica: a.analise.percentualDinamica,
-        };
+    try {
+      const response = await fetch("/api/presence/parse", {
+        method: "POST",
+        body: formData,
       });
 
-    startConfirm(async () => {
-      const result = await confirmPresenceAction(toSave, state.result!.config.treinamentoId);
-      setConfirmResult(result);
-    });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Erro ao processar arquivo");
+      }
+
+      // Inicializa estado dos participantes
+      const participants: ParticipantWithAnalysis[] = data.participants.map((p: {
+        participante: ZoomParticipantConsolidated;
+        analise: PresenceAnalysis;
+      }) => ({
+        participante: p.participante,
+        analise: p.analise,
+        removed: false,
+      }));
+
+      setParsedData({
+        participants,
+        config: data.config,
+        inscricoesDisponiveis: data.inscricoesDisponiveis,
+        filename: data.filename,
+      });
+
+      // Inicializa associações com auto-match
+      const newAssociations = new Map<string, AssociationData>();
+      for (const match of data.autoMatches || []) {
+        newAssociations.set(match.participanteNome, {
+          inscricaoId: match.inscricaoId,
+          inscricaoNome: match.inscricaoNome,
+          inscricaoTelefone: match.inscricaoTelefone,
+          status: match.status,
+          matchScore: match.matchScore,
+          matchReason: match.matchReason,
+        });
+      }
+      setAssociations(newAssociations);
+
+      setCurrentStep("review");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido");
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const updateAssociation = (participanteNome: string, inscricaoId: number | null, status: AssociationStatus) => {
-    setAssociations((prev) => {
+  // Remove participante da lista
+  const removeParticipant = useCallback((nomeOriginal: string) => {
+    setParsedData((prev: ParsedCSVState | null) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        participants: prev.participants.map((p: ParticipantWithAnalysis) => 
+          p.participante.nomeOriginal === nomeOriginal
+            ? { ...p, removed: true }
+            : p
+        ),
+      };
+    });
+    // Remove associação se existia
+    setAssociations((prev: Map<string, AssociationData>) => {
       const next = new Map(prev);
-      next.set(participanteNome, { inscricaoId, status });
+      next.delete(nomeOriginal);
       return next;
     });
-  };
+  }, []);
 
-  // Abre modal de busca para um participante
-  const openSearchModal = (participanteNome: string) => {
+  // Restaura participante removido
+  const restoreParticipant = useCallback((nomeOriginal: string) => {
+    setParsedData((prev: ParsedCSVState | null) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        participants: prev.participants.map((p: ParticipantWithAnalysis) => 
+          p.participante.nomeOriginal === nomeOriginal
+            ? { ...p, removed: false }
+            : p
+        ),
+      };
+    });
+  }, []);
+
+  // Atualiza associação
+  const updateAssociation = useCallback((
+    participanteNome: string, 
+    inscricao: InscricaoSimplificada | null, 
+    status: AssociationStatus
+  ) => {
+    setAssociations((prev: Map<string, AssociationData>) => {
+      const next = new Map(prev);
+      next.set(participanteNome, {
+        inscricaoId: inscricao?.id ?? null,
+        inscricaoNome: inscricao?.nome ?? null,
+        inscricaoTelefone: inscricao?.telefone ?? null,
+        status,
+        matchScore: 100,
+        matchReason: "manual",
+      });
+      return next;
+    });
+  }, []);
+
+  // Confirma associação (transforma auto-matched em confirmed)
+  const confirmAssociation = useCallback((participanteNome: string) => {
+    setAssociations((prev: Map<string, AssociationData>) => {
+      const next = new Map(prev);
+      const current = next.get(participanteNome);
+      if (current) {
+        next.set(participanteNome, { ...current, status: "confirmed" });
+      }
+      return next;
+    });
+  }, []);
+
+  // Abre modal de busca
+  const openSearchModal = useCallback((participanteNome: string) => {
     const firstName = participanteNome.split(" ")[0];
     setSearchModalParticipante(participanteNome);
-    setSearchModalQuery(firstName); // Pré-preenche com primeiro nome
+    setSearchModalQuery(firstName);
     setSearchModalOpen(true);
-  };
+  }, []);
 
-  // Seleciona uma inscrição no modal
-  const selectFromModal = (inscricaoId: number) => {
+  // Seleciona inscrição no modal
+  const selectFromModal = useCallback((inscricao: InscricaoSimplificada) => {
     if (searchModalParticipante) {
-      updateAssociation(searchModalParticipante, inscricaoId, "confirmed");
+      updateAssociation(searchModalParticipante, inscricao, "confirmed");
     }
     setSearchModalOpen(false);
     setSearchModalParticipante(null);
     setSearchModalQuery("");
+  }, [searchModalParticipante, updateAssociation]);
+
+  // Confirma e salva tudo
+  const handleConfirmAll = async () => {
+    if (!parsedData?.config) return;
+
+    const toSave = activeParticipants
+      .filter((p: ParticipantWithAnalysis) => {
+        const assoc = associations.get(p.participante.nomeOriginal);
+        return assoc?.inscricaoId && assoc.status === "confirmed";
+      })
+      .map((p: ParticipantWithAnalysis) => {
+        const assoc = associations.get(p.participante.nomeOriginal)!;
+        return {
+          inscricaoId: assoc.inscricaoId!,
+          participanteNome: p.participante.nomeOriginal,
+          aprovado: p.analise.aprovado,
+          tempoTotal: p.analise.tempoTotalMinutos,
+          tempoDinamica: p.analise.tempoDinamicaMinutos,
+          percentualDinamica: p.analise.percentualDinamica,
+        };
+      });
+
+    startConfirm(async () => {
+      try {
+        const response = await fetch("/api/presence/confirm", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            associations: toSave,
+            treinamentoId: parsedData.config!.treinamentoId,
+          }),
+        });
+
+        const result = await response.json();
+        setConfirmResult({
+          success: response.ok,
+          message: result.message || (response.ok ? "Salvo com sucesso!" : "Erro ao salvar"),
+        });
+      } catch {
+        setConfirmResult({ success: false, message: "Erro de conexão" });
+      }
+    });
   };
 
-  // Inscrições filtradas para o modal
-  const modalFilteredInscricoes = useMemo(() => {
-    if (!state.result?.inscricoesDisponiveis) return [];
+  // Volta ao início
+  const resetForm = () => {
+    setCurrentStep("upload");
+    setParsedData(null);
+    setAssociations(new Map());
+    setError(null);
+    setSuccessMessage(null);
+    setConfirmResult(null);
+  };
+
+  // ============================================================================
+  // INSCRIÇÕES FILTRADAS PARA MODAL
+  // ============================================================================
+
+  type FilteredInscricao = InscricaoSimplificada & { matchesQuery: boolean; relevance: number; isUsed: boolean };
+  
+  const modalFilteredInscricoes = useMemo((): FilteredInscricao[] => {
+    if (!parsedData?.inscricoesDisponiveis) return [];
     
     const query = searchModalQuery.toLowerCase().trim();
     
-    return state.result.inscricoesDisponiveis
-      .map((insc) => {
+    return parsedData.inscricoesDisponiveis
+      .map((insc: InscricaoSimplificada): FilteredInscricao => {
         const firstName = insc.nome.split(" ")[0].toLowerCase();
         const matchesQuery = !query || 
           insc.nome.toLowerCase().includes(query) ||
           insc.telefone?.includes(query) ||
           insc.cidade?.toLowerCase().includes(query);
         
-        // Calcula relevância para ordenação
         const relevance = query && insc.nome.toLowerCase().startsWith(query) ? 2 :
                          query && firstName === query ? 1 : 0;
         
-        return { ...insc, matchesQuery, relevance, isUsed: usedInscricaoIds.has(insc.id) };
+        return { ...insc, matchesQuery, relevance, isUsed: usedInscricaoIds.has(insc.id) ?? false };
       })
-      .filter((insc) => insc.matchesQuery)
-      .sort((a, b) => {
-        // Não usadas primeiro
+      .filter((insc: FilteredInscricao) => insc.matchesQuery)
+      .sort((a: FilteredInscricao, b: FilteredInscricao) => {
         if (a.isUsed !== b.isUsed) return a.isUsed ? 1 : -1;
-        // Maior relevância primeiro
         if (a.relevance !== b.relevance) return b.relevance - a.relevance;
-        // Alfabético
         return a.nome.localeCompare(b.nome);
       });
-  }, [state.result?.inscricoesDisponiveis, searchModalQuery, usedInscricaoIds]);
+  }, [parsedData?.inscricoesDisponiveis, searchModalQuery, usedInscricaoIds]);
 
-  const hasResult = state.status === "success" && state.result;
+  // ============================================================================
+  // RENDER
+  // ============================================================================
 
   return (
     <div className="space-y-6">
-      {/* Formulário de Configuração */}
-      <form
-        className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
-        action={formAction}
-      >
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-neutral-900">Configuração do Encontro</h2>
-          
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/* Treinamento */}
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-neutral-700">
-                Treinamento
-                <select
-                  name="treinamentoId"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                >
-                  <option value="">Selecione o treinamento...</option>
-                  {trainings.map((t) => (
-                    <option key={t.id} value={t.id}>{t.label}</option>
-                  ))}
-                </select>
-              </label>
-            </div>
+      {/* Indicador de Etapas */}
+      <StepIndicator currentStep={currentStep} />
 
-            {/* Arquivo CSV */}
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-neutral-700">
-                Arquivo CSV do Zoom
-                <input
-                  type="file"
-                  name="csvFile"
-                  accept=".csv"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
-                />
-              </label>
-              <p className="mt-1 text-xs text-neutral-500">
-                Exportado em: Zoom → Relatórios → Uso → Participantes
-              </p>
-            </div>
-
-            {/* Horário de início da live */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700">
-                Início da Live
-                <input
-                  type="datetime-local"
-                  name="inicioLive"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-            </div>
-
-            {/* Horário de início da dinâmica */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700">
-                Início da Dinâmica
-                <input
-                  type="datetime-local"
-                  name="inicioDinamica"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-              <p className="mt-1 text-xs text-neutral-500">Momento mais importante do encontro</p>
-            </div>
-
-            {/* Horário de fim da dinâmica */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700">
-                Término da Dinâmica
-                <input
-                  type="datetime-local"
-                  name="fimDinamica"
-                  required
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-            </div>
-
-            {/* Tempo mínimo */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700">
-                Tempo mínimo total (minutos)
-                <input
-                  type="number"
-                  name="tempoMinimo"
-                  defaultValue={60}
-                  min={1}
-                  max={300}
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-              <p className="mt-1 text-xs text-neutral-500">Padrão: 60 minutos (1 hora)</p>
-            </div>
-
-            {/* Percentual mínimo dinâmica */}
-            <div>
-              <label className="block text-sm font-medium text-neutral-700">
-                % mínimo na Dinâmica
-                <input
-                  type="number"
-                  name="percentualMinimo"
-                  defaultValue={90}
-                  min={1}
-                  max={100}
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-              <p className="mt-1 text-xs text-neutral-500">Padrão: 90% de presença na dinâmica</p>
-            </div>
-
-            {/* Excluir nomes (equipe) */}
-            <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-neutral-700">
-                Excluir da análise (equipe)
-                <textarea
-                  name="excluirNomes"
-                  rows={2}
-                  placeholder="Rodrigo Damaceno, Admin, Leonardo Augusto..."
-                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                />
-              </label>
-              <p className="mt-1 text-xs text-neutral-500">
-                Nomes separados por vírgula ou um por linha. Hosts, coordenadores, etc.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex justify-end pt-2">
-            <button
-              type="submit"
-              className="rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800"
-            >
-              Processar Presença
-            </button>
-          </div>
-        </div>
-      </form>
-
-      {/* Mensagem de status */}
-      {state.message && (
-        <div
-          className={`rounded-xl border px-4 py-3 text-sm ${
-            state.status === "error"
-              ? "border-red-200 bg-red-50 text-red-700"
-              : "border-emerald-200 bg-emerald-50 text-emerald-700"
-          }`}
-        >
-          {state.message}
+      {/* Mensagem de erro */}
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      {/* Resultados */}
-      {hasResult && (
-        <div className="space-y-6">
-          {/* Resumo */}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-            <SummaryCard
-              label="Total no CSV"
-              value={state.result!.totalParticipantesCSV}
-              color="neutral"
-            />
-            <SummaryCard
-              label="Consolidados"
-              value={state.result!.totalConsolidados}
-              color="sky"
-            />
-            <SummaryCard
-              label="Aprovados"
-              value={state.result!.resumo.totalAprovados}
-              color="emerald"
-            />
-            <SummaryCard
-              label="Reprovados"
-              value={state.result!.resumo.totalReprovados}
-              color="red"
-            />
-            <SummaryCard
-              label="Match automático"
-              value={state.result!.resumo.autoMatched}
-              color="violet"
-            />
-          </div>
-
-          {/* Configuração usada */}
-          <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm">
-            <h3 className="font-medium text-neutral-700">Configuração aplicada:</h3>
-            <div className="mt-2 flex flex-wrap gap-4 text-neutral-600">
-              <span>Tempo mínimo: <strong>{state.result!.config.tempoMinimoMinutos}min</strong></span>
-              <span>% dinâmica: <strong>{state.result!.config.percentualMinimoDinamica}%</strong></span>
-              <span>Fim da live: <strong>{state.result!.config.fimLive.toLocaleTimeString("pt-BR")}</strong></span>
-            </div>
-          </div>
-
-          {/* Tabela de Aprovados */}
-          <PresenceTable
-            title="✅ Participantes Aprovados"
-            description="Cumpriram tempo mínimo e presença na dinâmica. Confirme as associações."
-            data={state.result!.aprovados}
-            associations={associations}
-            onUpdateAssociation={updateAssociation}
-            onOpenSearch={openSearchModal}
-            showActions
-          />
-
-          {/* Tabela de Reprovados */}
-          <PresenceTable
-            title="❌ Participantes Reprovados"
-            description="Não cumpriram os requisitos mínimos de presença."
-            data={state.result!.reprovados}
-            associations={associations}
-            onUpdateAssociation={updateAssociation}
-            onOpenSearch={openSearchModal}
-          />
-
-          {/* Botão de Confirmar */}
-          <div className="flex items-center justify-between border-t border-neutral-200 pt-4">
-            <p className="text-sm text-neutral-500">
-              As associações confirmadas serão salvas no perfil de cada inscrição.
-            </p>
-            <button
-              type="button"
-              onClick={handleConfirm}
-              disabled={isConfirming || confirmResult?.success}
-              className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {confirmResult?.success
-                ? "✓ Salvo com sucesso"
-                : isConfirming
-                ? "Salvando..."
-                : "Confirmar e Salvar"}
-            </button>
-          </div>
-
-          {confirmResult && (
-            <div
-              className={`rounded-xl border px-4 py-3 text-sm ${
-                confirmResult.success
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : "border-red-200 bg-red-50 text-red-700"
-              }`}
-            >
-              {confirmResult.message}
-            </div>
-          )}
+      {/* Mensagem de sucesso */}
+      {successMessage && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          {successMessage}
         </div>
       )}
 
-      {/* Modal de Busca de Inscrição */}
-      {searchModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-neutral-200 p-4">
-              <div>
-                <h3 className="text-lg font-semibold text-neutral-900">Buscar Inscrição</h3>
-                <p className="text-sm text-neutral-500">
-                  Associar a: <strong>{searchModalParticipante}</strong>
-                </p>
-              </div>
-              <button
-                onClick={() => {
-                  setSearchModalOpen(false);
-                  setSearchModalParticipante(null);
-                  setSearchModalQuery("");
-                }}
-                className="rounded-lg p-2 hover:bg-neutral-100"
-              >
-                ✕
-              </button>
-            </div>
+      {/* ETAPA 1: Upload do CSV */}
+      {currentStep === "upload" && (
+        <UploadStep 
+          trainings={trainings}
+          isLoading={isLoading}
+          onSubmit={handleUpload}
+        />
+      )}
 
-            {/* Search */}
-            <div className="border-b border-neutral-100 p-4">
-              <input
-                type="text"
-                placeholder="Buscar por nome, telefone ou cidade..."
-                value={searchModalQuery}
-                onChange={(e) => setSearchModalQuery(e.target.value)}
-                autoFocus
-                className="w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
-              />
-              <p className="mt-2 text-xs text-neutral-500">
-                {modalFilteredInscricoes.length} resultados • 
-                {usedInscricaoIds.size} já associadas
-              </p>
-            </div>
+      {/* ETAPA 2: Revisão - Remover participantes */}
+      {currentStep === "review" && parsedData && (
+        <ReviewStep
+          activeParticipants={activeParticipants}
+          removedParticipants={removedParticipants}
+          config={parsedData.config}
+          onRemove={removeParticipant}
+          onRestore={restoreParticipant}
+          onBack={resetForm}
+          onNext={() => setCurrentStep("associate")}
+          canProceed={canProceedToAssociate}
+        />
+      )}
 
-            {/* Lista */}
-            <div className="max-h-96 overflow-y-auto p-2">
-              {modalFilteredInscricoes.length === 0 ? (
-                <p className="py-8 text-center text-neutral-500">Nenhuma inscrição encontrada</p>
-              ) : (
-                <div className="space-y-1">
-                  {modalFilteredInscricoes.map((insc) => {
-                    const firstName = insc.nome.split(" ")[0].toLowerCase();
-                    const duplicateCount = nameDuplicates.get(firstName) || 0;
-                    
-                    return (
-                      <button
-                        key={insc.id}
-                        onClick={() => !insc.isUsed && selectFromModal(insc.id)}
-                        disabled={insc.isUsed}
-                        className={`w-full rounded-lg p-3 text-left transition ${
-                          insc.isUsed
-                            ? "cursor-not-allowed bg-neutral-50 opacity-50"
-                            : "hover:bg-neutral-100"
-                        }`}
-                      >
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="font-medium text-neutral-900">
-                              {insc.nome}
-                              {duplicateCount > 1 && (
-                                <span className="ml-2 text-xs font-normal text-amber-600">
-                                  ⚠ {duplicateCount} pessoas com nome &quot;{firstName}&quot;
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-sm text-neutral-500">
-                              {insc.telefone || "Sem telefone"}
-                              {insc.cidade && ` • ${insc.cidade}`}
-                            </p>
-                          </div>
-                          {insc.isUsed ? (
-                            <span className="text-xs text-neutral-400">Já associada</span>
-                          ) : (
-                            <span className="text-xs text-emerald-600">Selecionar →</span>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+      {/* ETAPA 3: Associar participantes a inscrições */}
+      {currentStep === "associate" && parsedData && (
+        <AssociateStep
+          participants={activeParticipants}
+          associations={associations}
+          stats={associationStats}
+          onConfirmAssociation={confirmAssociation}
+          onOpenSearch={openSearchModal}
+          onUpdateAssociation={updateAssociation}
+          onBack={() => setCurrentStep("review")}
+          onNext={() => setCurrentStep("confirm")}
+          canProceed={canProceedToConfirm}
+        />
+      )}
 
-            {/* Footer */}
-            <div className="border-t border-neutral-200 p-4">
-              <button
-                onClick={() => {
-                  setSearchModalOpen(false);
-                  setSearchModalParticipante(null);
-                  setSearchModalQuery("");
-                }}
-                className="w-full rounded-lg border border-neutral-300 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
-              >
-                Cancelar
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* ETAPA 4: Confirmação Final */}
+      {currentStep === "confirm" && parsedData && (
+        <ConfirmStep
+          participants={activeParticipants}
+          associations={associations}
+          isConfirming={isConfirming}
+          confirmResult={confirmResult}
+          onBack={() => setCurrentStep("associate")}
+          onConfirm={handleConfirmAll}
+          onReset={resetForm}
+        />
+      )}
+
+      {/* Modal de Busca */}
+      {searchModalOpen && parsedData && (
+        <SearchModal
+          participanteNome={searchModalParticipante}
+          query={searchModalQuery}
+          onQueryChange={setSearchModalQuery}
+          filteredInscricoes={modalFilteredInscricoes}
+          usedCount={usedInscricaoIds.size}
+          onSelect={selectFromModal}
+          onClose={() => {
+            setSearchModalOpen(false);
+            setSearchModalParticipante(null);
+            setSearchModalQuery("");
+          }}
+        />
       )}
     </div>
   );
 }
 
-// Componente de card de resumo
+// ============================================================================
+// COMPONENTES DE ETAPAS
+// ============================================================================
+
+function StepIndicator({ currentStep }: { currentStep: Step }) {
+  const steps: { key: Step; label: string; number: number }[] = [
+    { key: "upload", label: "Importar CSV", number: 1 },
+    { key: "review", label: "Revisar Participantes", number: 2 },
+    { key: "associate", label: "Associar Inscrições", number: 3 },
+    { key: "confirm", label: "Confirmar", number: 4 },
+  ];
+
+  const currentIndex = steps.findIndex(s => s.key === currentStep);
+
+  return (
+    <div className="flex items-center justify-between rounded-xl border border-neutral-200 bg-white p-4">
+      {steps.map((step, index) => {
+        const isActive = step.key === currentStep;
+        const isCompleted = index < currentIndex;
+        
+        return (
+          <div key={step.key} className="flex items-center">
+            <div className="flex items-center gap-2">
+              <div className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                isActive 
+                  ? "bg-neutral-900 text-white" 
+                  : isCompleted 
+                    ? "bg-emerald-500 text-white"
+                    : "bg-neutral-100 text-neutral-500"
+              }`}>
+                {isCompleted ? "✓" : step.number}
+              </div>
+              <span className={`text-sm font-medium ${
+                isActive ? "text-neutral-900" : "text-neutral-500"
+              }`}>
+                {step.label}
+              </span>
+            </div>
+            {index < steps.length - 1 && (
+              <div className={`mx-4 h-px w-12 ${
+                isCompleted ? "bg-emerald-500" : "bg-neutral-200"
+              }`} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================================
+// ETAPA 1: UPLOAD
+// ============================================================================
+
+function UploadStep({ 
+  trainings, 
+  isLoading, 
+  onSubmit 
+}: { 
+  trainings: TrainingOption[];
+  isLoading: boolean;
+  onSubmit: (formData: FormData) => void;
+}) {
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    onSubmit(formData);
+  };
+
+  return (
+    <form
+      className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
+      onSubmit={handleSubmit}
+    >
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold text-neutral-900">
+          Passo 1: Importar Relatório do Zoom
+        </h2>
+        <p className="text-sm text-neutral-600">
+          Faça upload do CSV exportado do Zoom e configure os horários do encontro.
+        </p>
+        
+        <div className="grid gap-4 sm:grid-cols-2">
+          {/* Treinamento */}
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-neutral-700">
+              Treinamento
+              <select
+                name="treinamentoId"
+                required
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              >
+                <option value="">Selecione o treinamento...</option>
+                {trainings.map((t) => (
+                  <option key={t.id} value={t.id}>{t.label}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {/* Arquivo CSV */}
+          <div className="sm:col-span-2">
+            <label className="block text-sm font-medium text-neutral-700">
+              Arquivo CSV do Zoom
+              <input
+                type="file"
+                name="csvFile"
+                accept=".csv"
+                required
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
+              />
+            </label>
+            <p className="mt-1 text-xs text-neutral-500">
+              Exportado em: Zoom → Relatórios → Uso → Participantes
+            </p>
+          </div>
+
+          {/* Horário de início da live */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">
+              Início da Live
+              <input
+                type="datetime-local"
+                name="inicioLive"
+                required
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          </div>
+
+          {/* Horário de início da dinâmica */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">
+              Início da Dinâmica
+              <input
+                type="datetime-local"
+                name="inicioDinamica"
+                required
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          </div>
+
+          {/* Horário de fim da dinâmica */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">
+              Término da Dinâmica
+              <input
+                type="datetime-local"
+                name="fimDinamica"
+                required
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          </div>
+
+          {/* Tempo mínimo */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">
+              Tempo mínimo total (minutos)
+              <input
+                type="number"
+                name="tempoMinimo"
+                defaultValue={60}
+                min={1}
+                max={300}
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          </div>
+
+          {/* Percentual mínimo dinâmica */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-700">
+              % mínimo na Dinâmica
+              <input
+                type="number"
+                name="percentualMinimo"
+                defaultValue={90}
+                min={1}
+                max={100}
+                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="flex justify-end pt-2">
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {isLoading ? "Processando..." : "Importar e Continuar →"}
+          </button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+// ============================================================================
+// ETAPA 2: REVISÃO
+// ============================================================================
+
+function ReviewStep({
+  activeParticipants,
+  removedParticipants,
+  config,
+  onRemove,
+  onRestore,
+  onBack,
+  onNext,
+  canProceed,
+}: {
+  activeParticipants: ParticipantWithAnalysis[];
+  removedParticipants: ParticipantWithAnalysis[];
+  config: PresenceConfig | null;
+  onRemove: (nome: string) => void;
+  onRestore: (nome: string) => void;
+  onBack: () => void;
+  onNext: () => void;
+  canProceed: boolean;
+}) {
+  const aprovados = activeParticipants.filter(p => p.analise.aprovado);
+  const reprovados = activeParticipants.filter(p => !p.analise.aprovado);
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6">
+        <h2 className="text-lg font-semibold text-neutral-900">
+          Passo 2: Revisar Participantes
+        </h2>
+        <p className="mt-1 text-sm text-neutral-600">
+          Revise a lista e <strong>remova</strong> quem não deve participar (equipe, hosts, etc.). 
+          Todos que restarem precisarão ser associados a uma inscrição no próximo passo.
+        </p>
+      </div>
+
+      {/* Resumo */}
+      <div className="grid gap-3 sm:grid-cols-4">
+        <SummaryCard label="Total Ativos" value={activeParticipants.length} color="sky" />
+        <SummaryCard label="Aprovados" value={aprovados.length} color="emerald" />
+        <SummaryCard label="Reprovados" value={reprovados.length} color="red" />
+        <SummaryCard label="Removidos" value={removedParticipants.length} color="neutral" />
+      </div>
+
+      {/* Config usada */}
+      {config && (
+        <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm">
+          <h3 className="font-medium text-neutral-700">Configuração:</h3>
+          <div className="mt-2 flex flex-wrap gap-4 text-neutral-600">
+            <span>Tempo mínimo: <strong>{config.tempoMinimoMinutos}min</strong></span>
+            <span>% dinâmica: <strong>{config.percentualMinimoDinamica}%</strong></span>
+          </div>
+        </div>
+      )}
+
+      {/* Tabela de participantes ativos */}
+      <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+        <div className="border-b border-neutral-100 p-4">
+          <h3 className="font-semibold text-neutral-900">
+            Participantes Ativos ({activeParticipants.length})
+          </h3>
+          <p className="text-sm text-neutral-500">
+            Clique em &quot;Remover&quot; para excluir quem não deve estar na lista
+          </p>
+        </div>
+        
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500">
+              <tr>
+                <th className="px-4 py-3 font-medium">Nome</th>
+                <th className="px-4 py-3 font-medium">Tempo Total</th>
+                <th className="px-4 py-3 font-medium">Na Dinâmica</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Ação</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100">
+              {activeParticipants.map((p) => (
+                <tr key={p.participante.nomeOriginal} className="hover:bg-neutral-50">
+                  <td className="px-4 py-3">
+                    <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
+                    {p.participante.email && (
+                      <p className="text-xs text-neutral-500">{p.participante.email}</p>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={p.analise.cumpriuTempoMinimo ? "text-emerald-600" : "text-red-600"}>
+                      {formatDuration(p.analise.tempoTotalMinutos)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={p.analise.cumpriuDinamica ? "text-emerald-600" : "text-red-600"}>
+                      {p.analise.percentualDinamica}%
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    {p.analise.aprovado ? (
+                      <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                        Aprovado
+                      </span>
+                    ) : (
+                      <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                        Reprovado
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3">
+                    <button
+                      onClick={() => onRemove(p.participante.nomeOriginal)}
+                      className="rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+                    >
+                      Remover
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Participantes removidos */}
+      {removedParticipants.length > 0 && (
+        <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+          <div className="border-b border-neutral-100 bg-neutral-50 p-4">
+            <h3 className="font-semibold text-neutral-700">
+              Removidos ({removedParticipants.length})
+            </h3>
+            <p className="text-sm text-neutral-500">
+              Clique em &quot;Restaurar&quot; para trazer de volta
+            </p>
+          </div>
+          
+          <div className="divide-y divide-neutral-100">
+            {removedParticipants.map((p) => (
+              <div key={p.participante.nomeOriginal} className="flex items-center justify-between p-3">
+                <span className="text-neutral-500 line-through">{p.participante.nomeOriginal}</span>
+                <button
+                  onClick={() => onRestore(p.participante.nomeOriginal)}
+                  className="rounded bg-neutral-100 px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-200"
+                >
+                  Restaurar
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Navegação */}
+      <div className="flex items-center justify-between border-t border-neutral-200 pt-4">
+        <button
+          onClick={onBack}
+          className="rounded-xl border border-neutral-300 px-6 py-2.5 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+        >
+          ← Voltar
+        </button>
+        <button
+          onClick={onNext}
+          disabled={!canProceed}
+          className="rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-50"
+        >
+          Continuar para Associação →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// ETAPA 3: ASSOCIAÇÃO
+// ============================================================================
+
+function AssociateStep({
+  participants,
+  associations,
+  stats,
+  onConfirmAssociation,
+  onOpenSearch,
+  onUpdateAssociation,
+  onBack,
+  onNext,
+  canProceed,
+}: {
+  participants: ParticipantWithAnalysis[];
+  associations: Map<string, AssociationData>;
+  stats: { confirmed: number; pending: number; autoMatched: number; total: number };
+  onConfirmAssociation: (nome: string) => void;
+  onOpenSearch: (nome: string) => void;
+  onUpdateAssociation: (nome: string, inscricao: InscricaoSimplificada | null, status: AssociationStatus) => void;
+  onBack: () => void;
+  onNext: () => void;
+  canProceed: boolean;
+}) {
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6">
+        <h2 className="text-lg font-semibold text-neutral-900">
+          Passo 3: Associar a Inscrições
+        </h2>
+        <p className="mt-1 text-sm text-neutral-600">
+          Cada participante precisa ser associado a uma inscrição. 
+          Algumas associações foram feitas automaticamente - <strong>confirme ou corrija</strong> cada uma.
+        </p>
+      </div>
+
+      {/* Progresso */}
+      <div className="grid gap-3 sm:grid-cols-4">
+        <SummaryCard label="Total" value={stats.total} color="neutral" />
+        <SummaryCard label="Confirmados" value={stats.confirmed} color="emerald" />
+        <SummaryCard label="Auto (pendente)" value={stats.autoMatched} color="violet" />
+        <SummaryCard label="Sem Associação" value={stats.pending} color="amber" />
+      </div>
+
+      {!canProceed && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+          ⚠️ Você precisa confirmar todas as associações antes de continuar. 
+          {stats.pending > 0 && ` Ainda há ${stats.pending} participante(s) sem associação.`}
+          {stats.autoMatched > 0 && ` Ainda há ${stats.autoMatched} associação(ões) automática(s) para confirmar.`}
+        </div>
+      )}
+
+      {/* Tabela de associações */}
+      <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500">
+              <tr>
+                <th className="px-4 py-3 font-medium">Participante (Zoom)</th>
+                <th className="px-4 py-3 font-medium">Tempo</th>
+                <th className="px-4 py-3 font-medium">Inscrição Associada</th>
+                <th className="px-4 py-3 font-medium">Status</th>
+                <th className="px-4 py-3 font-medium">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-100">
+              {participants.map((p) => {
+                const assoc = associations.get(p.participante.nomeOriginal);
+                const hasAssociation = assoc?.inscricaoId != null;
+                const isConfirmed = assoc?.status === "confirmed";
+                const isAuto = assoc?.status === "auto-matched";
+
+                return (
+                  <tr key={p.participante.nomeOriginal} className={`hover:bg-neutral-50 ${
+                    !hasAssociation ? "bg-amber-50/50" : ""
+                  }`}>
+                    <td className="px-4 py-3">
+                      <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
+                      {p.participante.email && (
+                        <p className="text-xs text-neutral-500">{p.participante.email}</p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={p.analise.aprovado ? "text-emerald-600" : "text-red-600"}>
+                        {formatDuration(p.analise.tempoTotalMinutos)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      {hasAssociation ? (
+                        <div>
+                          <p className="font-medium text-neutral-900">{assoc.inscricaoNome}</p>
+                          {assoc.inscricaoTelefone && (
+                            <p className="text-xs text-neutral-500">{assoc.inscricaoTelefone}</p>
+                          )}
+                          {isAuto && assoc.matchScore && (
+                            <p className="text-xs text-violet-600">
+                              Auto: {assoc.matchScore}% {assoc.matchReason && `(${assoc.matchReason})`}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="italic text-amber-600">Sem associação</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {isConfirmed ? (
+                        <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                          ✓ Confirmado
+                        </span>
+                      ) : isAuto ? (
+                        <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+                          Auto-match
+                        </span>
+                      ) : (
+                        <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                          Pendente
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        {isAuto && (
+                          <button
+                            onClick={() => onConfirmAssociation(p.participante.nomeOriginal)}
+                            className="rounded bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-200"
+                          >
+                            Confirmar
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onOpenSearch(p.participante.nomeOriginal)}
+                          className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-200"
+                        >
+                          {hasAssociation ? "Alterar" : "Buscar"}
+                        </button>
+                        {hasAssociation && !isConfirmed && (
+                          <button
+                            onClick={() => onUpdateAssociation(p.participante.nomeOriginal, null, "manual-pending")}
+                            className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+                          >
+                            Limpar
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Navegação */}
+      <div className="flex items-center justify-between border-t border-neutral-200 pt-4">
+        <button
+          onClick={onBack}
+          className="rounded-xl border border-neutral-300 px-6 py-2.5 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+        >
+          ← Voltar
+        </button>
+        <button
+          onClick={onNext}
+          disabled={!canProceed}
+          className="rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-50"
+        >
+          Revisar e Confirmar →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// ETAPA 4: CONFIRMAÇÃO
+// ============================================================================
+
+function ConfirmStep({
+  participants,
+  associations,
+  isConfirming,
+  confirmResult,
+  onBack,
+  onConfirm,
+  onReset,
+}: {
+  participants: ParticipantWithAnalysis[];
+  associations: Map<string, AssociationData>;
+  isConfirming: boolean;
+  confirmResult: { success: boolean; message: string } | null;
+  onBack: () => void;
+  onConfirm: () => void;
+  onReset: () => void;
+}) {
+  const aprovados = participants.filter(p => p.analise.aprovado);
+  const reprovados = participants.filter(p => !p.analise.aprovado);
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-neutral-200 bg-white p-6">
+        <h2 className="text-lg font-semibold text-neutral-900">
+          Passo 4: Confirmar e Salvar
+        </h2>
+        <p className="mt-1 text-sm text-neutral-600">
+          Revise o resumo final e clique em &quot;Salvar&quot; para registrar as presenças.
+        </p>
+      </div>
+
+      {/* Resumo */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <SummaryCard label="Total de Participantes" value={participants.length} color="sky" />
+        <SummaryCard label="Aprovados (presença OK)" value={aprovados.length} color="emerald" />
+        <SummaryCard label="Reprovados (faltou presença)" value={reprovados.length} color="red" />
+      </div>
+
+      {/* Lista resumida */}
+      <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+        <div className="border-b border-neutral-100 p-4">
+          <h3 className="font-semibold text-neutral-900">Associações Confirmadas</h3>
+        </div>
+        <div className="max-h-96 overflow-y-auto divide-y divide-neutral-100">
+          {participants.map((p) => {
+            const assoc = associations.get(p.participante.nomeOriginal);
+            return (
+              <div key={p.participante.nomeOriginal} className="flex items-center justify-between p-3">
+                <div className="flex items-center gap-3">
+                  <span className={`inline-block h-2 w-2 rounded-full ${
+                    p.analise.aprovado ? "bg-emerald-500" : "bg-red-500"
+                  }`} />
+                  <div>
+                    <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
+                    <p className="text-xs text-neutral-500">→ {assoc?.inscricaoNome}</p>
+                  </div>
+                </div>
+                <span className="text-sm text-neutral-500">
+                  {formatDuration(p.analise.tempoTotalMinutos)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Resultado da confirmação */}
+      {confirmResult && (
+        <div className={`rounded-xl border px-4 py-3 text-sm ${
+          confirmResult.success
+            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+            : "border-red-200 bg-red-50 text-red-700"
+        }`}>
+          {confirmResult.message}
+        </div>
+      )}
+
+      {/* Navegação */}
+      <div className="flex items-center justify-between border-t border-neutral-200 pt-4">
+        {!confirmResult?.success ? (
+          <>
+            <button
+              onClick={onBack}
+              className="rounded-xl border border-neutral-300 px-6 py-2.5 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+            >
+              ← Voltar
+            </button>
+            <button
+              onClick={onConfirm}
+              disabled={isConfirming}
+              className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+            >
+              {isConfirming ? "Salvando..." : "✓ Salvar Presenças"}
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onReset}
+            className="ml-auto rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800"
+          >
+            Importar Novo Arquivo
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// COMPONENTES AUXILIARES
+// ============================================================================
+
 function SummaryCard({
   label,
   value,
@@ -558,163 +1148,101 @@ function SummaryCard({
   );
 }
 
-// Componente de tabela de presença
-function PresenceTable({
-  title,
-  description,
-  data,
-  associations,
-  onUpdateAssociation,
-  onOpenSearch,
-  showActions = false,
+function SearchModal({
+  participanteNome,
+  query,
+  onQueryChange,
+  filteredInscricoes,
+  usedCount,
+  onSelect,
+  onClose,
 }: {
-  title: string;
-  description: string;
-  data: PresenceAssociation[];
-  associations: Map<string, { inscricaoId: number | null; status: AssociationStatus }>;
-  onUpdateAssociation: (nome: string, inscricaoId: number | null, status: AssociationStatus) => void;
-  onOpenSearch?: (participanteNome: string) => void;
-  showActions?: boolean;
+  participanteNome: string | null;
+  query: string;
+  onQueryChange: (q: string) => void;
+  filteredInscricoes: Array<InscricaoSimplificada & { isUsed: boolean; relevance: number }>;
+  usedCount: number;
+  onSelect: (inscricao: InscricaoSimplificada) => void;
+  onClose: () => void;
 }) {
-  if (data.length === 0) {
-    return (
-      <div className="rounded-xl border border-neutral-200 bg-white p-6">
-        <h3 className="font-semibold text-neutral-900">{title}</h3>
-        <p className="mt-1 text-sm text-neutral-500">Nenhum participante nesta categoria.</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
-      <div className="border-b border-neutral-100 p-4">
-        <h3 className="font-semibold text-neutral-900">{title}</h3>
-        <p className="text-sm text-neutral-500">{description}</p>
-      </div>
-      
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500">
-            <tr>
-              <th className="px-4 py-3 font-medium">Participante</th>
-              <th className="px-4 py-3 font-medium">Tempo Total</th>
-              <th className="px-4 py-3 font-medium">Na Dinâmica</th>
-              <th className="px-4 py-3 font-medium">% Dinâmica</th>
-              <th className="px-4 py-3 font-medium">Inscrição Associada</th>
-              <th className="px-4 py-3 font-medium">Status</th>
-              {showActions && <th className="px-4 py-3 font-medium">Ações</th>}
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-100">
-            {data.map((item) => {
-              const currentAssoc = associations.get(item.participanteNome);
-              const status = currentAssoc?.status || item.status;
-              
-              return (
-                <tr key={item.participanteNome} className="hover:bg-neutral-50">
-                  <td className="px-4 py-3">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-neutral-200 p-4">
+          <div>
+            <h3 className="text-lg font-semibold text-neutral-900">Buscar Inscrição</h3>
+            <p className="text-sm text-neutral-500">
+              Associar a: <strong>{participanteNome}</strong>
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-neutral-100">
+            ✕
+          </button>
+        </div>
+
+        {/* Search */}
+        <div className="border-b border-neutral-100 p-4">
+          <input
+            type="text"
+            placeholder="Buscar por nome, telefone ou cidade..."
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            autoFocus
+            className="w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-2 text-xs text-neutral-500">
+            {filteredInscricoes.length} resultados • {usedCount} já associadas
+          </p>
+        </div>
+
+        {/* Lista */}
+        <div className="max-h-96 overflow-y-auto p-2">
+          {filteredInscricoes.length === 0 ? (
+            <p className="py-8 text-center text-neutral-500">Nenhuma inscrição encontrada</p>
+          ) : (
+            <div className="space-y-1">
+              {filteredInscricoes.map((insc) => (
+                <button
+                  key={insc.id}
+                  onClick={() => !insc.isUsed && onSelect(insc)}
+                  disabled={insc.isUsed}
+                  className={`w-full rounded-lg p-3 text-left transition ${
+                    insc.isUsed
+                      ? "cursor-not-allowed bg-neutral-50 opacity-50"
+                      : "hover:bg-neutral-100"
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
                     <div>
-                      <p className="font-medium text-neutral-900">{item.participanteNome}</p>
-                      {item.participanteEmail && (
-                        <p className="text-xs text-neutral-500">{item.participanteEmail}</p>
-                      )}
+                      <p className="font-medium text-neutral-900">{insc.nome}</p>
+                      <p className="text-sm text-neutral-500">
+                        {insc.telefone || "Sem telefone"}
+                        {insc.cidade && ` • ${insc.cidade}`}
+                      </p>
                     </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={item.analise.cumpriuTempoMinimo ? "text-emerald-600" : "text-red-600"}>
-                      {formatDuration(item.analise.tempoTotalMinutos)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    {formatDuration(item.analise.tempoDinamicaMinutos)}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={item.analise.cumpriuDinamica ? "text-emerald-600" : "text-red-600"}>
-                      {item.analise.percentualDinamica}%
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="space-y-1">
-                      {item.inscricaoNome ? (
-                        <div>
-                          <p className="text-neutral-900">{item.inscricaoNome}</p>
-                          {item.inscricaoTelefone && (
-                            <p className="text-xs text-neutral-500">{item.inscricaoTelefone}</p>
-                          )}
-                          {item.matchScore && (
-                            <p className="text-xs text-neutral-400">
-                              Score: {item.matchScore}% {item.matchReason && `(${item.matchReason})`}
-                            </p>
-                          )}
-                        </div>
-                      ) : (
-                        <span className="text-amber-600 italic">Sem correspondência</span>
-                      )}
-                      
-                      {/* Botão para abrir modal de busca */}
-                      {onOpenSearch && (
-                        <button
-                          type="button"
-                          onClick={() => onOpenSearch(item.participanteNome)}
-                          className="mt-1 rounded border border-neutral-200 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-50"
-                        >
-                          🔍 Buscar inscrição
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={status} />
-                  </td>
-                  {showActions && (
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1">
-                        {status !== "confirmed" && item.inscricaoId && (
-                          <button
-                            type="button"
-                            onClick={() => onUpdateAssociation(item.participanteNome, item.inscricaoId, "confirmed")}
-                            className="rounded bg-emerald-100 px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-200"
-                          >
-                            Confirmar
-                          </button>
-                        )}
-                        {status !== "rejected" && (
-                          <button
-                            type="button"
-                            onClick={() => onUpdateAssociation(item.participanteNome, null, "rejected")}
-                            className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
-                          >
-                            Rejeitar
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    {insc.isUsed ? (
+                      <span className="text-xs text-neutral-400">Já associada</span>
+                    ) : (
+                      <span className="text-xs text-emerald-600">Selecionar →</span>
+                    )}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-neutral-200 p-4">
+          <button
+            onClick={onClose}
+            className="w-full rounded-lg border border-neutral-300 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancelar
+          </button>
+        </div>
       </div>
     </div>
-  );
-}
-
-// Badge de status
-function StatusBadge({ status }: { status: AssociationStatus }) {
-  const configs: Record<AssociationStatus, { label: string; className: string }> = {
-    "auto-matched": { label: "Auto", className: "bg-violet-100 text-violet-700" },
-    "suggested": { label: "Sugerido", className: "bg-amber-100 text-amber-700" },
-    "manual-pending": { label: "Pendente", className: "bg-neutral-100 text-neutral-700" },
-    "confirmed": { label: "Confirmado", className: "bg-emerald-100 text-emerald-700" },
-    "rejected": { label: "Rejeitado", className: "bg-red-100 text-red-700" },
-  };
-
-  const config = configs[status];
-
-  return (
-    <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${config.className}`}>
-      {config.label}
-    </span>
   );
 }

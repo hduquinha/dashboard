@@ -1,13 +1,13 @@
-"use server";
-
+import { NextRequest, NextResponse } from "next/server";
 import {
   parseZoomCSV,
   consolidateParticipants,
-  processPresenceValidation,
+  analyzePresence,
+  matchParticipantsToInscricoes,
   detectEndTime,
 } from "@/lib/zoomPresence";
 import { getPool } from "@/lib/db";
-import type { PresenceConfig, PresenceValidationResult, PresenceFormState } from "@/types/presence";
+import type { PresenceConfig, InscricaoSimplificada } from "@/types/presence";
 import type { InscricaoItem } from "@/types/inscricao";
 import { parsePayload } from "@/lib/parsePayload";
 
@@ -29,13 +29,11 @@ interface InscricaoDbRow {
  * Extrai a data base (YYYY-MM-DD) de um valor de treinamento
  */
 function extractDateFromTraining(value: string): string | null {
-  // Formato ISO: 2026-01-07T19:00:00-03:00
   const isoMatch = value.match(/^(\d{4}-\d{2}-\d{2})/);
   if (isoMatch) {
     return isoMatch[1];
   }
   
-  // Formato BR: 07/01/2026
   const brMatch = value.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
   if (brMatch) {
     return `${brMatch[3]}-${brMatch[2]}-${brMatch[1]}`;
@@ -50,10 +48,8 @@ function extractDateFromTraining(value: string): string | null {
 async function getInscricoesByTreinamento(treinamentoId: string): Promise<InscricaoItem[]> {
   const pool = getPool();
 
-  // Extrai a data base para busca mais flexível
   const dateBase = extractDateFromTraining(treinamentoId);
   
-  // Campos onde o treinamento pode estar armazenado
   const trainingFields = [
     "i.payload->>'treinamento'",
     "i.payload->>'training'",
@@ -62,29 +58,24 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
     "i.payload->>'data_treinamento'",
   ];
   
-  // Monta as condições de busca para cada campo
   const conditions: string[] = [];
   const params: string[] = [];
   let paramIndex = 1;
 
   for (const field of trainingFields) {
-    // Busca exata
     conditions.push(`${field} = $${paramIndex}`);
     params.push(treinamentoId);
     paramIndex++;
 
-    // Busca por LIKE com o ID completo
     conditions.push(`${field} LIKE $${paramIndex}`);
     params.push(`%${treinamentoId}%`);
     paramIndex++;
 
-    // Se temos uma data base, busca também por ela
     if (dateBase) {
       conditions.push(`${field} LIKE $${paramIndex}`);
       params.push(`%${dateBase}%`);
       paramIndex++;
       
-      // Formato BR da data
       const [year, month, day] = dateBase.split('-');
       const brDate = `${day}/${month}/${year}`;
       conditions.push(`${field} LIKE $${paramIndex}`);
@@ -142,15 +133,10 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
   });
 }
 
-/**
- * Action para processar o CSV do Zoom e validar presença
- */
-export async function processPresenceAction(
-  prevState: PresenceFormState,
-  formData: FormData
-): Promise<PresenceFormState> {
+export async function POST(request: NextRequest) {
   try {
-    // Extrai dados do formulário
+    const formData = await request.formData();
+    
     const file = formData.get("csvFile") as File | null;
     const treinamentoId = formData.get("treinamentoId") as string;
     const inicioLiveStr = formData.get("inicioLive") as string;
@@ -158,54 +144,42 @@ export async function processPresenceAction(
     const fimDinamicaStr = formData.get("fimDinamica") as string;
     const tempoMinimoStr = formData.get("tempoMinimo") as string;
     const percentualMinimoStr = formData.get("percentualMinimo") as string;
-    const excluirNomesStr = formData.get("excluirNomes") as string;
 
-    // Validações básicas
+    // Validações
     if (!file || file.size === 0) {
-      return {
-        status: "error",
-        message: "Selecione um arquivo CSV do Zoom.",
-        result: null,
-        filename: null,
-      };
+      return NextResponse.json(
+        { error: "Selecione um arquivo CSV do Zoom." },
+        { status: 400 }
+      );
     }
 
     if (!treinamentoId) {
-      return {
-        status: "error",
-        message: "Selecione um treinamento.",
-        result: null,
-        filename: file.name,
-      };
+      return NextResponse.json(
+        { error: "Selecione um treinamento." },
+        { status: 400 }
+      );
     }
 
     if (!inicioLiveStr || !inicioDinamicaStr || !fimDinamicaStr) {
-      return {
-        status: "error",
-        message: "Preencha todos os horários obrigatórios.",
-        result: null,
-        filename: file.name,
-      };
+      return NextResponse.json(
+        { error: "Preencha todos os horários obrigatórios." },
+        { status: 400 }
+      );
     }
 
-    // Parse do arquivo CSV
+    // Parse do CSV
     const csvContent = await file.text();
     const rawParticipants = parseZoomCSV(csvContent);
 
     if (rawParticipants.length === 0) {
-      return {
-        status: "error",
-        message: "Nenhum participante encontrado no CSV.",
-        result: null,
-        filename: file.name,
-      };
+      return NextResponse.json(
+        { error: "Nenhum participante encontrado no CSV." },
+        { status: 400 }
+      );
     }
 
-    // Consolida participantes (excluindo equipe)
-    const excludeNames = excluirNomesStr
-      ? excluirNomesStr.split(/[,\n]/).map((n) => n.trim()).filter(Boolean)
-      : [];
-    const consolidated = consolidateParticipants(rawParticipants, excludeNames);
+    // Consolida participantes (sem excluir ninguém - isso é feito manualmente no passo 2)
+    const consolidated = consolidateParticipants(rawParticipants, []);
 
     // Parse das datas
     const inicioLive = new Date(inicioLiveStr);
@@ -228,88 +202,46 @@ export async function processPresenceAction(
     const inscricoes = await getInscricoesByTreinamento(treinamentoId);
 
     if (inscricoes.length === 0) {
-      return {
-        status: "error",
-        message: `Nenhuma inscrição encontrada para o treinamento "${treinamentoId}".`,
-        result: null,
-        filename: file.name,
-      };
-    }
-
-    // Processa validação
-    const result = processPresenceValidation(consolidated, inscricoes, config);
-
-    return {
-      status: "success",
-      message: `Processados ${result.totalConsolidados} participantes. ${result.resumo.totalAprovados} aprovados, ${result.resumo.totalReprovados} reprovados.`,
-      result,
-      filename: file.name,
-    };
-  } catch (error) {
-    console.error("Erro ao processar presença:", error);
-    return {
-      status: "error",
-      message: error instanceof Error ? error.message : "Erro ao processar arquivo.",
-      result: null,
-      filename: null,
-    };
-  }
-}
-
-/**
- * Action para confirmar associações e salvar no banco
- */
-export async function confirmPresenceAction(
-  associations: Array<{
-    inscricaoId: number;
-    participanteNome: string;
-    aprovado: boolean;
-    tempoTotal: number;
-    tempoDinamica: number;
-    percentualDinamica: number;
-  }>,
-  treinamentoId: string
-): Promise<{ success: boolean; message: string; savedCount: number }> {
-  try {
-    const pool = getPool();
-    let savedCount = 0;
-
-    for (const assoc of associations) {
-      if (!assoc.inscricaoId) continue;
-
-      // Atualiza o payload da inscrição com informações de presença
-      const presenceData = {
-        presenca_validada: true,
-        presenca_aprovada: assoc.aprovado,
-        presenca_participante_nome: assoc.participanteNome,
-        presenca_tempo_total_minutos: assoc.tempoTotal,
-        presenca_tempo_dinamica_minutos: assoc.tempoDinamica,
-        presenca_percentual_dinamica: assoc.percentualDinamica,
-        presenca_treinamento_id: treinamentoId,
-        presenca_validada_em: new Date().toISOString(),
-      };
-
-      await pool.query(
-        `UPDATE ${SCHEMA_NAME}.inscricoes 
-         SET payload = payload || $1::jsonb 
-         WHERE id = $2`,
-        [JSON.stringify(presenceData), assoc.inscricaoId]
+      return NextResponse.json(
+        { error: `Nenhuma inscrição encontrada para o treinamento "${treinamentoId}".` },
+        { status: 400 }
       );
-
-      savedCount++;
     }
 
-    return {
-      success: true,
-      message: `${savedCount} associações salvas com sucesso.`,
-      savedCount,
-    };
+    // Analisa presença de cada participante
+    const participants = consolidated.map(participante => ({
+      participante,
+      analise: analyzePresence(participante, config),
+    }));
+
+    // Faz auto-match de participantes com inscrições
+    const autoMatches = matchParticipantsToInscricoes(
+      consolidated,
+      inscricoes
+    );
+
+    // Prepara inscrições disponíveis para seleção manual
+    const inscricoesDisponiveis: InscricaoSimplificada[] = inscricoes.map(i => ({
+      id: i.id,
+      nome: i.nome || "Sem nome",
+      telefone: i.telefone,
+      cidade: i.cidade,
+    }));
+
+    return NextResponse.json({
+      participants,
+      config,
+      autoMatches,
+      inscricoesDisponiveis,
+      filename: file.name,
+      totalRaw: rawParticipants.length,
+      totalConsolidated: consolidated.length,
+    });
   } catch (error) {
-    console.error("Erro ao salvar associações:", error);
-    return {
-      success: false,
-      message: error instanceof Error ? error.message : "Erro ao salvar.",
-      savedCount: 0,
-    };
+    console.error("Erro ao processar CSV:", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Erro ao processar arquivo." },
+      { status: 500 }
+    );
   }
 }

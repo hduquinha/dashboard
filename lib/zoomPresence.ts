@@ -510,7 +510,7 @@ export function findBestMatch(
 /**
  * Determina o status da associação baseado no score
  */
-function determineAssociationStatus(score: number): AssociationStatus {
+export function determineAssociationStatus(score: number): AssociationStatus {
   if (score >= 90) return "auto-matched";
   if (score >= 60) return "suggested";
   return "manual-pending";
@@ -620,4 +620,97 @@ export function formatDuration(minutes: number): string {
   }
 
   return `${hours}h ${mins}min`;
+}
+
+/**
+ * Faz match automático de participantes com inscrições
+ * Retorna array de matches com informações para exibição
+ */
+export function matchParticipantsToInscricoes(
+  participants: ZoomParticipantConsolidated[],
+  inscricoes: InscricaoItem[]
+): Array<{
+  participanteNome: string;
+  inscricaoId: number | null;
+  inscricaoNome: string | null;
+  inscricaoTelefone: string | null;
+  status: AssociationStatus;
+  matchScore: number;
+  matchReason: string | null;
+}> {
+  const usedInscricaoIds = new Set<number>();
+  const matches: Array<{
+    participanteNome: string;
+    inscricaoId: number | null;
+    inscricaoNome: string | null;
+    inscricaoTelefone: string | null;
+    status: AssociationStatus;
+    matchScore: number;
+    matchReason: string | null;
+  }> = [];
+
+  // Ordena participantes para processar os com melhores matches primeiro
+  const participantesComScore = participants.map(p => {
+    const { inscricao, score, reason } = findBestMatch(p, inscricoes);
+    return { participante: p, inscricao, score, reason };
+  }).sort((a, b) => b.score - a.score);
+
+  for (const { participante, inscricao, score, reason } of participantesComScore) {
+    // Se a inscrição já foi usada, tenta encontrar outra
+    if (inscricao && usedInscricaoIds.has(inscricao.id)) {
+      // Busca próxima melhor que não foi usada
+      const remainingInscricoes = inscricoes.filter(i => !usedInscricaoIds.has(i.id));
+      const { inscricao: altInscricao, score: altScore, reason: altReason } = 
+        findBestMatch(participante, remainingInscricoes);
+      
+      if (altInscricao && altScore >= 60) {
+        usedInscricaoIds.add(altInscricao.id);
+        matches.push({
+          participanteNome: participante.nomeOriginal,
+          inscricaoId: altInscricao.id,
+          inscricaoNome: altInscricao.nome,
+          inscricaoTelefone: altInscricao.telefone,
+          status: determineAssociationStatus(altScore),
+          matchScore: altScore,
+          matchReason: altReason,
+        });
+      } else {
+        // Sem match alternativo
+        matches.push({
+          participanteNome: participante.nomeOriginal,
+          inscricaoId: null,
+          inscricaoNome: null,
+          inscricaoTelefone: null,
+          status: "manual-pending",
+          matchScore: 0,
+          matchReason: null,
+        });
+      }
+    } else if (inscricao && score >= 60) {
+      // Match válido
+      usedInscricaoIds.add(inscricao.id);
+      matches.push({
+        participanteNome: participante.nomeOriginal,
+        inscricaoId: inscricao.id,
+        inscricaoNome: inscricao.nome,
+        inscricaoTelefone: inscricao.telefone,
+        status: determineAssociationStatus(score),
+        matchScore: score,
+        matchReason: reason,
+      });
+    } else {
+      // Sem match
+      matches.push({
+        participanteNome: participante.nomeOriginal,
+        inscricaoId: null,
+        inscricaoNome: null,
+        inscricaoTelefone: null,
+        status: "manual-pending",
+        matchScore: 0,
+        matchReason: null,
+      });
+    }
+  }
+
+  return matches;
 }

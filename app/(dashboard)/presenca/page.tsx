@@ -3,7 +3,7 @@ import PresenceValidationForm from "./PresenceValidationForm";
 
 export const metadata: Metadata = {
   title: "Validar Presença | Painel",
-  description: "Valide a presença dos participantes nos encontros do Zoom e associe às inscrições.",
+  description: "Importe o CSV do Zoom, revise participantes, associe a inscrições e confirme.",
 };
 
 export default function PresencaPage() {
@@ -13,12 +13,12 @@ export default function PresencaPage() {
         <header className="space-y-3">
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">
-              Validação
+              Validação de Presença
             </p>
-            <h1 className="text-2xl font-semibold text-neutral-900">Presença nos encontros</h1>
+            <h1 className="text-2xl font-semibold text-neutral-900">Presença nos Encontros</h1>
             <p className="text-sm text-neutral-600">
-              Importe o relatório de participantes do Zoom, configure os horários da dinâmica e 
-              valide quem cumpriu os requisitos mínimos de presença.
+              Importe o CSV do Zoom, remova participantes que não devem estar na lista (equipe, hosts), 
+              associe cada participante a uma inscrição e confirme as presenças.
             </p>
           </div>
         </header>
