@@ -53,36 +53,46 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
   // Extrai a data base para busca mais flexível
   const dateBase = extractDateFromTraining(treinamentoId);
   
-  // Monta as condições de busca
+  // Campos onde o treinamento pode estar armazenado
+  const trainingFields = [
+    "i.payload->>'treinamento'",
+    "i.payload->>'training'",
+    "i.payload->>'training_date'",
+    "i.payload->>'trainingDate'",
+    "i.payload->>'data_treinamento'",
+  ];
+  
+  // Monta as condições de busca para cada campo
   const conditions: string[] = [];
   const params: string[] = [];
   let paramIndex = 1;
 
-  // Busca exata
-  conditions.push(`i.payload->>'treinamento' = $${paramIndex}`);
-  params.push(treinamentoId);
-  paramIndex++;
-
-  // Busca por LIKE
-  conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
-  params.push(`%${treinamentoId}%`);
-  paramIndex++;
-
-  // Se temos uma data base, busca também por ela
-  if (dateBase) {
-    conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
-    params.push(`%${dateBase}%`);
+  for (const field of trainingFields) {
+    // Busca exata
+    conditions.push(`${field} = $${paramIndex}`);
+    params.push(treinamentoId);
     paramIndex++;
-    
-    // Formato BR da data
-    const [year, month, day] = dateBase.split('-');
-    const brDate = `${day}/${month}/${year}`;
-    conditions.push(`i.payload->>'treinamento' LIKE $${paramIndex}`);
-    params.push(`%${brDate}%`);
+
+    // Busca por LIKE com o ID completo
+    conditions.push(`${field} LIKE $${paramIndex}`);
+    params.push(`%${treinamentoId}%`);
     paramIndex++;
+
+    // Se temos uma data base, busca também por ela
+    if (dateBase) {
+      conditions.push(`${field} LIKE $${paramIndex}`);
+      params.push(`%${dateBase}%`);
+      paramIndex++;
+      
+      // Formato BR da data
+      const [year, month, day] = dateBase.split('-');
+      const brDate = `${day}/${month}/${year}`;
+      conditions.push(`${field} LIKE $${paramIndex}`);
+      params.push(`%${brDate}%`);
+      paramIndex++;
+    }
   }
 
-  // Busca também em campos alternativos de treinamento
   const query = `
     SELECT 
       i.id,
