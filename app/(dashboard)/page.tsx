@@ -23,13 +23,13 @@ function pickStringParam(value: string | string[] | undefined): string | undefin
 export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
-
+  
   const [stats, trainingOptions, trainingSnapshot] = await Promise.all([
     getDashboardStats(),
     listTrainingFilterOptions(),
     treinamentoSelecionado 
       ? getTrainingSnapshot({ treinamentoId: treinamentoSelecionado })
-      : null,
+      : null
   ]);
 
   // Add "Todos" option at the beginning
