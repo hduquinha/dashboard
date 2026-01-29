@@ -356,7 +356,15 @@ export default function PresenceValidationForm() {
                          query && firstName === query ? 1 : 0;
         
         const isUsed: boolean = usedInscricaoIds.has(insc.id) === true;
-        return { ...insc, matchesQuery, relevance, isUsed };
+        return {
+          id: insc.id,
+          nome: insc.nome,
+          telefone: insc.telefone,
+          cidade: insc.cidade,
+          matchesQuery,
+          relevance,
+          isUsed,
+        };
       })
       .filter((insc: FilteredInscricao) => insc.matchesQuery)
       .sort((a: FilteredInscricao, b: FilteredInscricao) => {
