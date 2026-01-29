@@ -5,6 +5,7 @@ import TrainingSwitcher from "@/components/TrainingSwitcher";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 
+// Force redeploy v2
 export const dynamic = "force-dynamic";
 
 interface DashboardPageProps {
