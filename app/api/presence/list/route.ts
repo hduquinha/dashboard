@@ -38,8 +38,9 @@ export async function GET(request: NextRequest) {
       'Sem Treinamento'
     ))`;
 
-    // Expressão para extrair código do recrutador
+    // Expressão para extrair código do recrutador - prioriza traffic_source
     const recrutadorExpr = `TRIM(COALESCE(
+      NULLIF(TRIM(payload->>'traffic_source'), ''),
       NULLIF(TRIM(payload->>'source'), ''),
       NULLIF(TRIM(payload->>'recrutador'), ''),
       NULLIF(TRIM(payload->>'recrutador_codigo'), ''),

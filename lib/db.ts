@@ -2104,16 +2104,32 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     recruits: Math.floor(parseInt(row.leads, 10) * 0.1) // Mocking recruits as 10% of leads for now as we don't have explicit recruiter type in DB yet
   }));
 
-  // 3. Top Recruiters
+  // 3. Top Recruiters - conta indicações por recrutador
   const topRecruitersRes = await pool.query(`
     SELECT 
-      COALESCE(payload->>'traffic_source', 'Desconhecido') as code,
+      TRIM(COALESCE(
+        NULLIF(TRIM(payload->>'traffic_source'), ''),
+        NULLIF(TRIM(payload->>'source'), ''),
+        NULLIF(TRIM(payload->>'recrutador'), ''),
+        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+      )) as code,
       COUNT(*) as recruits
     FROM ${SCHEMA_NAME}.inscricoes
-    WHERE payload->>'traffic_source' IS NOT NULL
+    WHERE TRIM(COALESCE(
+        NULLIF(TRIM(payload->>'traffic_source'), ''),
+        NULLIF(TRIM(payload->>'source'), ''),
+        NULLIF(TRIM(payload->>'recrutador'), ''),
+        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+      )) IS NOT NULL
+      AND TRIM(COALESCE(
+        NULLIF(TRIM(payload->>'traffic_source'), ''),
+        NULLIF(TRIM(payload->>'source'), ''),
+        NULLIF(TRIM(payload->>'recrutador'), ''),
+        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+      )) != ''
     GROUP BY 1
     ORDER BY 2 DESC
-    LIMIT 5
+    LIMIT 10
   `);
 
   const topRecruiters = topRecruitersRes.rows.map(row => {
