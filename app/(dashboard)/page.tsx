@@ -25,13 +25,20 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
   
-  const [stats, trainingOptions, trainingSnapshot, duplicateSummary] = await Promise.all([
+  // Busca duplicados separadamente com tratamento de erro
+  let duplicateSummary = { totalGroups: 0, topReasons: [] as Array<{ reason: "telefone" | "email" | "nome-dia" | "payload"; count: number }> };
+  try {
+    duplicateSummary = await getDuplicateSummaryCount({ windowDays: 30 });
+  } catch (error) {
+    console.error("Erro ao buscar duplicados:", error);
+  }
+
+  const [stats, trainingOptions, trainingSnapshot] = await Promise.all([
     getDashboardStats(),
     listTrainingFilterOptions(),
     treinamentoSelecionado 
       ? getTrainingSnapshot({ treinamentoId: treinamentoSelecionado })
       : null,
-    getDuplicateSummaryCount({ windowDays: 30 })
   ]);
 
   // Add "Todos" option at the beginning
