@@ -77,8 +77,94 @@ export default function ConfirmedPresencesClient() {
   const [totalAprovados, setTotalAprovados] = useState(0);
   const [totalReprovados, setTotalReprovados] = useState(0);
 
+  // Seleção em massa
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [isRemovingBulk, setIsRemovingBulk] = useState(false);
+
   // Remoção de presença
   const [removingId, setRemovingId] = useState<number | null>(null);
+
+  // Toggle seleção de um item
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  // Selecionar/deselecionar todos os filtrados
+  const toggleSelectAll = () => {
+    const filteredIds = filteredPresences.map((p) => p.inscricaoId);
+    const allSelected = filteredIds.every((id) => selectedIds.has(id));
+    
+    if (allSelected) {
+      // Deseleciona todos
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredIds.forEach((id) => next.delete(id));
+        return next;
+      });
+    } else {
+      // Seleciona todos
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        filteredIds.forEach((id) => next.add(id));
+        return next;
+      });
+    }
+  };
+
+  // Remover presenças selecionadas em massa
+  const handleBulkRemove = async () => {
+    if (selectedIds.size === 0) return;
+    
+    const count = selectedIds.size;
+    if (!confirm(`Tem certeza que deseja desassociar ${count} presença(s)?\n\nIsso irá remover a validação de presença e descontabilizar do ranking.`)) {
+      return;
+    }
+
+    setIsRemovingBulk(true);
+
+    try {
+      const response = await fetch("/api/presence/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inscricaoIds: Array.from(selectedIds) }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "Erro ao remover presenças");
+      }
+
+      // Atualiza contadores antes de remover
+      const removedItems = presences.filter((p) => selectedIds.has(p.inscricaoId));
+      const removedAprovados = removedItems.filter((p) => p.aprovado).length;
+      const removedReprovados = removedItems.filter((p) => !p.aprovado).length;
+
+      // Remove da lista local
+      setPresences((prev) => prev.filter((p) => !selectedIds.has(p.inscricaoId)));
+      
+      // Atualiza contadores
+      setTotalAprovados((prev) => prev - removedAprovados);
+      setTotalReprovados((prev) => prev - removedReprovados);
+
+      // Limpa seleção
+      setSelectedIds(new Set());
+
+      alert(data.message);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erro ao remover presenças");
+    } finally {
+      setIsRemovingBulk(false);
+    }
+  };
 
   // Função para remover presença
   const handleRemovePresence = async (inscricaoId: number, nome: string) => {
@@ -379,6 +465,23 @@ export default function ConfirmedPresencesClient() {
             Reprovados
           </button>
         </div>
+
+        {/* Botão de desassociar em massa */}
+        {selectedIds.size > 0 && (
+          <button
+            type="button"
+            onClick={handleBulkRemove}
+            disabled={isRemovingBulk}
+            className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isRemovingBulk ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            Desassociar ({selectedIds.size})
+          </button>
+        )}
       </div>
 
       {/* Results */}
@@ -403,6 +506,14 @@ export default function ConfirmedPresencesClient() {
             <table className="w-full">
               <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
                 <tr>
+                  <th className="px-4 py-3 w-12">
+                    <input
+                      type="checkbox"
+                      checked={filteredPresences.length > 0 && filteredPresences.every((p) => selectedIds.has(p.inscricaoId))}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
+                    />
+                  </th>
                   <th className="px-6 py-3">Participante</th>
                   <th className="px-6 py-3">Contato</th>
                   <th className="px-6 py-3">Treinamento</th>
@@ -416,7 +527,15 @@ export default function ConfirmedPresencesClient() {
               </thead>
               <tbody className="divide-y divide-neutral-100">
                 {filteredPresences.map((p) => (
-                  <tr key={p.inscricaoId} className="hover:bg-neutral-50">
+                  <tr key={p.inscricaoId} className={`hover:bg-neutral-50 ${selectedIds.has(p.inscricaoId) ? 'bg-cyan-50' : ''}`}>
+                    <td className="px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(p.inscricaoId)}
+                        onChange={() => toggleSelect(p.inscricaoId)}
+                        className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
+                      />
+                    </td>
                     <td className="px-6 py-4">
                       <div>
                         <p className="font-medium text-neutral-900">{p.nome}</p>

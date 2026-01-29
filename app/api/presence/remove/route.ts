@@ -4,17 +4,21 @@ import { getPool } from "@/lib/db";
 const SCHEMA_NAME = "inscricoes";
 
 interface RequestBody {
-  inscricaoId: number;
+  inscricaoId?: number;
+  inscricaoIds?: number[];
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: RequestBody = await request.json();
-    const { inscricaoId } = body;
+    const { inscricaoId, inscricaoIds } = body;
 
-    if (!inscricaoId) {
+    // Aceita tanto um ID único quanto um array de IDs
+    const ids: number[] = inscricaoIds ?? (inscricaoId ? [inscricaoId] : []);
+
+    if (ids.length === 0) {
       return NextResponse.json(
-        { error: "ID da inscrição não informado." },
+        { error: "ID(s) da inscrição não informado(s)." },
         { status: 400 }
       );
     }
@@ -36,27 +40,32 @@ export async function POST(request: NextRequest) {
     // Constrói a query para remover as chaves do JSONB
     const removeKeysQuery = keysToRemove.map(key => `'${key}'`).join(', ');
 
+    // Usa ANY para aceitar múltiplos IDs
     const result = await pool.query(
       `UPDATE ${SCHEMA_NAME}.inscricoes 
        SET payload = payload - ARRAY[${removeKeysQuery}]::text[]
-       WHERE id = $1
+       WHERE id = ANY($1::int[])
        RETURNING id, payload->>'nome' AS nome`,
-      [inscricaoId]
+      [ids]
     );
 
     if (result.rowCount === 0) {
       return NextResponse.json(
-        { error: "Inscrição não encontrada." },
+        { error: "Nenhuma inscrição encontrada." },
         { status: 404 }
       );
     }
 
-    const nome = result.rows[0]?.nome ?? `ID ${inscricaoId}`;
+    const removedCount = result.rowCount ?? 0;
+    const nomes = result.rows.map((r: { id: number; nome: string | null }) => r.nome ?? `ID ${r.id}`);
 
     return NextResponse.json({
       success: true,
-      message: `Presença de "${nome}" foi desassociada com sucesso.`,
-      inscricaoId,
+      message: removedCount === 1
+        ? `Presença de "${nomes[0]}" foi desassociada com sucesso.`
+        : `${removedCount} presenças foram desassociadas com sucesso.`,
+      removedCount,
+      removedIds: ids,
     });
   } catch (error) {
     console.error("Erro ao remover presença:", error);
