@@ -78,16 +78,20 @@ export default function PresenceValidationForm() {
   // DADOS COMPUTADOS
   // ============================================================================
 
-  // Participantes ativos (não removidos)
+  // Participantes ativos (não removidos) - ordenados alfabeticamente
   const activeParticipants = useMemo((): ParticipantWithAnalysis[] => {
     if (!parsedData) return [];
-    return parsedData.participants.filter((p: ParticipantWithAnalysis) => !p.removed);
+    return parsedData.participants
+      .filter((p: ParticipantWithAnalysis) => !p.removed)
+      .sort((a, b) => a.participante.nomeOriginal.localeCompare(b.participante.nomeOriginal, 'pt-BR'));
   }, [parsedData]);
 
-  // Participantes removidos
+  // Participantes removidos - ordenados alfabeticamente
   const removedParticipants = useMemo((): ParticipantWithAnalysis[] => {
     if (!parsedData) return [];
-    return parsedData.participants.filter((p: ParticipantWithAnalysis) => p.removed);
+    return parsedData.participants
+      .filter((p: ParticipantWithAnalysis) => p.removed)
+      .sort((a, b) => a.participante.nomeOriginal.localeCompare(b.participante.nomeOriginal, 'pt-BR'));
   }, [parsedData]);
 
   // Estatísticas de associação
