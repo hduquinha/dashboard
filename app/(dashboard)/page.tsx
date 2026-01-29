@@ -1,7 +1,8 @@
-import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot } from "@/lib/db";
+import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot, getDuplicateSummaryCount } from "@/lib/db";
 import DashboardMetrics from "@/components/DashboardMetrics";
 import DashboardCharts from "@/components/DashboardCharts";
 import TrainingSwitcher from "@/components/TrainingSwitcher";
+import DuplicateNotification from "@/components/DuplicateNotification";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 
@@ -24,12 +25,13 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
   
-  const [stats, trainingOptions, trainingSnapshot] = await Promise.all([
+  const [stats, trainingOptions, trainingSnapshot, duplicateSummary] = await Promise.all([
     getDashboardStats(),
     listTrainingFilterOptions(),
     treinamentoSelecionado 
       ? getTrainingSnapshot({ treinamentoId: treinamentoSelecionado })
-      : null
+      : null,
+    getDuplicateSummaryCount({ windowDays: 30 })
   ]);
 
   // Add "Todos" option at the beginning
@@ -85,6 +87,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
           </Link>
         </div>
       </header>
+
+      {/* Duplicate Alert Notification */}
+      {duplicateSummary.totalGroups > 0 && (
+        <DuplicateNotification
+          totalGroups={duplicateSummary.totalGroups}
+          topReasons={duplicateSummary.topReasons}
+        />
+      )}
 
       {/* Metrics Cards */}
       <DashboardMetrics 

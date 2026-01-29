@@ -1679,6 +1679,38 @@ export interface ListDuplicateSuspectsOptions {
   sampleSize?: number;
 }
 
+/**
+ * Obtém um resumo rápido da contagem de duplicados para exibir na dashboard.
+ * Usa a mesma lógica de `listDuplicateSuspects`, mas retorna apenas a contagem.
+ */
+export async function getDuplicateSummaryCount(
+  options: { windowDays?: number } = {}
+): Promise<{ totalGroups: number; topReasons: Array<{ reason: DuplicateReason; count: number }> }> {
+  const summary = await listDuplicateSuspects({
+    windowDays: options.windowDays ?? 30,
+    maxGroups: 50,
+    sampleSize: 500,
+  });
+
+  // Contabiliza as razões mais comuns
+  const reasonCounts = new Map<DuplicateReason, number>();
+  for (const group of summary.groups) {
+    for (const detail of group.reasons) {
+      reasonCounts.set(detail.reason, (reasonCounts.get(detail.reason) ?? 0) + 1);
+    }
+  }
+
+  const topReasons = Array.from(reasonCounts.entries())
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 3);
+
+  return {
+    totalGroups: summary.totalGroups,
+    topReasons,
+  };
+}
+
 interface DuplicateEntry {
   item: InscricaoItem;
   createdDay: string | null;
