@@ -18,8 +18,8 @@ interface InscricoesTableProps {
   recruiterOptions: Recruiter[];
 }
 
-const STATUS_COLUMN_KEY = 'status' as const;
-type ColumnKey = OrderableField | typeof STATUS_COLUMN_KEY;
+const CADASTRO_COLUMN_KEY = 'cadastro' as const;
+type ColumnKey = OrderableField | typeof CADASTRO_COLUMN_KEY;
 
 interface ColumnConfig {
   key: ColumnKey;
@@ -33,7 +33,7 @@ const COLUMNS: ColumnConfig[] = [
   { key: 'nome', label: 'Nome', sortable: true },
   { key: 'telefone', label: 'Telefone', sortable: true },
   { key: 'cidade', label: 'Cidade', sortable: true },
-  { key: STATUS_COLUMN_KEY, label: 'Status', sortable: false, align: 'center' },
+  { key: CADASTRO_COLUMN_KEY, label: 'Cadastro', sortable: false, align: 'center' },
   { key: 'treinamento', label: 'Treinamento', sortable: true },
   { key: 'recrutador', label: 'Indicador', sortable: true },
 ];
@@ -123,25 +123,6 @@ export default function InscricoesTable({
     const safePage = Math.min(Math.max(1, requestedPage), totalPages);
     updateQuery({ page: String(safePage) });
   }
-
-
-  const getStatusInfo = (inscricao: InscricaoItem) => {
-    if (inscricao.tipo === 'recrutador') {
-      return { label: 'Recrutador', badgeClass: 'bg-emerald-100 text-emerald-800' };
-    }
-    if (inscricao.isVirtual) {
-      return { label: 'Virtual', badgeClass: 'bg-amber-100 text-amber-800' };
-    }
-
-    switch (inscricao.status) {
-      case 'aprovado':
-        return { label: 'Aprovado', badgeClass: 'bg-emerald-100 text-emerald-800' };
-      case 'rejeitado':
-        return { label: 'Rejeitado', badgeClass: 'bg-rose-100 text-rose-700' };
-      default:
-        return { label: 'Aguardando', badgeClass: 'bg-amber-100 text-amber-800' };
-    }
-  };
 
   return (
     <div className="relative rounded-2xl border border-neutral-200 bg-white shadow-xl">
@@ -268,11 +249,17 @@ export default function InscricoesTable({
                   </td>
                   <td className="px-3 py-3 text-center text-sm">
                     {(() => {
-                      const status = getStatusInfo(inscricao);
+                      const date = new Date(inscricao.criadoEm);
+                      if (Number.isNaN(date.getTime())) return <span className="text-xs text-neutral-400">—</span>;
                       return (
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide sm:px-3 sm:py-1 sm:text-xs ${status.badgeClass}`}>
-                          {status.label}
-                        </span>
+                        <div className="flex flex-col items-center">
+                          <span className="text-xs font-medium text-neutral-900">
+                            {date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                          </span>
+                          <span className="text-[10px] text-neutral-500">
+                            {date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
                       );
                     })()}
                   </td>
@@ -333,8 +320,33 @@ export default function InscricoesTable({
         </table>
       </div>
 
-      <div className="border-t border-neutral-200 px-4 py-3 text-sm text-neutral-600">
-        Total: {total} inscrições
+      <div className="flex flex-col items-center justify-between gap-3 border-t border-neutral-200 px-4 py-3 sm:flex-row">
+        <span className="text-sm text-neutral-600">
+          Total: {total} inscrições
+        </span>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={page <= 1}
+              onClick={() => goToPage(page - 1)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Anterior
+            </button>
+            <span className="text-sm text-neutral-600">
+              Página {page} de {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={page >= totalPages}
+              onClick={() => goToPage(page + 1)}
+              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm font-medium text-neutral-700 transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Próxima
+            </button>
+          </div>
+        )}
       </div>
 
       <InscricaoDetails
