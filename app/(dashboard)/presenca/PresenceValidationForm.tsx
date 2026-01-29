@@ -347,12 +347,12 @@ export default function PresenceValidationForm() {
     return parsedData.inscricoesDisponiveis
       .map((insc: InscricaoSimplificada): FilteredInscricao => {
         const firstName = insc.nome.split(" ")[0].toLowerCase();
-        const matchesQuery = !query || 
+        const matchesQuery: boolean = !query || 
           insc.nome.toLowerCase().includes(query) ||
-          insc.telefone?.includes(query) ||
-          insc.cidade?.toLowerCase().includes(query);
+          (insc.telefone?.includes(query) ?? false) ||
+          (insc.cidade?.toLowerCase().includes(query) ?? false);
         
-        const relevance = query && insc.nome.toLowerCase().startsWith(query) ? 2 :
+        const relevance: number = query && insc.nome.toLowerCase().startsWith(query) ? 2 :
                          query && firstName === query ? 1 : 0;
         
         const isUsed: boolean = usedInscricaoIds.has(insc.id) === true;
