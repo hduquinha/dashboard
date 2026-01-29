@@ -84,6 +84,16 @@ export interface PresenceAssociation {
 }
 
 /**
+ * Inscrição simplificada para seleção manual
+ */
+export interface InscricaoSimplificada {
+  id: number;
+  nome: string;
+  telefone: string | null;
+  cidade: string | null;
+}
+
+/**
  * Resultado completo da validação de presença
  */
 export interface PresenceValidationResult {
@@ -92,6 +102,7 @@ export interface PresenceValidationResult {
   totalConsolidados: number;
   aprovados: PresenceAssociation[];
   reprovados: PresenceAssociation[];
+  inscricoesDisponiveis: InscricaoSimplificada[];
   resumo: {
     totalAprovados: number;
     totalReprovados: number;

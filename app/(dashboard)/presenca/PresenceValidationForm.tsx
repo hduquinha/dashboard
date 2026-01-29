@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useMemo } from "react";
 import { useFormState } from "react-dom";
 import { processPresenceAction, confirmPresenceAction } from "./actions";
-import type { PresenceFormState, PresenceAssociation, AssociationStatus } from "@/types/presence";
+import type { PresenceFormState, PresenceAssociation, AssociationStatus, InscricaoSimplificada } from "@/types/presence";
 import { formatDuration } from "@/lib/zoomPresence";
 
 const initialState: PresenceFormState = {
@@ -29,6 +29,50 @@ export default function PresenceValidationForm() {
     inscricaoId: number | null;
     status: AssociationStatus;
   }>>(new Map());
+
+  // Estado para busca na lista de inscrições
+  const [inscricaoSearch, setInscricaoSearch] = useState("");
+  const [showInscricaoList, setShowInscricaoList] = useState(false);
+
+  // Calcula inscrições já usadas (confirmadas ou auto-matched)
+  const usedInscricaoIds = useMemo(() => {
+    const used = new Set<number>();
+    associations.forEach((value) => {
+      if (value.inscricaoId && (value.status === "confirmed" || value.status === "auto-matched")) {
+        used.add(value.inscricaoId);
+      }
+    });
+    return used;
+  }, [associations]);
+
+  // Conta nomes duplicados (primeiro nome)
+  const nameDuplicates = useMemo(() => {
+    if (!state.result?.inscricoesDisponiveis) return new Map<string, number>();
+    
+    const firstNames = new Map<string, number>();
+    for (const insc of state.result.inscricoesDisponiveis) {
+      const firstName = insc.nome.split(" ")[0].toLowerCase();
+      firstNames.set(firstName, (firstNames.get(firstName) || 0) + 1);
+    }
+    return firstNames;
+  }, [state.result?.inscricoesDisponiveis]);
+
+  // Filtra inscrições disponíveis (não usadas e que correspondem à busca)
+  const filteredInscricoes = useMemo(() => {
+    if (!state.result?.inscricoesDisponiveis) return [];
+    
+    return state.result.inscricoesDisponiveis
+      .filter((insc) => !usedInscricaoIds.has(insc.id))
+      .filter((insc) => {
+        if (!inscricaoSearch.trim()) return true;
+        const search = inscricaoSearch.toLowerCase();
+        return (
+          insc.nome.toLowerCase().includes(search) ||
+          insc.telefone?.includes(search) ||
+          insc.cidade?.toLowerCase().includes(search)
+        );
+      });
+  }, [state.result?.inscricoesDisponiveis, usedInscricaoIds, inscricaoSearch]);
 
   // Carrega treinamentos
   useEffect(() => {
@@ -291,6 +335,86 @@ export default function PresenceValidationForm() {
             </div>
           </div>
 
+          {/* Lista de Inscrições Disponíveis */}
+          <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowInscricaoList(!showInscricaoList)}
+              className="w-full flex items-center justify-between p-4 text-left hover:bg-neutral-50"
+            >
+              <div>
+                <h3 className="font-semibold text-neutral-900">
+                  📋 Lista de Inscrições ({filteredInscricoes.length} disponíveis)
+                </h3>
+                <p className="text-sm text-neutral-500">
+                  {usedInscricaoIds.size} já associadas • Clique para {showInscricaoList ? "ocultar" : "expandir"}
+                </p>
+              </div>
+              <span className="text-neutral-400">{showInscricaoList ? "▲" : "▼"}</span>
+            </button>
+            
+            {showInscricaoList && (
+              <div className="border-t border-neutral-100 p-4">
+                <input
+                  type="text"
+                  placeholder="Buscar por nome, telefone ou cidade..."
+                  value={inscricaoSearch}
+                  onChange={(e) => setInscricaoSearch(e.target.value)}
+                  className="mb-4 w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+                />
+                
+                <div className="max-h-80 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-neutral-50 text-left text-xs uppercase text-neutral-500 sticky top-0">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Nome</th>
+                        <th className="px-3 py-2 font-medium">Telefone</th>
+                        <th className="px-3 py-2 font-medium">Cidade</th>
+                        <th className="px-3 py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-neutral-100">
+                      {filteredInscricoes.map((insc) => {
+                        const firstName = insc.nome.split(" ")[0].toLowerCase();
+                        const duplicateCount = nameDuplicates.get(firstName) || 0;
+                        const isUsed = usedInscricaoIds.has(insc.id);
+                        
+                        return (
+                          <tr key={insc.id} className={isUsed ? "bg-emerald-50 opacity-60" : "hover:bg-neutral-50"}>
+                            <td className="px-3 py-2">
+                              <span className="font-medium text-neutral-900">{insc.nome}</span>
+                              {duplicateCount > 1 && (
+                                <span className="ml-2 text-xs text-amber-600 font-medium">
+                                  ({duplicateCount} {firstName}s)
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-neutral-600">{insc.telefone || "-"}</td>
+                            <td className="px-3 py-2 text-neutral-600">{insc.cidade || "-"}</td>
+                            <td className="px-3 py-2">
+                              {isUsed ? (
+                                <span className="text-xs text-emerald-600 font-medium">✓ Associada</span>
+                              ) : (
+                                <span className="text-xs text-neutral-400">Disponível</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {filteredInscricoes.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="px-3 py-8 text-center text-neutral-500">
+                            Nenhuma inscrição encontrada
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Tabela de Aprovados */}
           <PresenceTable
             title="✅ Participantes Aprovados"
@@ -298,6 +422,8 @@ export default function PresenceValidationForm() {
             data={state.result!.aprovados}
             associations={associations}
             onUpdateAssociation={updateAssociation}
+            inscricoesDisponiveis={filteredInscricoes}
+            usedInscricaoIds={usedInscricaoIds}
             showActions
           />
 
@@ -380,6 +506,8 @@ function PresenceTable({
   data,
   associations,
   onUpdateAssociation,
+  inscricoesDisponiveis = [],
+  usedInscricaoIds = new Set(),
   showActions = false,
 }: {
   title: string;
@@ -387,6 +515,8 @@ function PresenceTable({
   data: PresenceAssociation[];
   associations: Map<string, { inscricaoId: number | null; status: AssociationStatus }>;
   onUpdateAssociation: (nome: string, inscricaoId: number | null, status: AssociationStatus) => void;
+  inscricoesDisponiveis?: InscricaoSimplificada[];
+  usedInscricaoIds?: Set<number>;
   showActions?: boolean;
 }) {
   if (data.length === 0) {
@@ -447,19 +577,57 @@ function PresenceTable({
                     </span>
                   </td>
                   <td className="px-4 py-3">
-                    {item.inscricaoNome ? (
-                      <div>
-                        <p className="text-neutral-900">{item.inscricaoNome}</p>
-                        {item.inscricaoTelefone && (
-                          <p className="text-xs text-neutral-500">{item.inscricaoTelefone}</p>
-                        )}
-                        <p className="text-xs text-neutral-400">
-                          Score: {item.matchScore}% {item.matchReason && `(${item.matchReason})`}
-                        </p>
-                      </div>
-                    ) : (
-                      <span className="text-amber-600 italic">Sem correspondência</span>
-                    )}
+                    {(() => {
+                      const currentAssocId = currentAssoc?.inscricaoId || item.inscricaoId;
+                      const currentInsc = inscricoesDisponiveis.find(i => i.id === currentAssocId);
+                      const displayName = currentInsc?.nome || item.inscricaoNome;
+                      const displayPhone = currentInsc?.telefone || item.inscricaoTelefone;
+                      
+                      return (
+                        <div className="space-y-1">
+                          {displayName ? (
+                            <div>
+                              <p className="text-neutral-900">{displayName}</p>
+                              {displayPhone && (
+                                <p className="text-xs text-neutral-500">{displayPhone}</p>
+                              )}
+                              {item.matchScore && (
+                                <p className="text-xs text-neutral-400">
+                                  Score: {item.matchScore}% {item.matchReason && `(${item.matchReason})`}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-amber-600 italic">Sem correspondência</span>
+                          )}
+                          
+                          {/* Dropdown para seleção manual */}
+                          {showActions && inscricoesDisponiveis.length > 0 && (
+                            <select
+                              value={currentAssocId || ""}
+                              onChange={(e) => {
+                                const newId = e.target.value ? parseInt(e.target.value, 10) : null;
+                                onUpdateAssociation(
+                                  item.participanteNome,
+                                  newId,
+                                  newId ? "confirmed" : "manual-pending"
+                                );
+                              }}
+                              className="mt-1 w-full rounded border border-neutral-200 px-2 py-1 text-xs focus:border-neutral-400 focus:outline-none"
+                            >
+                              <option value="">-- Selecionar manualmente --</option>
+                              {inscricoesDisponiveis
+                                .filter(i => i.id === currentAssocId || !usedInscricaoIds.has(i.id))
+                                .map((insc) => (
+                                  <option key={insc.id} value={insc.id}>
+                                    {insc.nome}{insc.cidade ? ` (${insc.cidade})` : ""}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-4 py-3">
                     <StatusBadge status={status} />

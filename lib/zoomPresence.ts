@@ -563,12 +563,23 @@ export function processPresenceValidation(
   aprovados.sort((a, b) => b.matchScore - a.matchScore);
   reprovados.sort((a, b) => b.analise.tempoTotalMinutos - a.analise.tempoTotalMinutos);
 
+  // Prepara lista de inscrições disponíveis ordenada alfabeticamente
+  const inscricoesDisponiveis = inscricoes
+    .map((i) => ({
+      id: i.id,
+      nome: i.nome || `Inscrição #${i.id}`,
+      telefone: i.telefone,
+      cidade: i.cidade,
+    }))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
+
   return {
     config,
     totalParticipantesCSV: participants.length,
     totalConsolidados: participants.length,
     aprovados,
     reprovados,
+    inscricoesDisponiveis,
     resumo: {
       totalAprovados: aprovados.length,
       totalReprovados: reprovados.length,
