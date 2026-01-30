@@ -31,13 +31,18 @@ export async function GET(
 
     const pool = getPool();
 
-    // Expressão para extrair treinamento
+    // Expressão para extrair treinamento - deve ser idêntica à de listTrainingsWithStats
     const treinamentoExpr = `TRIM(COALESCE(
       NULLIF(TRIM(payload->>'treinamento'), ''),
       NULLIF(TRIM(payload->>'training'), ''),
       NULLIF(TRIM(payload->>'training_date'), ''),
       NULLIF(TRIM(payload->>'trainingDate'), ''),
       NULLIF(TRIM(payload->>'data_treinamento'), ''),
+      NULLIF(TRIM(payload->>'training_id'), ''),
+      NULLIF(TRIM(payload->>'trainingId'), ''),
+      NULLIF(TRIM(payload->>'treinamento_id'), ''),
+      NULLIF(TRIM(payload->>'training_option'), ''),
+      NULLIF(TRIM(payload->>'trainingOption'), ''),
       'Sem Treinamento'
     ))`;
 
