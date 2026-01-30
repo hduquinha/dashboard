@@ -369,7 +369,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
       setSuccessMessage(
         mode === 'create'
           ? 'Cluster criado com sucesso.'
-          : 'Inscrição promovida para cluster com sucesso.';
+          : 'Inscrição promovida para cluster com sucesso.'
       );
       resetForm();
     } catch (error) {
