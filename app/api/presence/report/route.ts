@@ -78,31 +78,31 @@ export async function POST(request: NextRequest) {
 
     // Ranking Top 5
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#eab308");
-    doc.text("🏆 RANKING TOP 5 CLUSTERS (por aprovados)", { underline: true });
+    doc.text("🏆 RANKING TOP 5 CLUSTERS", { underline: true });
     doc.moveDown(0.5);
 
     const medals = ["🥇", "🥈", "🥉", "  ", "  "];
     top5.forEach((cluster, index) => {
       doc.fontSize(12).font("Helvetica-Bold").fillColor("#1e293b");
       doc.text(
-        `${medals[index]} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalAprovados} aprovado(s) (${cluster.totalPresentes} presente(s))`
+        `${medals[index]} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalPresentes} presente(s)`
       );
     });
     doc.moveDown(1.5);
 
     // Gráfico de barras simples (usando linhas)
     doc.fontSize(14).font("Helvetica-Bold").fillColor("#0ea5e9");
-    doc.text("GRÁFICO DE APROVADOS POR CLUSTER", { underline: true });
+    doc.text("GRÁFICO DE PRESENTES POR CLUSTER", { underline: true });
     doc.moveDown(0.5);
 
-    const maxAprovados = Math.max(...top5.map((c) => c.totalAprovados), 1);
+    const maxAprovados = Math.max(...top5.map((c) => c.totalPresentes), 1);
     const barMaxWidth = 300;
     const barHeight = 20;
     const startY = doc.y;
 
     top5.forEach((cluster, index) => {
       const y = startY + index * (barHeight + 10);
-      const barWidth = (cluster.totalAprovados / maxAprovados) * barMaxWidth;
+      const barWidth = (cluster.totalPresentes / maxAprovados) * barMaxWidth;
 
       // Nome do cluster
       doc.fontSize(10).font("Helvetica").fillColor("#1e293b");
@@ -114,7 +114,7 @@ export async function POST(request: NextRequest) {
 
       // Valor
       doc.fontSize(10).font("Helvetica-Bold").fillColor("#1e293b");
-      doc.text(cluster.totalAprovados.toString(), 165 + barWidth + 5, y + 5);
+      doc.text(cluster.totalPresentes.toString(), 165 + barWidth + 5, y + 5);
     });
 
     doc.y = startY + top5.length * (barHeight + 10) + 20;
@@ -137,7 +137,7 @@ export async function POST(request: NextRequest) {
 
       // Header do cluster
       doc.fontSize(12).font("Helvetica-Bold").fillColor("#0284c7");
-      doc.text(`${cluster.name} (${cluster.totalAprovados} aprovados / ${cluster.totalPresentes} presentes)`);
+      doc.text(`${cluster.name} (${cluster.totalPresentes} presentes)`);
       doc.moveDown(0.3);
 
       // Lista de presentes

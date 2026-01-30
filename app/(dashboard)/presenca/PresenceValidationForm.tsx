@@ -1576,6 +1576,42 @@ function ConfirmStep({
       { code: "32", name: "Josefa" },
       { code: "33", name: "Mara" },
       { code: "34", name: "Thais/Jorge" },
+      { code: "35", name: "Recrutador 35" },
+      { code: "36", name: "Recrutador 36" },
+      { code: "37", name: "André Rufino" },
+      { code: "38", name: "Recrutador 38" },
+      { code: "39", name: "Recrutador 39" },
+      { code: "40", name: "Recrutador 40" },
+      { code: "41", name: "Recrutador 41" },
+      { code: "42", name: "Recrutador 42" },
+      { code: "43", name: "Recrutador 43" },
+      { code: "44", name: "Recrutador 44" },
+      { code: "45", name: "Recrutador 45" },
+      { code: "46", name: "Lucas" },
+      { code: "47", name: "Recrutador 47" },
+      { code: "48", name: "Recrutador 48" },
+      { code: "49", name: "Recrutador 49" },
+      { code: "50", name: "Recrutador 50" },
+      { code: "51", name: "Recrutador 51" },
+      { code: "52", name: "Recrutador 52" },
+      { code: "53", name: "Recrutador 53" },
+      { code: "54", name: "Recrutador 54" },
+      { code: "55", name: "Recrutador 55" },
+      { code: "56", name: "Recrutador 56" },
+      { code: "57", name: "Recrutador 57" },
+      { code: "58", name: "Recrutador 58" },
+      { code: "59", name: "Recrutador 59" },
+      { code: "60", name: "Recrutador 60" },
+      { code: "61", name: "Recrutador 61" },
+      { code: "62", name: "Recrutador 62" },
+      { code: "63", name: "Recrutador 63" },
+      { code: "64", name: "Recrutador 64" },
+      { code: "65", name: "Recrutador 65" },
+      { code: "66", name: "Recrutador 66" },
+      { code: "67", name: "Recrutador 67" },
+      { code: "68", name: "Recrutador 68" },
+      { code: "69", name: "Recrutador 69" },
+      { code: "70", name: "Recrutador 70" },
     ];
 
     // Função para obter nome do recrutador pelo código
@@ -1649,12 +1685,12 @@ function ConfirmStep({
 
     // Ranking Top 5 Clusters (ordenado por aprovados)
     report += "═══════════════════════════════════════════════════════════════\n";
-    report += "           🏆 RANKING TOP 5 CLUSTERS (por aprovados)\n";
+    report += "           🏆 RANKING TOP 5 CLUSTERS\n";
     report += "═══════════════════════════════════════════════════════════════\n\n";
     
     top5Clusters.forEach((cluster, index) => {
       const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "  ";
-      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalAprovados} aprovado(s) (${cluster.totalPresentes} presente(s))\n`;
+      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalPresentes} presente(s)\n`;
     });
     report += "\n";
 
@@ -1666,7 +1702,7 @@ function ConfirmStep({
     sortedClusters.forEach(cluster => {
       report += `\n┌─────────────────────────────────────────────────────────────┐\n`;
       report += `│ CLUSTER: ${cluster.name.padEnd(47)} │\n`;
-      report += `│ Aprovados: ${cluster.totalAprovados} | Presentes: ${(cluster.totalPresentes.toString()).padEnd(25)} │\n`;
+      report += `│ Presentes: ${(cluster.totalPresentes.toString()).padEnd(43)} │\n`;
       report += `└─────────────────────────────────────────────────────────────┘\n`;
       
       cluster.presentes.forEach((p, idx) => {
