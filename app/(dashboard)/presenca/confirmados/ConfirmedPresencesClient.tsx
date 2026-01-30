@@ -1067,11 +1067,11 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                     {filteredPending.map((p) => (
                       <tr key={p.id} className="hover:bg-neutral-50">
                         <td className="px-6 py-4">
-                          <p className="font-medium text-neutral-900">{p.participante_nome}</p>
+                          <p className="font-medium text-neutral-900">{p.participanteNome}</p>
                         </td>
                         <td className="px-6 py-4">
                           <span className="inline-flex items-center rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700">
-                            {p.treinamento_id}
+                            {p.treinamentoId}
                           </span>
                         </td>
                         <td className="px-6 py-4">
@@ -1090,7 +1090,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-1.5 text-sm text-neutral-600">
                             <Clock className="h-4 w-4" />
-                            {formatMinutes(p.tempo_total_minutos)}
+                            {formatMinutes(p.tempoTotalMinutos)}
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -1098,20 +1098,20 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                             <div className="h-2 w-16 overflow-hidden rounded-full bg-neutral-200">
                               <div
                                 className={`h-full rounded-full ${
-                                  p.percentual_dinamica >= 100
+                                  p.percentualDinamica >= 100
                                     ? "bg-emerald-500"
-                                    : p.percentual_dinamica >= 50
+                                    : p.percentualDinamica >= 50
                                       ? "bg-amber-500"
                                       : "bg-red-500"
                                 }`}
-                                style={{ width: `${Math.min(p.percentual_dinamica, 100)}%` }}
+                                style={{ width: `${Math.min(p.percentualDinamica, 100)}%` }}
                               />
                             </div>
-                            <span className="text-xs text-neutral-500">{p.percentual_dinamica}%</span>
+                            <span className="text-xs text-neutral-500">{p.percentualDinamica}%</span>
                           </div>
                         </td>
                         <td className="px-6 py-4 text-xs text-neutral-500">
-                          {formatDate(p.criado_em)}
+                          {formatDate(p.criadoEm)}
                         </td>
                         <td className="px-6 py-4">
                           <button
@@ -1157,10 +1157,10 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
 
             <div className="mb-4 rounded-lg bg-amber-50 p-3">
               <p className="text-sm text-amber-800">
-                <strong>Nome no Zoom:</strong> {resolvingPending.participante_nome}
+                <strong>Nome no Zoom:</strong> {resolvingPending.participanteNome}
               </p>
               <p className="text-sm text-amber-700">
-                Treinamento: {resolvingPending.treinamento_id} | Tempo: {formatMinutes(resolvingPending.tempo_total_minutos)} | Dinâmica: {resolvingPending.percentual_dinamica}%
+                Treinamento: {resolvingPending.treinamentoId} | Tempo: {formatMinutes(resolvingPending.tempoTotalMinutos)} | Dinâmica: {resolvingPending.percentualDinamica}%
               </p>
             </div>
 
