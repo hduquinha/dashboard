@@ -25,6 +25,43 @@ export async function POST(request: NextRequest) {
 
     const pool = getPool();
 
+    // Primeiro, busca os dados de presença das inscrições para salvar como pendentes
+    const presenceDataResult = await pool.query(
+      `SELECT 
+        id,
+        payload->>'presenca_participante_nome' AS participante_nome,
+        payload->>'presenca_treinamento_id' AS treinamento_id,
+        COALESCE((payload->>'presenca_aprovada')::boolean, false) AS aprovado,
+        COALESCE((payload->>'presenca_tempo_total_minutos')::integer, 0) AS tempo_total,
+        COALESCE((payload->>'presenca_tempo_dinamica_minutos')::integer, 0) AS tempo_dinamica,
+        COALESCE((payload->>'presenca_percentual_dinamica')::integer, 0) AS percentual
+      FROM ${SCHEMA_NAME}.inscricoes
+      WHERE id = ANY($1::int[])
+        AND payload->>'presenca_validada' = 'true'
+        AND payload->>'presenca_participante_nome' IS NOT NULL`,
+      [ids]
+    );
+
+    // Insere na tabela de pendentes como "not-found" para cada presença que será removida
+    for (const row of presenceDataResult.rows) {
+      if (row.participante_nome && row.treinamento_id) {
+        await pool.query(
+          `INSERT INTO ${SCHEMA_NAME}.presencas_pendentes 
+           (participante_nome, treinamento_id, aprovado, tempo_total_minutos, tempo_dinamica_minutos, percentual_dinamica, status)
+           VALUES ($1, $2, $3, $4, $5, $6, 'not-found')
+           ON CONFLICT (participante_nome, treinamento_id) DO NOTHING`,
+          [
+            row.participante_nome,
+            row.treinamento_id,
+            row.aprovado,
+            row.tempo_total,
+            row.tempo_dinamica,
+            row.percentual,
+          ]
+        );
+      }
+    }
+
     // Remove todos os campos de presença do payload
     const keysToRemove = [
       'presenca_validada',
@@ -58,14 +95,16 @@ export async function POST(request: NextRequest) {
 
     const removedCount = result.rowCount ?? 0;
     const nomes = result.rows.map((r: { id: number; nome: string | null }) => r.nome ?? `ID ${r.id}`);
+    const pendingCount = presenceDataResult.rowCount ?? 0;
 
     return NextResponse.json({
       success: true,
       message: removedCount === 1
-        ? `Presença de "${nomes[0]}" foi desassociada com sucesso.`
-        : `${removedCount} presenças foram desassociadas com sucesso.`,
+        ? `Presença de "${nomes[0]}" foi desassociada e movida para pendentes.`
+        : `${removedCount} presenças foram desassociadas e movidas para pendentes.`,
       removedCount,
       removedIds: ids,
+      pendingCount,
     });
   } catch (error) {
     console.error("Erro ao remover presença:", error);
