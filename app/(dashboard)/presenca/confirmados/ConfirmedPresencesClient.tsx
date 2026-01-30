@@ -62,14 +62,18 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-export default function ConfirmedPresencesClient() {
+interface ConfirmedPresencesClientProps {
+  initialTraining?: string;
+}
+
+export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedPresencesClientProps) {
   const [presences, setPresences] = useState<PresenceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedTraining, setSelectedTraining] = useState<string>("all");
+  const [selectedTraining, setSelectedTraining] = useState<string>(initialTraining ?? "all");
   const [showApproved, setShowApproved] = useState(true);
   const [showRejected, setShowRejected] = useState(true);
 

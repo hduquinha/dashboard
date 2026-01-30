@@ -150,21 +150,32 @@ export default async function TreinamentosPage() {
                 </div>
               </div>
               
-              <div className="mt-4 flex gap-2">
-                <Link
-                  href={`/treinamentos/${encodeURIComponent(training.id)}`}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#26a8ad]"
-                >
-                  <Trophy className="h-4 w-4" />
-                  Ranking
-                </Link>
-                <Link
-                  href={`/crm?treinamento=${encodeURIComponent(training.id)}`}
-                  className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-700 transition hover:bg-neutral-200"
-                >
-                  Ver inscritos
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
+              <div className="mt-4 flex flex-col gap-2">
+                <div className="flex gap-2">
+                  <Link
+                    href={`/treinamentos/${encodeURIComponent(training.id)}`}
+                    className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#26a8ad]"
+                  >
+                    <Trophy className="h-4 w-4" />
+                    Ranking
+                  </Link>
+                  <Link
+                    href={`/crm?treinamento=${encodeURIComponent(training.id)}`}
+                    className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-neutral-100 px-4 py-2.5 text-sm font-medium text-neutral-700 transition hover:bg-neutral-200"
+                  >
+                    Ver inscritos
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+                {training.presentes > 0 && (
+                  <Link
+                    href={`/presenca/confirmados?treinamento=${encodeURIComponent(training.id)}`}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-cyan-50 px-4 py-2.5 text-sm font-medium text-cyan-700 transition hover:bg-cyan-100"
+                  >
+                    <UserCheck className="h-4 w-4" />
+                    Ver presentes ({training.presentes})
+                  </Link>
+                )}
               </div>
             </div>
           ))

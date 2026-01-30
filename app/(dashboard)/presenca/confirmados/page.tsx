@@ -8,6 +8,11 @@ export const metadata: Metadata = {
   description: "Visualize todos os participantes com presença validada e aprovada.",
 };
 
-export default function PresencasConfirmadasPage() {
-  return <ConfirmedPresencesClient />;
+interface PageProps {
+  searchParams: Promise<{ treinamento?: string }>;
+}
+
+export default async function PresencasConfirmadasPage({ searchParams }: PageProps) {
+  const params = await searchParams;
+  return <ConfirmedPresencesClient initialTraining={params.treinamento} />;
 }
