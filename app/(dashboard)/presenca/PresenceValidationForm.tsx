@@ -182,19 +182,39 @@ export default function PresenceValidationForm() {
         throw new Error(data.error || "Erro ao processar arquivo");
       }
 
-      // Inicializa estado dos participantes
+      // Converte datas do config de string para Date (JSON não preserva Date)
+      const config: PresenceConfig = {
+        treinamentoId: data.config.treinamentoId,
+        inicioLive: new Date(data.config.inicioLive),
+        fimLive: new Date(data.config.fimLive),
+        inicioDinamica: new Date(data.config.inicioDinamica),
+        fimDinamica: new Date(data.config.fimDinamica),
+        tempoMinimoMinutos: data.config.tempoMinimoMinutos,
+        percentualMinimoDinamica: data.config.percentualMinimoDinamica,
+      };
+
+      // Inicializa estado dos participantes (também converte datas das entradas)
       const participants: ParticipantWithAnalysis[] = data.participants.map((p: {
         participante: ZoomParticipantConsolidated;
         analise: PresenceAnalysis;
       }) => ({
-        participante: p.participante,
+        participante: {
+          ...p.participante,
+          primeiraEntrada: new Date(p.participante.primeiraEntrada),
+          ultimaSaida: new Date(p.participante.ultimaSaida),
+          entradas: p.participante.entradas.map((e: { entrada: string | Date; saida: string | Date; duracaoMinutos: number }) => ({
+            entrada: new Date(e.entrada),
+            saida: new Date(e.saida),
+            duracaoMinutos: e.duracaoMinutos,
+          })),
+        },
         analise: p.analise,
         removed: false,
       }));
 
       setParsedData({
         participants,
-        config: data.config,
+        config,
         inscricoesDisponiveis: data.inscricoesDisponiveis,
         filename: data.filename,
       });
