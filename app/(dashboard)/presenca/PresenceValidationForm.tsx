@@ -558,6 +558,28 @@ export default function PresenceValidationForm() {
         };
       });
 
+    // Coletar pendentes (not-found e doubt)
+    const pendingToSave = activeParticipants
+      .filter((p: ParticipantWithAnalysis) => {
+        const assoc = associations.get(p.participante.nomeOriginal);
+        return assoc && (assoc.status === "not-found" || assoc.status === "doubt");
+      })
+      .map((p: ParticipantWithAnalysis) => {
+        const assoc = associations.get(p.participante.nomeOriginal)!;
+        return {
+          participanteNome: p.participante.nomeOriginal,
+          aprovado: p.analise.aprovado,
+          tempoTotal: p.analise.tempoTotalMinutos,
+          tempoDinamica: p.analise.tempoDinamicaMinutos,
+          percentualDinamica: p.analise.percentualDinamica,
+          status: assoc.status as "not-found" | "doubt",
+          inscricaoId1: assoc.inscricaoId ?? null,
+          inscricaoNome1: assoc.inscricaoNome ?? null,
+          inscricaoId2: assoc.inscricaoId2 ?? null,
+          inscricaoNome2: assoc.inscricaoNome2 ?? null,
+        };
+      });
+
     startConfirm(async () => {
       try {
         const response = await fetch("/api/presence/confirm", {
@@ -565,6 +587,7 @@ export default function PresenceValidationForm() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             associations: toSave,
+            pending: pendingToSave,
             treinamentoId: parsedData.config!.treinamentoId,
           }),
         });

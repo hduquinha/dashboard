@@ -21,6 +21,22 @@ interface PresenceRecord {
   validadoEm: string | null;
 }
 
+interface PendingRecord {
+  id: number;
+  participanteNome: string;
+  treinamentoId: string;
+  aprovado: boolean;
+  tempoTotalMinutos: number;
+  tempoDinamicaMinutos: number;
+  percentualDinamica: number;
+  status: "not-found" | "doubt";
+  inscricaoId1: number | null;
+  inscricaoNome1: string | null;
+  inscricaoId2: number | null;
+  inscricaoNome2: string | null;
+  criadoEm: string;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -125,6 +141,69 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // Buscar presenças pendentes (not-found e doubt)
+    let pendingRecords: PendingRecord[] = [];
+    try {
+      const pendingQuery = `
+        SELECT 
+          id,
+          participante_nome,
+          treinamento_id,
+          aprovado,
+          tempo_total_minutos,
+          tempo_dinamica_minutos,
+          percentual_dinamica,
+          status,
+          inscricao_id_1,
+          inscricao_nome_1,
+          inscricao_id_2,
+          inscricao_nome_2,
+          criado_em,
+          resolvido_em,
+          inscricao_final_id
+        FROM ${SCHEMA_NAME}.presencas_pendentes
+        WHERE resolvido_em IS NULL
+        ${treinamentoId ? "AND treinamento_id = $1" : ""}
+        ORDER BY criado_em DESC
+      `;
+      
+      const pendingResult = await pool.query<{
+        id: number;
+        participante_nome: string;
+        treinamento_id: string;
+        aprovado: boolean;
+        tempo_total_minutos: number;
+        tempo_dinamica_minutos: number;
+        percentual_dinamica: number;
+        status: string;
+        inscricao_id_1: number | null;
+        inscricao_nome_1: string | null;
+        inscricao_id_2: number | null;
+        inscricao_nome_2: string | null;
+        criado_em: string;
+        resolvido_em: string | null;
+        inscricao_final_id: number | null;
+      }>(pendingQuery, treinamentoId ? [treinamentoId] : []);
+
+      pendingRecords = pendingResult.rows.map((row) => ({
+        id: row.id,
+        participanteNome: row.participante_nome,
+        treinamentoId: row.treinamento_id,
+        aprovado: row.aprovado,
+        tempoTotalMinutos: row.tempo_total_minutos,
+        tempoDinamicaMinutos: row.tempo_dinamica_minutos,
+        percentualDinamica: row.percentual_dinamica,
+        status: row.status as "not-found" | "doubt",
+        inscricaoId1: row.inscricao_id_1,
+        inscricaoNome1: row.inscricao_nome_1,
+        inscricaoId2: row.inscricao_id_2,
+        inscricaoNome2: row.inscricao_nome_2,
+        criadoEm: row.criado_em,
+      }));
+    } catch {
+      // Tabela pode não existir ainda, ignorar erro
+    }
+
     // Estatísticas
     const totalAprovados = presences.filter((p) => p.aprovado).length;
     const totalReprovados = presences.filter((p) => !p.aprovado).length;
@@ -135,6 +214,8 @@ export async function GET(request: NextRequest) {
       totalAprovados,
       totalReprovados,
       presences,
+      pending: pendingRecords,
+      totalPending: pendingRecords.length,
     });
   } catch (error) {
     console.error("Erro ao listar presenças:", error);

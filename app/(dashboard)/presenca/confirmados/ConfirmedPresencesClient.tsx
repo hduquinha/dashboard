@@ -15,6 +15,10 @@ import {
   UserX,
   Trash2,
   Loader2,
+  AlertTriangle,
+  HelpCircle,
+  Link,
+  UserPlus,
 } from "lucide-react";
 
 interface PresenceRecord {
@@ -34,12 +38,39 @@ interface PresenceRecord {
   validadoEm: string | null;
 }
 
+interface PendingRecord {
+  id: number;
+  participanteNome: string;
+  treinamentoId: string;
+  aprovado: boolean;
+  tempoTotalMinutos: number;
+  tempoDinamicaMinutos: number;
+  percentualDinamica: number;
+  status: "not-found" | "doubt";
+  inscricaoId1: number | null;
+  inscricaoNome1: string | null;
+  inscricaoId2: number | null;
+  inscricaoNome2: string | null;
+  criadoEm: string;
+}
+
+interface InscricaoSearchResult {
+  id: number;
+  nome: string;
+  telefone: string | null;
+  cidade: string | null;
+  treinamento: string | null;
+  recrutadorCodigo: string | null;
+}
+
 interface ApiResponse {
   success: boolean;
   total: number;
   totalAprovados: number;
   totalReprovados: number;
   presences: PresenceRecord[];
+  pending?: PendingRecord[];
+  totalPending?: number;
 }
 
 function formatMinutes(minutes: number): string {
@@ -68,6 +99,7 @@ interface ConfirmedPresencesClientProps {
 
 export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedPresencesClientProps) {
   const [presences, setPresences] = useState<PresenceRecord[]>([]);
+  const [pendingRecords, setPendingRecords] = useState<PendingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,6 +108,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
   const [selectedTraining, setSelectedTraining] = useState<string>(initialTraining ?? "all");
   const [showApproved, setShowApproved] = useState(true);
   const [showRejected, setShowRejected] = useState(true);
+  const [activeTab, setActiveTab] = useState<"confirmed" | "pending">("confirmed");
 
   // Stats
   const [totalAprovados, setTotalAprovados] = useState(0);
@@ -87,6 +120,14 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
 
   // Remoção de presença
   const [removingId, setRemovingId] = useState<number | null>(null);
+
+  // Modal de reassociação
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
+  const [resolvingPending, setResolvingPending] = useState<PendingRecord | null>(null);
+  const [resolveSearchQuery, setResolveSearchQuery] = useState("");
+  const [resolveSearchResults, setResolveSearchResults] = useState<InscricaoSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
 
   // Toggle seleção de um item
   const toggleSelect = (id: number) => {
@@ -223,6 +264,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         }
         const data: ApiResponse = await response.json();
         setPresences(data.presences);
+        setPendingRecords(data.pending ?? []);
         setTotalAprovados(data.totalAprovados);
         setTotalReprovados(data.totalReprovados);
       } catch (err) {
@@ -234,6 +276,92 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
 
     fetchPresences();
   }, []);
+
+  // Buscar inscrições para resolução
+  useEffect(() => {
+    if (!resolveSearchQuery || resolveSearchQuery.length < 2) {
+      setResolveSearchResults([]);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(async () => {
+      setIsSearching(true);
+      try {
+        const response = await fetch(
+          `/api/presence/resolve?q=${encodeURIComponent(resolveSearchQuery)}`,
+          { signal: controller.signal }
+        );
+        if (response.ok) {
+          const data = await response.json();
+          setResolveSearchResults(data.inscricoes ?? []);
+        }
+      } catch {
+        // Ignorar erros de abort
+      } finally {
+        setIsSearching(false);
+      }
+    }, 300);
+
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [resolveSearchQuery]);
+
+  // Abrir modal de resolução
+  const openResolveModal = (pending: PendingRecord) => {
+    setResolvingPending(pending);
+    setResolveSearchQuery(pending.participanteNome.split(" ")[0]);
+    setResolveSearchResults([]);
+    setResolveModalOpen(true);
+  };
+
+  // Resolver pendente (associar a uma inscrição)
+  const handleResolve = async (inscricaoId: number) => {
+    if (!resolvingPending) return;
+
+    setIsResolving(true);
+    try {
+      const response = await fetch("/api/presence/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pendingId: resolvingPending.id,
+          inscricaoId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error ?? "Erro ao resolver");
+      }
+
+      // Remove da lista de pendentes
+      setPendingRecords((prev) => prev.filter((p) => p.id !== resolvingPending.id));
+
+      // Fecha o modal
+      setResolveModalOpen(false);
+      setResolvingPending(null);
+      setResolveSearchQuery("");
+
+      // Recarrega as presenças confirmadas
+      const presencesResponse = await fetch("/api/presence/list?aprovados=false");
+      if (presencesResponse.ok) {
+        const presencesData: ApiResponse = await presencesResponse.json();
+        setPresences(presencesData.presences);
+        setTotalAprovados(presencesData.totalAprovados);
+        setTotalReprovados(presencesData.totalReprovados);
+      }
+
+      alert("Presença associada com sucesso!");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erro ao resolver");
+    } finally {
+      setIsResolving(false);
+    }
+  };
 
   // Lista de treinamentos únicos
   const trainings = useMemo(() => {
@@ -270,84 +398,24 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
     });
   }, [presences, searchQuery, selectedTraining, showApproved, showRejected]);
 
-  // Lista de recrutadores com seus nomes
-  const recruiters = [
-    { code: "01", name: "Rodrigo" },
-    { code: "02", name: "Vanessa" },
-    { code: "03", name: "Jane" },
-    { code: "04", name: "Jhonatha" },
-    { code: "05", name: "Agatha" },
-    { code: "06", name: "Valda" },
-    { code: "07", name: "Cely" },
-    { code: "08", name: "Lourenço" },
-    { code: "09", name: "Bárbara" },
-    { code: "10", name: "Sandra" },
-    { code: "11", name: "Karina" },
-    { code: "12", name: "Paula Porto" },
-    { code: "13", name: "Regina Gondim" },
-    { code: "14", name: "Salete" },
-    { code: "15", name: "Marcos" },
-    { code: "16", name: "Ivaneide" },
-    { code: "17", name: "Karen" },
-    { code: "18", name: "Claudia Talib" },
-    { code: "19", name: "Anselmo" },
-    { code: "20", name: "Alessandra" },
-    { code: "21", name: "Cleidiane" },
-    { code: "22", name: "Renata Vergílio" },
-    { code: "23", name: "Alice" },
-    { code: "24", name: "Eliane/Márcio" },
-    { code: "25", name: "Adriana Davies" },
-    { code: "26", name: "Maria Léo" },
-    { code: "27", name: "Marcelo" },
-    { code: "28", name: "Adryelly" },
-    { code: "29", name: "Aline Nobile" },
-    { code: "30", name: "Kleidiane" },
-    { code: "31", name: "Gilsemara" },
-    { code: "32", name: "Josefa" },
-    { code: "33", name: "Mara" },
-    { code: "34", name: "Thais/Jorge" },
-    { code: "35", name: "Recrutador 35" },
-    { code: "36", name: "Recrutador 36" },
-    { code: "37", name: "André Rufino" },
-    { code: "38", name: "Recrutador 38" },
-    { code: "39", name: "Recrutador 39" },
-    { code: "40", name: "Recrutador 40" },
-    { code: "41", name: "Recrutador 41" },
-    { code: "42", name: "Recrutador 42" },
-    { code: "43", name: "Recrutador 43" },
-    { code: "44", name: "Recrutador 44" },
-    { code: "45", name: "Recrutador 45" },
-    { code: "46", name: "Lucas" },
-    { code: "47", name: "Recrutador 47" },
-    { code: "48", name: "Recrutador 48" },
-    { code: "49", name: "Recrutador 49" },
-    { code: "50", name: "Recrutador 50" },
-    { code: "51", name: "Recrutador 51" },
-    { code: "52", name: "Recrutador 52" },
-    { code: "53", name: "Recrutador 53" },
-    { code: "54", name: "Recrutador 54" },
-    { code: "55", name: "Recrutador 55" },
-    { code: "56", name: "Recrutador 56" },
-    { code: "57", name: "Recrutador 57" },
-    { code: "58", name: "Recrutador 58" },
-    { code: "59", name: "Recrutador 59" },
-    { code: "60", name: "Recrutador 60" },
-    { code: "61", name: "Recrutador 61" },
-    { code: "62", name: "Recrutador 62" },
-    { code: "63", name: "Recrutador 63" },
-    { code: "64", name: "Recrutador 64" },
-    { code: "65", name: "Recrutador 65" },
-    { code: "66", name: "Recrutador 66" },
-    { code: "67", name: "Recrutador 67" },
-    { code: "68", name: "Recrutador 68" },
-    { code: "69", name: "Recrutador 69" },
-    { code: "70", name: "Recrutador 70" },
-  ];
+  // Filtrar pendentes
+  const filteredPending = useMemo(() => {
+    return pendingRecords.filter((p) => {
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const matchesName = p.participanteNome.toLowerCase().includes(query);
+        if (!matchesName) return false;
+      }
+      if (selectedTraining !== "all" && p.treinamentoId !== selectedTraining) {
+        return false;
+      }
+      return true;
+    });
+  }, [pendingRecords, searchQuery, selectedTraining]);
 
   const getRecruiterName = (code: string | null): string => {
     if (!code) return "Sem Cluster";
-    const recruiter = recruiters.find(r => r.code === code);
-    return recruiter ? recruiter.name : `Cluster ${code}`;
+    return `Cluster ${code}`;
   };
 
   // Gerar relatório com ranking de clusters
@@ -663,7 +731,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       </header>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#2DBDC2]/10">
             <Users className="h-6 w-6 text-[#2DBDC2]" />
@@ -703,226 +771,448 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
             <p className="text-2xl font-bold text-purple-600">{trainings.length}</p>
           </div>
         </div>
-      </div>
 
-      {/* Filters */}
-      <div className="flex flex-col gap-4 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
-        {/* Search */}
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-          <input
-            type="text"
-            placeholder="Buscar por nome, telefone, cidade ou recrutador..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full rounded-xl border border-neutral-200 bg-neutral-50 py-2.5 pl-10 pr-4 text-sm transition focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
-          />
-        </div>
-
-        {/* Training Filter */}
-        <div className="relative">
-          <Filter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-          <select
-            value={selectedTraining}
-            onChange={(e) => setSelectedTraining(e.target.value)}
-            className="appearance-none rounded-xl border border-neutral-200 bg-neutral-50 py-2.5 pl-10 pr-10 text-sm transition focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
-          >
-            <option value="all">Todos os treinamentos</option>
-            {trainings.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
-        </div>
-
-        {/* Status Toggles */}
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setShowApproved(!showApproved)}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-              showApproved
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-neutral-100 text-neutral-400"
-            }`}
-          >
-            <CheckCircle className="h-4 w-4" />
-            Aprovados
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowRejected(!showRejected)}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
-              showRejected
-                ? "bg-red-100 text-red-700"
-                : "bg-neutral-100 text-neutral-400"
-            }`}
-          >
-            <XCircle className="h-4 w-4" />
-            Reprovados
-          </button>
-        </div>
-
-        {/* Botão de desassociar em massa */}
-        {selectedIds.size > 0 && (
-          <button
-            type="button"
-            onClick={handleBulkRemove}
-            disabled={isRemovingBulk}
-            className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isRemovingBulk ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Trash2 className="h-4 w-4" />
-            )}
-            Desassociar ({selectedIds.size})
-          </button>
-        )}
-      </div>
-
-      {/* Results */}
-      <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="border-b border-neutral-100 px-6 py-4">
-          <p className="text-sm text-neutral-500">
-            Exibindo <span className="font-medium text-neutral-900">{filteredPresences.length}</span> de{" "}
-            <span className="font-medium text-neutral-900">{presences.length}</span> registros
-          </p>
-        </div>
-
-        {filteredPresences.length === 0 ? (
-          <div className="py-16 text-center">
-            <Users className="mx-auto h-12 w-12 text-neutral-300" />
-            <h3 className="mt-4 text-lg font-medium text-neutral-900">Nenhum registro encontrado</h3>
-            <p className="mt-2 text-sm text-neutral-500">
-              Ajuste os filtros ou aguarde a validação de presenças.
-            </p>
+        <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50">
+            <AlertTriangle className="h-6 w-6 text-amber-500" />
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
-                <tr>
-                  <th className="px-4 py-3 w-12">
-                    <input
-                      type="checkbox"
-                      checked={filteredPresences.length > 0 && filteredPresences.every((p) => selectedIds.has(p.inscricaoId))}
-                      onChange={toggleSelectAll}
-                      className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
-                    />
-                  </th>
-                  <th className="px-6 py-3">Participante</th>
-                  <th className="px-6 py-3">Contato</th>
-                  <th className="px-6 py-3">Treinamento</th>
-                  <th className="px-6 py-3">Recrutador</th>
-                  <th className="px-6 py-3">Tempo</th>
-                  <th className="px-6 py-3">Dinâmica</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Validado</th>
-                  <th className="px-6 py-3">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-100">
-                {filteredPresences.map((p) => (
-                  <tr key={p.inscricaoId} className={`hover:bg-neutral-50 ${selectedIds.has(p.inscricaoId) ? 'bg-cyan-50' : ''}`}>
-                    <td className="px-4 py-4">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(p.inscricaoId)}
-                        onChange={() => toggleSelect(p.inscricaoId)}
-                        className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
-                      />
-                    </td>
-                    <td className="px-6 py-4">
-                      <div>
-                        <p className="font-medium text-neutral-900">{p.nome}</p>
-                        {p.participanteNomeZoom && p.participanteNomeZoom !== p.nome && (
-                          <p className="text-xs text-neutral-500">
-                            Zoom: {p.participanteNomeZoom}
-                          </p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm">
-                        {p.telefone && <p className="text-neutral-700">{p.telefone}</p>}
-                        {p.cidade && <p className="text-neutral-500">{p.cidade}</p>}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="inline-flex items-center rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700">
-                        {p.treinamentoId}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="text-sm text-neutral-600">
-                        {p.recrutadorNome ?? p.recrutadorCodigo ?? "-"}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1.5 text-sm text-neutral-600">
-                        <Clock className="h-4 w-4" />
-                        {formatMinutes(p.tempoTotalMinutos)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 w-16 overflow-hidden rounded-full bg-neutral-200">
-                          <div
-                            className={`h-full rounded-full ${
-                              p.percentualDinamica >= 100
-                                ? "bg-emerald-500"
-                                : p.percentualDinamica >= 50
-                                  ? "bg-amber-500"
-                                  : "bg-red-500"
-                            }`}
-                            style={{ width: `${Math.min(p.percentualDinamica, 100)}%` }}
+          <div>
+            <p className="text-sm font-medium text-neutral-500">Pendentes</p>
+            <p className="text-2xl font-bold text-amber-600">{pendingRecords.length}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-neutral-200">
+        <button
+          type="button"
+          onClick={() => setActiveTab("confirmed")}
+          className={`px-4 py-2 text-sm font-medium transition ${
+            activeTab === "confirmed"
+              ? "border-b-2 border-[#2DBDC2] text-[#2DBDC2]"
+              : "text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          ✓ Confirmados ({presences.length})
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("pending")}
+          className={`px-4 py-2 text-sm font-medium transition ${
+            activeTab === "pending"
+              ? "border-b-2 border-amber-500 text-amber-600"
+              : "text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          ⚠ Pendentes ({pendingRecords.length})
+        </button>
+      </div>
+
+      {/* Conteúdo baseado na aba ativa */}
+      {activeTab === "confirmed" ? (
+        <>
+          {/* Filters */}
+          <div className="flex flex-col gap-4 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm md:flex-row md:items-center">
+            {/* Search */}
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+              <input
+                type="text"
+                placeholder="Buscar por nome, telefone, cidade ou recrutador..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full rounded-xl border border-neutral-200 bg-neutral-50 py-2.5 pl-10 pr-4 text-sm transition focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
+              />
+            </div>
+
+            {/* Training Filter */}
+            <div className="relative">
+              <Filter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+              <select
+                value={selectedTraining}
+                onChange={(e) => setSelectedTraining(e.target.value)}
+                className="appearance-none rounded-xl border border-neutral-200 bg-neutral-50 py-2.5 pl-10 pr-10 text-sm transition focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
+              >
+                <option value="all">Todos os treinamentos</option>
+                {trainings.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+            </div>
+
+            {/* Status Toggles */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowApproved(!showApproved)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  showApproved
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-neutral-100 text-neutral-400"
+                }`}
+              >
+                <CheckCircle className="h-4 w-4" />
+                Aprovados
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRejected(!showRejected)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  showRejected
+                    ? "bg-red-100 text-red-700"
+                    : "bg-neutral-100 text-neutral-400"
+                }`}
+              >
+                <XCircle className="h-4 w-4" />
+                Reprovados
+              </button>
+            </div>
+
+            {/* Botão de desassociar em massa */}
+            {selectedIds.size > 0 && (
+              <button
+                type="button"
+                onClick={handleBulkRemove}
+                disabled={isRemovingBulk}
+                className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isRemovingBulk ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                Desassociar ({selectedIds.size})
+              </button>
+            )}
+          </div>
+
+          {/* Results */}
+          <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="border-b border-neutral-100 px-6 py-4">
+              <p className="text-sm text-neutral-500">
+                Exibindo <span className="font-medium text-neutral-900">{filteredPresences.length}</span> de{" "}
+                <span className="font-medium text-neutral-900">{presences.length}</span> registros
+              </p>
+            </div>
+
+            {filteredPresences.length === 0 ? (
+              <div className="py-16 text-center">
+                <Users className="mx-auto h-12 w-12 text-neutral-300" />
+                <h3 className="mt-4 text-lg font-medium text-neutral-900">Nenhum registro encontrado</h3>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Ajuste os filtros ou aguarde a validação de presenças.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
+                    <tr>
+                      <th className="px-4 py-3 w-12">
+                        <input
+                          type="checkbox"
+                          checked={filteredPresences.length > 0 && filteredPresences.every((p) => selectedIds.has(p.inscricaoId))}
+                          onChange={toggleSelectAll}
+                          className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
+                        />
+                      </th>
+                      <th className="px-6 py-3">Participante</th>
+                      <th className="px-6 py-3">Contato</th>
+                      <th className="px-6 py-3">Treinamento</th>
+                      <th className="px-6 py-3">Recrutador</th>
+                      <th className="px-6 py-3">Tempo</th>
+                      <th className="px-6 py-3">Dinâmica</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3">Validado</th>
+                      <th className="px-6 py-3">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {filteredPresences.map((p) => (
+                      <tr key={p.inscricaoId} className={`hover:bg-neutral-50 ${selectedIds.has(p.inscricaoId) ? 'bg-cyan-50' : ''}`}>
+                        <td className="px-4 py-4">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(p.inscricaoId)}
+                            onChange={() => toggleSelect(p.inscricaoId)}
+                            className="h-4 w-4 rounded border-neutral-300 text-cyan-600 focus:ring-cyan-500"
                           />
-                        </div>
-                        <span className="text-xs text-neutral-500">{p.percentualDinamica}%</span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div>
+                            <p className="font-medium text-neutral-900">{p.nome}</p>
+                            {p.participanteNomeZoom && p.participanteNomeZoom !== p.nome && (
+                              <p className="text-xs text-neutral-500">
+                                Zoom: {p.participanteNomeZoom}
+                              </p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="text-sm">
+                            {p.telefone && <p className="text-neutral-700">{p.telefone}</p>}
+                            {p.cidade && <p className="text-neutral-500">{p.cidade}</p>}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700">
+                            {p.treinamentoId}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="text-sm text-neutral-600">
+                            {p.recrutadorNome ?? p.recrutadorCodigo ?? "-"}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1.5 text-sm text-neutral-600">
+                            <Clock className="h-4 w-4" />
+                            {formatMinutes(p.tempoTotalMinutos)}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-16 overflow-hidden rounded-full bg-neutral-200">
+                              <div
+                                className={`h-full rounded-full ${
+                                  p.percentualDinamica >= 100
+                                    ? "bg-emerald-500"
+                                    : p.percentualDinamica >= 50
+                                      ? "bg-amber-500"
+                                      : "bg-red-500"
+                                }`}
+                                style={{ width: `${Math.min(p.percentualDinamica, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-neutral-500">{p.percentualDinamica}%</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          {p.aprovado ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                              <CheckCircle className="h-3 w-3" />
+                              Aprovado
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                              <XCircle className="h-3 w-3" />
+                              Reprovado
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 text-xs text-neutral-500">
+                          {formatDate(p.validadoEm)}
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePresence(p.inscricaoId, p.nome)}
+                            disabled={removingId === p.inscricaoId}
+                            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Desassociar presença"
+                          >
+                            {removingId === p.inscricaoId ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                            Desassociar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <>
+          {/* Pending Records Section */}
+          <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="border-b border-neutral-100 px-6 py-4">
+              <p className="text-sm text-neutral-500">
+                <span className="font-medium text-neutral-900">{filteredPending.length}</span> participantes pendentes de associação
+              </p>
+            </div>
+
+            {filteredPending.length === 0 ? (
+              <div className="py-16 text-center">
+                <CheckCircle className="mx-auto h-12 w-12 text-emerald-300" />
+                <h3 className="mt-4 text-lg font-medium text-neutral-900">Nenhum pendente</h3>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Todos os participantes foram associados corretamente.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-50 text-left text-xs font-medium uppercase tracking-wider text-neutral-500">
+                    <tr>
+                      <th className="px-6 py-3">Participante (Zoom)</th>
+                      <th className="px-6 py-3">Treinamento</th>
+                      <th className="px-6 py-3">Status</th>
+                      <th className="px-6 py-3">Tempo</th>
+                      <th className="px-6 py-3">Dinâmica</th>
+                      <th className="px-6 py-3">Criado em</th>
+                      <th className="px-6 py-3">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {filteredPending.map((p) => (
+                      <tr key={p.id} className="hover:bg-neutral-50">
+                        <td className="px-6 py-4">
+                          <p className="font-medium text-neutral-900">{p.participante_nome}</p>
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className="inline-flex items-center rounded-lg bg-neutral-100 px-2.5 py-1 text-xs font-medium text-neutral-700">
+                            {p.treinamento_id}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          {p.status === "not-found" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                              <Search className="h-3 w-3" />
+                              Não encontrado
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700">
+                              <AlertTriangle className="h-3 w-3" />
+                              Dúvida
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-1.5 text-sm text-neutral-600">
+                            <Clock className="h-4 w-4" />
+                            {formatMinutes(p.tempo_total_minutos)}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
+                            <div className="h-2 w-16 overflow-hidden rounded-full bg-neutral-200">
+                              <div
+                                className={`h-full rounded-full ${
+                                  p.percentual_dinamica >= 100
+                                    ? "bg-emerald-500"
+                                    : p.percentual_dinamica >= 50
+                                      ? "bg-amber-500"
+                                      : "bg-red-500"
+                                }`}
+                                style={{ width: `${Math.min(p.percentual_dinamica, 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-neutral-500">{p.percentual_dinamica}%</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-xs text-neutral-500">
+                          {formatDate(p.criado_em)}
+                        </td>
+                        <td className="px-6 py-4">
+                          <button
+                            type="button"
+                            onClick={() => openResolveModal(p)}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-[#2DBDC2] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[#25a5a9]"
+                          >
+                            <UserPlus className="h-4 w-4" />
+                            Associar
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Resolve Modal */}
+      {resolveModalOpen && resolvingPending && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-neutral-900">
+                Associar Participante
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setResolveModalOpen(false);
+                  setResolvingPending(null);
+                  setResolveSearchQuery("");
+                  setResolveSearchResults([]);
+                }}
+                className="rounded-lg p-1 text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-600"
+              >
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="mb-4 rounded-lg bg-amber-50 p-3">
+              <p className="text-sm text-amber-800">
+                <strong>Nome no Zoom:</strong> {resolvingPending.participante_nome}
+              </p>
+              <p className="text-sm text-amber-700">
+                Treinamento: {resolvingPending.treinamento_id} | Tempo: {formatMinutes(resolvingPending.tempo_total_minutos)} | Dinâmica: {resolvingPending.percentual_dinamica}%
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar inscrição por nome ou telefone..."
+                  value={resolveSearchQuery}
+                  onChange={(e) => setResolveSearchQuery(e.target.value)}
+                  className="w-full rounded-xl border border-neutral-200 bg-neutral-50 py-2.5 pl-10 pr-4 text-sm transition focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-400/20"
+                />
+              </div>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto">
+              {resolveSearchResults.length === 0 ? (
+                <p className="py-8 text-center text-sm text-neutral-500">
+                  {resolveSearchQuery.length >= 2
+                    ? "Nenhuma inscrição encontrada"
+                    : "Digite pelo menos 2 caracteres para buscar"}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {resolveSearchResults.map((insc) => (
+                    <div
+                      key={insc.id}
+                      className="flex items-center justify-between rounded-lg border border-neutral-200 p-3 transition hover:bg-neutral-50"
+                    >
+                      <div>
+                        <p className="font-medium text-neutral-900">{insc.nome}</p>
+                        <p className="text-xs text-neutral-500">
+                          {insc.telefone} | {insc.recrutadorNome ?? insc.recrutadorCodigo ?? "Sem recrutador"}
+                        </p>
                       </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      {p.aprovado ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                          <CheckCircle className="h-3 w-3" />
-                          Aprovado
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
-                          <XCircle className="h-3 w-3" />
-                          Reprovado
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-xs text-neutral-500">
-                      {formatDate(p.validadoEm)}
-                    </td>
-                    <td className="px-6 py-4">
                       <button
                         type="button"
-                        onClick={() => handleRemovePresence(p.inscricaoId, p.nome)}
-                        disabled={removingId === p.inscricaoId}
-                        className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        title="Desassociar presença"
+                        onClick={() => handleResolve(insc.id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700"
                       >
-                        {removingId === p.inscricaoId ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4" />
-                        )}
-                        Desassociar
+                        <CheckCircle className="h-4 w-4" />
+                        Selecionar
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </main>
   );
 }
