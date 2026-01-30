@@ -539,34 +539,6 @@ export default function InscricaoDetails({
                   </div>
                 ) : null}
               </div>
-              {isLead ? (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg border border-neutral-300 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 shadow-sm transition hover:bg-neutral-50"
-                    onClick={() => handleStatusChange("aguardando")}
-                    disabled={statusUpdating !== null}
-                  >
-                    Aguardando
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-emerald-500 px-4 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-600 disabled:opacity-60"
-                    onClick={() => handleStatusChange("aprovado")}
-                    disabled={statusUpdating !== null}
-                  >
-                    {statusUpdating === "aprovado" ? "..." : "✓ Aprovar"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg bg-rose-500 px-4 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-rose-600 disabled:opacity-60"
-                    onClick={() => handleStatusChange("rejeitado")}
-                    disabled={statusUpdating !== null}
-                  >
-                    {statusUpdating === "rejeitado" ? "..." : "✕ Rejeitar"}
-                  </button>
-                </div>
-              ) : null}
             </div>
           </section>
 
@@ -958,30 +930,171 @@ export default function InscricaoDetails({
             </summary>
             <div className="max-h-96 overflow-y-auto p-4">
               <div className="space-y-3">
-                {Object.entries(inscricao.payload).map(([key, value], index) => {
-                  const formattedKey = key
-                    .replace(/_/g, ' ')
-                    .replace(/([A-Z])/g, ' $1')
-                    .replace(/^./, str => str.toUpperCase())
-                    .trim();
+                {(() => {
+                  // Campos técnicos que devem ser ignorados
+                  const ignoredKeys = new Set([
+                    'source', 'traffic_source', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+                    'ip', 'user_agent', 'referrer', 'referer', 'fbclid', 'gclid', 'origin', 'origem',
+                    'parentId', 'sponsorId', 'indicadorId', 'recrutadorId', 'nivel', 'isRecruiter',
+                    'codigoRecrutador', 'tipo', 'type', 'formId', 'pageUrl', 'pageTitle',
+                    'presenca_validada', 'presenca_aprovada', 'presenca_participante_nome', 'presenca_status',
+                    'presenca_tempo_total_minutos', 'presenca_tempo_dinamica_minutos', 'presenca_percentual_dinamica',
+                    'presenca_treinamento_id', 'presenca_validada_em', 'statusWhatsappContacted',
+                    'cookies', 'session', 'token', 'device', 'browser', 'platform', 'id', 'ID',
+                    'entry.', 'hidden_', 'field_', '_field', '__', 'fbc', 'fbp'
+                  ]);
                   
-                  const formattedValue = value === null || value === undefined || value === '' 
-                    ? 'Não informado' 
-                    : typeof value === 'object' 
-                      ? JSON.stringify(value) 
-                      : String(value);
+                  // Mapeamento de nomes de campos para labels amigáveis
+                  const fieldLabels: Record<string, string> = {
+                    'nome': 'Nome',
+                    'name': 'Nome',
+                    'telefone': 'Telefone',
+                    'phone': 'Telefone',
+                    'celular': 'Celular',
+                    'whatsapp': 'WhatsApp',
+                    'email': 'E-mail',
+                    'cidade': 'Cidade',
+                    'city': 'Cidade',
+                    'estado': 'Estado',
+                    'state': 'Estado',
+                    'uf': 'UF',
+                    'profissao': 'Profissão',
+                    'profession': 'Profissão',
+                    'ocupacao': 'Ocupação',
+                    'treinamento': 'Treinamento',
+                    'training': 'Treinamento',
+                    'training_date': 'Data do Treinamento',
+                    'data_treinamento': 'Data do Treinamento',
+                    'timestamp': 'Data de Preenchimento',
+                    'created_at': 'Data de Preenchimento',
+                    'createdAt': 'Data de Preenchimento',
+                    'data_cadastro': 'Data de Cadastro',
+                    'idade': 'Idade',
+                    'age': 'Idade',
+                    'sexo': 'Sexo',
+                    'genero': 'Gênero',
+                    'gender': 'Gênero',
+                    'como_conheceu': 'Como nos Conheceu',
+                    'indicacao': 'Indicação',
+                    'observacao': 'Observação',
+                    'observacoes': 'Observações',
+                    'mensagem': 'Mensagem',
+                    'message': 'Mensagem',
+                    'interesse': 'Interesse',
+                    'objetivo': 'Objetivo',
+                    'experiencia': 'Experiência',
+                    'disponibilidade': 'Disponibilidade',
+                    'horario': 'Horário',
+                    'renda': 'Renda',
+                    'trabalho': 'Trabalho',
+                    'empresa': 'Empresa',
+                    'cargo': 'Cargo',
+                    'escolaridade': 'Escolaridade',
+                    'formacao': 'Formação',
+                  };
                   
-                  return (
+                  // Formatar valor de forma amigável
+                  const formatValue = (value: unknown): string => {
+                    if (value === null || value === undefined || value === '') {
+                      return 'Não informado';
+                    }
+                    
+                    // Se for data/timestamp
+                    if (typeof value === 'string') {
+                      // Tentar parsear como data
+                      const dateMatch = value.match(/^\d{4}-\d{2}-\d{2}(T|\s)\d{2}:\d{2}/);
+                      if (dateMatch) {
+                        const date = new Date(value);
+                        if (!Number.isNaN(date.getTime())) {
+                          return date.toLocaleString('pt-BR', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          });
+                        }
+                      }
+                      return value;
+                    }
+                    
+                    if (typeof value === 'boolean') {
+                      return value ? 'Sim' : 'Não';
+                    }
+                    
+                    if (typeof value === 'number') {
+                      return String(value);
+                    }
+                    
+                    if (Array.isArray(value)) {
+                      return value.map(v => formatValue(v)).join(', ');
+                    }
+                    
+                    if (typeof value === 'object') {
+                      // Para objetos, tentar extrair valores relevantes
+                      const entries = Object.entries(value as Record<string, unknown>)
+                        .filter(([k]) => !ignoredKeys.has(k))
+                        .map(([, v]) => formatValue(v));
+                      return entries.join(', ') || 'Não informado';
+                    }
+                    
+                    return String(value);
+                  };
+                  
+                  // Formatar label de campo
+                  const formatLabel = (key: string): string => {
+                    const lowerKey = key.toLowerCase();
+                    if (fieldLabels[lowerKey]) {
+                      return fieldLabels[lowerKey];
+                    }
+                    // Converter snake_case ou camelCase para texto legível
+                    return key
+                      .replace(/_/g, ' ')
+                      .replace(/([A-Z])/g, ' $1')
+                      .replace(/^./, str => str.toUpperCase())
+                      .trim();
+                  };
+                  
+                  // Verificar se campo deve ser ignorado
+                  const shouldIgnoreKey = (key: string): boolean => {
+                    const lowerKey = key.toLowerCase();
+                    // Ignorar se está na lista
+                    if (ignoredKeys.has(key) || ignoredKeys.has(lowerKey)) return true;
+                    // Ignorar se começa com prefixos técnicos
+                    if (/^(entry\.|hidden_|field_|utm_|_|__|fb)/.test(lowerKey)) return true;
+                    // Ignorar campos de presença
+                    if (lowerKey.startsWith('presenca')) return true;
+                    return false;
+                  };
+                  
+                  const filteredEntries = Object.entries(inscricao.payload)
+                    .filter(([key, value]) => {
+                      if (shouldIgnoreKey(key)) return false;
+                      // Ignorar valores vazios
+                      if (value === null || value === undefined || value === '') return false;
+                      return true;
+                    });
+                  
+                  if (filteredEntries.length === 0) {
+                    return (
+                      <p className="text-sm text-neutral-500 italic">Nenhuma informação adicional disponível.</p>
+                    );
+                  }
+                  
+                  return filteredEntries.map(([key, value]) => (
                     <div key={key} className="rounded-lg border border-neutral-100 bg-neutral-50 p-3">
                       <p className="text-xs font-bold uppercase tracking-wide text-[#1A9A9E]">
-                        {formattedKey}
+                        {formatLabel(key)}
                       </p>
                       <p className="mt-1 text-sm text-neutral-800">
-                        {formattedValue}
+                        {formatValue(value)}
                       </p>
                     </div>
-                  );
-                })}
+                  ));
+                })()}
+              </div>
+            </div>
+          </details>
               </div>
             </div>
           </details>
