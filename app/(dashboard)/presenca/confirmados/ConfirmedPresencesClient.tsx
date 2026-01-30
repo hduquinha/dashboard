@@ -1194,7 +1194,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                       <div>
                         <p className="font-medium text-neutral-900">{insc.nome}</p>
                         <p className="text-xs text-neutral-500">
-                          {insc.telefone} | {insc.recrutadorNome ?? insc.recrutadorCodigo ?? "Sem recrutador"}
+                          {insc.telefone} | {insc.recrutadorCodigo ?? "Sem recrutador"}
                         </p>
                       </div>
                       <button
