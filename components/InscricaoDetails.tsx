@@ -4,15 +4,19 @@ import { useEffect, useId, useMemo, useState, type ChangeEvent, type FormEvent }
 import { useRouter } from "next/navigation";
 import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
-import type { Recruiter } from "@/lib/recruiters";
 import type { AnamneseResposta } from "@/lib/anamnese";
+
+interface RecruiterOption {
+  code: string;
+  name: string;
+}
 
 interface InscricaoDetailsProps {
   inscricao: InscricaoItem | null;
   onClose: () => void;
   onUpdate?: (inscricao: InscricaoItem) => void;
   trainingOptions: TrainingOption[];
-  recruiterOptions: Recruiter[];
+  recruiterOptions: RecruiterOption[];
   onDelete?: (id: number) => void;
 }
 
