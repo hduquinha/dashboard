@@ -197,6 +197,30 @@ export default async function CrmPage(props: CrmPageProps) {
           </div>
         </div>
 
+        {/* Active Filters Badges */}
+        {activeFiltersCount > 0 && (
+          <div className="border-b border-neutral-200 bg-cyan-50/50 px-6 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium text-neutral-600">Filtros ativos:</span>
+              {activeFilters.map((filter, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-3 py-1 text-xs font-medium text-cyan-800"
+                >
+                  <span className="text-cyan-600">{filter.label}:</span>
+                  {filter.value}
+                </span>
+              ))}
+              <Link
+                href="/crm"
+                className="ml-2 text-xs text-neutral-500 hover:text-red-600 hover:underline"
+              >
+                Limpar todos
+              </Link>
+            </div>
+          </div>
+        )}
+
         {/* Filters (Collapsible) */}
         <div className="border-b border-neutral-200 bg-neutral-50/50 px-6 py-4">
           <details className="group">
@@ -269,6 +293,20 @@ export default async function CrmPage(props: CrmPageProps) {
                           {option.label}
                         </option>
                       ))}
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-sm font-medium text-neutral-700">
+                    Presença
+                    <select
+                      name="presenca"
+                      defaultValue={presencaFiltro ?? ""}
+                      className="rounded-lg border border-neutral-200 px-3 py-2 text-sm shadow-sm focus:border-[#2DBDC2] focus:ring-[#2DBDC2]"
+                    >
+                      <option value="">Todos</option>
+                      <option value="aprovada">Presença Aprovada</option>
+                      <option value="reprovada">Presença Reprovada</option>
+                      <option value="validada">Presença Validada</option>
+                      <option value="nao-validada">Sem Presença</option>
                     </select>
                   </label>
                 </div>
