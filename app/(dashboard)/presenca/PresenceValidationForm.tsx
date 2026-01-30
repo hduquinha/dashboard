@@ -8,7 +8,7 @@ import type {
   ZoomParticipantConsolidated,
   PresenceAnalysis
 } from "@/types/presence";
-import { formatDuration } from "@/lib/zoomPresence";
+import { formatDuration, analyzePresence, calculatePresenceInInterval } from "@/lib/zoomPresence";
 
 // ============================================================================
 // TIPOS LOCAIS
@@ -318,6 +318,7 @@ export default function PresenceValidationForm() {
     // Atualiza o participante principal com os dados consolidados
     setParsedData((prev: ParsedCSVState | null) => {
       if (!prev) return prev;
+      if (!prev.config) return prev;
 
       const toMergeNames = new Set(toMerge.map((p: ParticipantWithAnalysis) => p.participante.nomeOriginal));
 
@@ -339,12 +340,8 @@ export default function PresenceValidationForm() {
               ultimaSaida: mergedUltimaSaida,
               email: mergedEmail,
             };
-            // Recalcula a análise com os novos dados
-            const updatedAnalise: PresenceAnalysis = {
-              ...p.analise,
-              tempoTotalMinutos: mergedDuracao,
-              // O restante da análise seria recalculado idealmente, mas simplificamos aqui
-            };
+            // Recalcula a análise COMPLETA com as entradas consolidadas
+            const updatedAnalise = analyzePresence(updatedParticipante, prev.config!);
             return {
               ...p,
               participante: updatedParticipante,
@@ -374,6 +371,30 @@ export default function PresenceValidationForm() {
   const cancelMerge = useCallback(() => {
     setSelectedForMerge(new Set());
     setMergeMode(false);
+  }, []);
+
+  // Aprovar manualmente participante que não cumpriu objetivos
+  const forceApprove = useCallback((participanteNome: string) => {
+    setParsedData((prev: ParsedCSVState | null) => {
+      if (!prev) return prev;
+      
+      return {
+        ...prev,
+        participants: prev.participants.map((p: ParticipantWithAnalysis) => {
+          if (p.participante.nomeOriginal === participanteNome) {
+            return {
+              ...p,
+              analise: {
+                ...p.analise,
+                aprovado: true,
+                // Marca como aprovação manual
+              },
+            };
+          }
+          return p;
+        }),
+      };
+    });
   }, []);
 
   // Atualiza associação
@@ -667,6 +688,7 @@ export default function PresenceValidationForm() {
           config={parsedData.config}
           onRemove={removeParticipant}
           onRestore={restoreParticipant}
+          onForceApprove={forceApprove}
           onBack={resetForm}
           onNext={() => setCurrentStep("associate")}
           canProceed={canProceedToAssociate}
@@ -961,6 +983,7 @@ function ReviewStep({
   config,
   onRemove,
   onRestore,
+  onForceApprove,
   onBack,
   onNext,
   canProceed,
@@ -976,6 +999,7 @@ function ReviewStep({
   config: PresenceConfig | null;
   onRemove: (nome: string) => void;
   onRestore: (nome: string) => void;
+  onForceApprove: (nome: string) => void;
   onBack: () => void;
   onNext: () => void;
   canProceed: boolean;
@@ -1135,12 +1159,23 @@ function ReviewStep({
                   </td>
                   <td className="px-4 py-3">
                     {!mergeMode && (
-                      <button
-                        onClick={() => onRemove(p.participante.nomeOriginal)}
-                        className="rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
-                      >
-                        Remover
-                      </button>
+                      <div className="flex gap-1">
+                        {!p.analise.aprovado && (
+                          <button
+                            onClick={() => onForceApprove(p.participante.nomeOriginal)}
+                            className="rounded bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-200"
+                            title="Aprovar manualmente mesmo sem cumprir objetivos"
+                          >
+                            Aprovar
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onRemove(p.participante.nomeOriginal)}
+                          className="rounded bg-red-100 px-3 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+                        >
+                          Remover
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>
