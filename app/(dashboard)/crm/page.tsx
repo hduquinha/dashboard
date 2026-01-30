@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
-import { listInscricoes, listTrainingFilterOptions } from "@/lib/db";
-import { listRecruiters } from "@/lib/recruiters";
+import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 
@@ -101,7 +100,7 @@ export default async function CrmPage(props: CrmPageProps) {
     return query.length ? `/crm?${query}` : "/crm";
   };
 
-  const recruiterOptionsPromise = listRecruiters();
+  const recruiterOptionsPromise = listRecruitersWithDbNames();
   const trainingOptions = await listTrainingFilterOptions();
   const activeTreinamentoId = treinamentoSelecionado;
 

@@ -9,6 +9,7 @@ import type { ImportPayload } from "@/lib/importSpreadsheet";
 import {
   getRecruiterByCode,
   getRecruiterByCodeIfNamed,
+  isPlaceholderName,
   listRecruiters,
   normalizeRecruiterCode,
   RECRUITERS_BASE_URL,
@@ -107,6 +108,26 @@ export function getRecruiterFromCache(code: string | null): RecruiterCache | nul
 export function invalidateRecruiterCache(): void {
   recruiterDbCache.clear();
   recruiterCacheLoaded = false;
+}
+
+// Lista recrutadores mesclando lista estática com nomes do banco de dados
+export async function listRecruitersWithDbNames(): Promise<Array<{ code: string; name: string }>> {
+  await loadRecruiterCache();
+  
+  const staticRecruiters = listRecruiters();
+  
+  return staticRecruiters.map((r) => {
+    // Se tem nome no cache do banco e não é placeholder
+    const dbRecruiter = recruiterDbCache.get(r.code);
+    if (dbRecruiter && dbRecruiter.name && !isPlaceholderName(dbRecruiter.name)) {
+      return { code: r.code, name: dbRecruiter.name };
+    }
+    // Se o nome estático é placeholder, tenta buscar do cache
+    if (isPlaceholderName(r.name) && dbRecruiter) {
+      return { code: r.code, name: dbRecruiter.name };
+    }
+    return { code: r.code, name: r.name };
+  }).filter((r) => !isPlaceholderName(r.name)); // Remove os que ainda são placeholder
 }
 
 const RECRUITER_CODE_FIELDS = [
