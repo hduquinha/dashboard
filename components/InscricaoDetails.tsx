@@ -447,16 +447,16 @@ export default function InscricaoDetails({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm sm:items-center"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
       role="dialog"
       aria-modal="true"
       onClick={onClose}
     >
       <div
-        className="my-4 w-full max-w-3xl rounded-2xl bg-white shadow-2xl sm:my-8"
+        className="my-4 flex max-h-[calc(100vh-2rem)] w-full max-w-3xl flex-col rounded-2xl bg-white shadow-2xl sm:my-8 sm:max-h-[calc(100vh-4rem)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <header className="flex flex-wrap items-start justify-between gap-4 rounded-t-2xl border-b border-neutral-200 bg-gradient-to-r from-[#0f172a] to-[#1e293b] px-6 py-5">
+        <header className="flex flex-shrink-0 flex-wrap items-start justify-between gap-4 rounded-t-2xl border-b border-neutral-200 bg-gradient-to-r from-[#0f172a] to-[#1e293b] px-6 py-5">
           <div>
             <h2 className="text-lg font-bold text-white">Detalhes da Inscrição</h2>
             <p className="text-xs text-[#2DBDC2]">#{inscricao.id} • Recebida em {createdAt}</p>
@@ -502,7 +502,7 @@ export default function InscricaoDetails({
           </div>
         </header>
 
-        <div className="space-y-4 px-6 py-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
           {errorMessage ? (
             <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{errorMessage}</p>
           ) : null}
