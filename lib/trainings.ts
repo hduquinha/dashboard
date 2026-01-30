@@ -44,10 +44,14 @@ function parseEntry(value: unknown): TrainingOption | null {
   const startsAt = typeof startsAtValue === "string" ? startsAtValue : null;
   const formattedDate = labelCandidate ? null : formatTrainingDateLabel(startsAt ?? id);
 
+  const clusterValue = record.cluster;
+  const cluster = typeof clusterValue === "number" ? clusterValue : null;
+
   return {
     id,
     label: labelCandidate ?? formattedDate ?? label,
     startsAt,
+    cluster,
   };
 }
 

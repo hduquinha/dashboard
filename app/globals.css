@@ -61,3 +61,80 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--up-cyan-500);
 }
+
+/* Print Styles */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    font-size: 10px !important;
+  }
+
+  /* Ocultar sidebar e navegação */
+  nav,
+  aside,
+  .print-hidden,
+  [data-print-hidden="true"] {
+    display: none !important;
+  }
+
+  /* Forçar main a ocupar toda a largura */
+  main {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Tabelas */
+  table {
+    width: 100% !important;
+    font-size: 9px !important;
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    padding: 4px 6px !important;
+    border: 1px solid #ddd !important;
+  }
+
+  thead {
+    background: #f3f4f6 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Evitar quebra de página em linhas */
+  tr {
+    page-break-inside: avoid !important;
+  }
+
+  /* Cards e containers */
+  .rounded-2xl,
+  .shadow-sm,
+  .shadow-xl {
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  /* Links */
+  a {
+    text-decoration: none !important;
+    color: inherit !important;
+  }
+
+  /* Botões ocultos */
+  button {
+    display: none !important;
+  }
+
+  /* Mostrar elementos de print */
+  .print-only {
+    display: block !important;
+  }
+}

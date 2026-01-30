@@ -105,6 +105,29 @@ export default async function CrmPage(props: CrmPageProps) {
   const trainingOptions = await listTrainingFilterOptions();
   const activeTreinamentoId = treinamentoSelecionado;
 
+  // Agrupar treinamentos por cluster para exibição organizada
+  const trainingsByCluster = trainingOptions.reduce((acc, option) => {
+    const clusterKey = option.cluster ?? 999;
+    if (!acc[clusterKey]) {
+      acc[clusterKey] = [];
+    }
+    acc[clusterKey].push(option);
+    return acc;
+  }, {} as Record<number, typeof trainingOptions>);
+
+  const clusterLabels: Record<number, string> = {
+    1: "Cluster 1",
+    2: "Cluster 2",
+    3: "Cluster 3",
+    4: "Cluster 4",
+    5: "Cluster 5",
+    999: "Outros",
+  };
+
+  const sortedClusterKeys = Object.keys(trainingsByCluster)
+    .map(Number)
+    .sort((a, b) => a - b);
+
   const resultPromise = listInscricoes({
     page,
     pageSize,
@@ -254,11 +277,26 @@ export default async function CrmPage(props: CrmPageProps) {
                 className="appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
               >
                 <option value="">🎓 Treinamento</option>
-                {trainingOptions.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
-                  </option>
-                ))}
+                {sortedClusterKeys.map((clusterKey) => {
+                  const options = trainingsByCluster[clusterKey];
+                  if (sortedClusterKeys.length === 1 && clusterKey === 999) {
+                    // Se só tem "Outros", não usar optgroup
+                    return options.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ));
+                  }
+                  return (
+                    <optgroup key={clusterKey} label={clusterLabels[clusterKey] ?? `Cluster ${clusterKey}`}>
+                      {options.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
               </select>
               <svg className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

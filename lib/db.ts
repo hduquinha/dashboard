@@ -1579,31 +1579,17 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
 
     const allOptions = [...orderedOptions, ...extras];
 
-    // Helper to get timestamp for sorting
-    const getTimestamp = (option: TrainingOption) => {
-      if (option.startsAt) {
-        const t = new Date(option.startsAt).getTime();
-        if (!Number.isNaN(t)) return t;
-      }
-      // Try to parse from ID or Label if startsAt is missing
-      const candidates = [option.id, option.label];
-      for (const candidate of candidates) {
-        const t = Date.parse(candidate);
-        if (!Number.isNaN(t)) return t;
-      }
-      return 0;
-    };
-
+    // Ordenar: 1) Por cluster (menor primeiro), 2) Alfabético pelo label
     allOptions.sort((a, b) => {
-      const timeA = getTimestamp(a);
-      const timeB = getTimestamp(b);
+      const clusterA = a.cluster ?? 999;
+      const clusterB = b.cluster ?? 999;
 
-      if (timeA > 0 && timeB > 0) {
-        return timeB - timeA; // Descending (newest first)
+      // Primeiro por cluster
+      if (clusterA !== clusterB) {
+        return clusterA - clusterB;
       }
-      if (timeA > 0) return -1; // A has date, B doesn't -> A first
-      if (timeB > 0) return 1;  // B has date, A doesn't -> B first
 
+      // Depois alfabeticamente pelo label
       return a.label.localeCompare(b.label, "pt-BR");
     });
 
