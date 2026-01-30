@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPool } from "@/lib/db";
+import { getPool, loadRecruiterCache, getRecruiterFromCache } from "@/lib/db";
+import { getRecruiterByCodeIfNamed } from "@/lib/recruiters";
 
 const SCHEMA_NAME = "inscricoes";
 
@@ -97,12 +98,15 @@ export async function GET(request: NextRequest) {
       validado_em: string | null;
     }>(query, params);
 
-    // Mapear recrutadores para nomes (usando lib/recruiters.ts)
-    const { getRecruiterByCode } = await import("@/lib/recruiters");
+    // Carrega cache de recrutadores do banco de dados
+    await loadRecruiterCache();
 
     type PresenceRow = typeof rows[number];
     const presences: PresenceRecord[] = rows.map((row: PresenceRow) => {
-      const recruiter = getRecruiterByCode(row.recrutador_codigo);
+      // Prioridade: banco de dados > lista estática (sem placeholders)
+      const recruiterDb = getRecruiterFromCache(row.recrutador_codigo);
+      const recruiterStatic = getRecruiterByCodeIfNamed(row.recrutador_codigo);
+      const recrutadorNome = recruiterDb?.name ?? recruiterStatic?.name ?? null;
       return {
         inscricaoId: row.inscricao_id,
         nome: row.nome,
@@ -111,7 +115,7 @@ export async function GET(request: NextRequest) {
         email: row.email,
         treinamentoId: row.treinamento_id,
         recrutadorCodigo: row.recrutador_codigo,
-        recrutadorNome: recruiter?.name ?? null,
+        recrutadorNome,
         participanteNomeZoom: row.participante_nome_zoom,
         tempoTotalMinutos: row.tempo_total_minutos,
         tempoDinamicaMinutos: row.tempo_dinamica_minutos,

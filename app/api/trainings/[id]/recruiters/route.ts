@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool, loadRecruiterCache, getRecruiterFromCache } from "@/lib/db";
-import { getRecruiterByCode } from "@/lib/recruiters";
+import { getRecruiterByCodeIfNamed } from "@/lib/recruiters";
 
 const SCHEMA_NAME = "inscricoes";
 
@@ -73,8 +73,9 @@ export async function GET(
 
     type RankingRow = typeof rows[number];
     const ranking: RecruiterRanking[] = rows.map((row: RankingRow) => {
-      const recruiterStatic = getRecruiterByCode(row.recrutador_codigo);
+      // Prioridade: banco de dados > lista estática (sem placeholders)
       const recruiterDb = getRecruiterFromCache(row.recrutador_codigo);
+      const recruiterStatic = getRecruiterByCodeIfNamed(row.recrutador_codigo);
       const percentual =
         row.total_inscritos > 0
           ? Math.round((row.total_aprovados / row.total_inscritos) * 100)
@@ -82,7 +83,7 @@ export async function GET(
 
       return {
         recrutadorCodigo: row.recrutador_codigo,
-        recrutadorNome: recruiterStatic?.name ?? recruiterDb?.name ?? `Recrutador ${row.recrutador_codigo}`,
+        recrutadorNome: recruiterDb?.name ?? recruiterStatic?.name ?? `Código ${row.recrutador_codigo}`,
         totalInscritos: row.total_inscritos,
         totalAprovados: row.total_aprovados,
         percentualAprovacao: percentual,

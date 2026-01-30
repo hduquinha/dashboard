@@ -8,6 +8,7 @@ import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
 import {
   getRecruiterByCode,
+  getRecruiterByCodeIfNamed,
   listRecruiters,
   normalizeRecruiterCode,
   RECRUITERS_BASE_URL,
@@ -259,9 +260,9 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
   const codeCandidate = parsedTrafficSource ?? rowTrafficSource ?? null;
   const recruiterCode = normalizeRecruiterCode(codeCandidate);
   
-  // Buscar primeiro no cache do banco, depois na lista fixa
+  // Buscar primeiro no cache do banco, depois na lista fixa (sem placeholders)
   const recruiterFromDb = getRecruiterFromCache(codeCandidate);
-  const recruiterFromList = getRecruiterByCode(codeCandidate);
+  const recruiterFromList = getRecruiterByCodeIfNamed(codeCandidate);
   const recruiterName = recruiterFromDb?.name ?? recruiterFromList?.name ?? null;
 
   const parsedProfissao =
@@ -2160,10 +2161,10 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   `);
 
   const topRecruiters = topRecruitersRes.rows.map(row => {
-    // Primeiro tenta a lista estática, depois o cache do banco
-    const recruiterStatic = getRecruiterByCode(row.code);
+    // Prioridade: banco de dados > lista estática (sem placeholders)
     const recruiterDb = getRecruiterFromCache(row.code);
-    const name = recruiterStatic?.name ?? recruiterDb?.name ?? `Recrutador ${row.code}`;
+    const recruiterStatic = getRecruiterByCodeIfNamed(row.code);
+    const name = recruiterDb?.name ?? recruiterStatic?.name ?? `Código ${row.code}`;
     return {
       name,
       recruits: parseInt(row.recruits, 10)

@@ -123,3 +123,23 @@ export function getRecruiterByCode(code?: string | null): Recruiter | null {
   }
   return recruiterMap.get(normalized) ?? recruiterMap.get(String(Number.parseInt(normalized, 10))) ?? null;
 }
+
+/**
+ * Verifica se o nome do recrutador é um placeholder genérico (ex: "Recrutador 36").
+ * Retorna true se o nome for apenas "Recrutador" seguido de um número.
+ */
+export function isPlaceholderName(name: string): boolean {
+  return /^Recrutador\s+\d+$/i.test(name.trim());
+}
+
+/**
+ * Busca o recrutador pelo código, mas retorna null se for um placeholder genérico.
+ * Usado para priorizar nomes do banco de dados sobre placeholders da lista estática.
+ */
+export function getRecruiterByCodeIfNamed(code?: string | null): Recruiter | null {
+  const recruiter = getRecruiterByCode(code);
+  if (recruiter && isPlaceholderName(recruiter.name)) {
+    return null;
+  }
+  return recruiter;
+}

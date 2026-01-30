@@ -2,6 +2,7 @@ import { listAllInscricoes } from "@/lib/db";
 import {
   listRecruiters,
   normalizeRecruiterCode,
+  isPlaceholderName,
   type Recruiter,
 } from "@/lib/recruiters";
 import type { InscricaoItem } from "@/types/inscricao";
@@ -57,8 +58,10 @@ interface BuildNetworkTreeOptions {
 function createVirtualRecruiterInscricao(recruiter: Recruiter, normalizedCode: string): InscricaoItem {
   const codeNumber = Number.parseInt(normalizedCode, 10);
   const generatedId = Number.isFinite(codeNumber) ? -1000 - codeNumber : -1000;
+  // Se o nome é placeholder, usar "Cluster {código}" em vez de "Recrutador XX"
+  const displayName = isPlaceholderName(recruiter.name) ? `Cluster ${normalizedCode}` : recruiter.name;
   const parsedPayload = {
-    nome: recruiter.name,
+    nome: displayName,
     tipo: "recrutador",
     codigoRecrutador: normalizedCode,
     isRecruiter: "true",
@@ -70,7 +73,7 @@ function createVirtualRecruiterInscricao(recruiter: Recruiter, normalizedCode: s
     criadoEm: new Date("1990-01-01T00:00:00.000Z").toISOString(),
     payload,
     parsedPayload,
-    nome: recruiter.name,
+    nome: displayName,
     telefone: null,
     cidade: null,
     profissao: null,
