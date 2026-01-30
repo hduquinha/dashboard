@@ -412,19 +412,33 @@ export default function TrainingDetailsClient({
         )}
       </div>
 
-      {/* Link para ver presentes no CRM */}
-      <Link
-        href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}&presenca=aprovada`}
-        className="flex items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
-      >
-        <div className="flex items-center gap-3">
-          <UserCheck className="h-5 w-5 text-emerald-500" />
-          <span className="font-medium text-neutral-900">
-            Ver inscritos presentes
-          </span>
-        </div>
-        <ChevronRight className="h-5 w-5 text-neutral-400" />
-      </Link>
+      {/* Links para visualização no CRM */}
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <Link
+          href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}`}
+          className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
+        >
+          <div className="flex items-center gap-3">
+            <Users className="h-5 w-5 text-cyan-500" />
+            <span className="font-medium text-neutral-900">
+              Ver todos os inscritos
+            </span>
+          </div>
+          <ChevronRight className="h-5 w-5 text-neutral-400" />
+        </Link>
+        <Link
+          href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}&presenca=aprovada`}
+          className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+        >
+          <div className="flex items-center gap-3">
+            <UserCheck className="h-5 w-5 text-emerald-500" />
+            <span className="font-medium text-neutral-900">
+              Ver inscritos presentes
+            </span>
+          </div>
+          <ChevronRight className="h-5 w-5 text-neutral-400" />
+        </Link>
+      </div>
     </main>
   );
 }
