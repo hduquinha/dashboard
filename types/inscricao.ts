@@ -56,6 +56,14 @@ export interface InscricaoItem {
   statusUpdatedAt?: string | null;
   statusWhatsappContacted?: boolean | null;
   notes?: InscricaoNote[];
+  // Campos de presença
+  presencaValidada?: boolean;
+  presencaAprovada?: boolean;
+  presencaParticipanteNome?: string | null;
+  presencaTempoTotalMinutos?: number | null;
+  presencaTempoDinamicaMinutos?: number | null;
+  presencaPercentualDinamica?: number | null;
+  presencaValidadaEm?: string | null;
 }
 
 export interface ListInscricoesResult {

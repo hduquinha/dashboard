@@ -396,6 +396,26 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     statusUpdatedAt,
     statusWhatsappContacted,
     notes,
+    // Campos de presença
+    presencaValidada: payload.presenca_validada === "true" || payload.presenca_validada === true,
+    presencaAprovada: payload.presenca_aprovada === "true" || payload.presenca_aprovada === true,
+    presencaParticipanteNome: typeof payload.presenca_participante_nome === "string" ? payload.presenca_participante_nome : null,
+    presencaTempoTotalMinutos: typeof payload.presenca_tempo_total_minutos === "number" 
+      ? payload.presenca_tempo_total_minutos 
+      : typeof payload.presenca_tempo_total_minutos === "string" 
+        ? parseInt(payload.presenca_tempo_total_minutos, 10) || null 
+        : null,
+    presencaTempoDinamicaMinutos: typeof payload.presenca_tempo_dinamica_minutos === "number" 
+      ? payload.presenca_tempo_dinamica_minutos 
+      : typeof payload.presenca_tempo_dinamica_minutos === "string" 
+        ? parseInt(payload.presenca_tempo_dinamica_minutos, 10) || null 
+        : null,
+    presencaPercentualDinamica: typeof payload.presenca_percentual_dinamica === "number" 
+      ? payload.presenca_percentual_dinamica 
+      : typeof payload.presenca_percentual_dinamica === "string" 
+        ? parseInt(payload.presenca_percentual_dinamica, 10) || null 
+        : null,
+    presencaValidadaEm: typeof payload.presenca_validada_em === "string" ? payload.presenca_validada_em : null,
   };
 }
 

@@ -68,6 +68,13 @@ function formatDateTime(value: string | null | undefined): string {
   });
 }
 
+function formatPresenceTime(minutes: number): string {
+  if (minutes < 60) return `${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
+}
+
 export default function InscricaoDetails({
   inscricao,
   onClose,
@@ -808,6 +815,62 @@ export default function InscricaoDetails({
                 </div>
               </dl>
             </div>
+          )}
+
+          {/* Seção de Presença - aparece quando a presença foi validada */}
+          {inscricao.presencaValidada && (
+            <section className="space-y-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-cyan-100/50 p-4 shadow-sm">
+              <header className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">✅</span>
+                  <h3 className="text-sm font-bold text-cyan-900">Presença no Encontro</h3>
+                </div>
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                  inscricao.presencaAprovada 
+                    ? "bg-emerald-100 text-emerald-800" 
+                    : "bg-red-100 text-red-800"
+                }`}>
+                  {inscricao.presencaAprovada ? "✓ Aprovado" : "✗ Reprovado"}
+                </span>
+              </header>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-lg bg-white p-3 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Nome no Zoom</p>
+                  <p className="mt-1 text-sm font-medium text-cyan-900">
+                    {inscricao.presencaParticipanteNome ?? "-"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white p-3 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Tempo Total</p>
+                  <p className="mt-1 text-sm font-medium text-cyan-900">
+                    {inscricao.presencaTempoTotalMinutos != null 
+                      ? formatPresenceTime(inscricao.presencaTempoTotalMinutos) 
+                      : "-"}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white p-3 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Tempo na Dinâmica</p>
+                  <p className="mt-1 text-sm font-medium text-cyan-900">
+                    {inscricao.presencaTempoDinamicaMinutos != null 
+                      ? formatPresenceTime(inscricao.presencaTempoDinamicaMinutos) 
+                      : "-"}
+                    {inscricao.presencaPercentualDinamica != null && (
+                      <span className="ml-1 text-xs text-cyan-600">
+                        ({inscricao.presencaPercentualDinamica}%)
+                      </span>
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-white p-3 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Validado em</p>
+                  <p className="mt-1 text-sm font-medium text-cyan-900">
+                    {inscricao.presencaValidadaEm 
+                      ? formatDateTime(inscricao.presencaValidadaEm) 
+                      : "-"}
+                  </p>
+                </div>
+              </div>
+            </section>
           )}
 
           {/* Seção de Anamnese - aparece quando o recrutador tem anamnese vinculada */}
