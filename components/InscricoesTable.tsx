@@ -5,7 +5,11 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import InscricaoDetails from '@/components/InscricaoDetails';
 import type { InscricaoItem, OrderDirection, OrderableField } from '@/types/inscricao';
 import type { TrainingOption } from '@/types/training';
-import type { Recruiter } from '@/lib/recruiters';
+
+interface RecruiterOption {
+  code: string;
+  name: string;
+}
 
 interface InscricoesTableProps {
   inscricoes: InscricaoItem[];
@@ -15,7 +19,7 @@ interface InscricoesTableProps {
   orderBy: OrderableField;
   orderDirection: OrderDirection;
   trainingOptions: TrainingOption[];
-  recruiterOptions: Recruiter[];
+  recruiterOptions: RecruiterOption[];
 }
 
 const CADASTRO_COLUMN_KEY = 'cadastro' as const;
