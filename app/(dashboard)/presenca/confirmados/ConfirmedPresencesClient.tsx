@@ -266,6 +266,166 @@ export default function ConfirmedPresencesClient() {
     });
   }, [presences, searchQuery, selectedTraining, showApproved, showRejected]);
 
+  // Lista de recrutadores com seus nomes
+  const recruiters = [
+    { code: "01", name: "Rodrigo" },
+    { code: "02", name: "Vanessa" },
+    { code: "03", name: "Jane" },
+    { code: "04", name: "Jhonatha" },
+    { code: "05", name: "Agatha" },
+    { code: "06", name: "Valda" },
+    { code: "07", name: "Cely" },
+    { code: "08", name: "Lourenço" },
+    { code: "09", name: "Bárbara" },
+    { code: "10", name: "Sandra" },
+    { code: "11", name: "Karina" },
+    { code: "12", name: "Paula Porto" },
+    { code: "13", name: "Regina Gondim" },
+    { code: "14", name: "Salete" },
+    { code: "15", name: "Marcos" },
+    { code: "16", name: "Ivaneide" },
+    { code: "17", name: "Karen" },
+    { code: "18", name: "Claudia Talib" },
+    { code: "19", name: "Anselmo" },
+    { code: "20", name: "Alessandra" },
+    { code: "21", name: "Cleidiane" },
+    { code: "22", name: "Renata Vergílio" },
+    { code: "23", name: "Alice" },
+    { code: "24", name: "Eliane/Márcio" },
+    { code: "25", name: "Adriana Davies" },
+    { code: "26", name: "Maria Léo" },
+    { code: "27", name: "Marcelo" },
+    { code: "28", name: "Adryelly" },
+    { code: "29", name: "Aline Nobile" },
+    { code: "30", name: "Kleidiane" },
+    { code: "31", name: "Gilsemara" },
+    { code: "32", name: "Josefa" },
+    { code: "33", name: "Mara" },
+    { code: "34", name: "Thais/Jorge" },
+  ];
+
+  const getRecruiterName = (code: string | null): string => {
+    if (!code) return "Sem Cluster";
+    const recruiter = recruiters.find(r => r.code === code);
+    return recruiter ? recruiter.name : `Cluster ${code}`;
+  };
+
+  // Gerar relatório com ranking de clusters
+  const handleGenerateReport = () => {
+    const dataToExport = selectedTraining === "all" 
+      ? filteredPresences 
+      : filteredPresences.filter(p => p.treinamentoId === selectedTraining);
+
+    // Agrupar por cluster
+    const clusterMap = new Map<string, {
+      code: string;
+      name: string;
+      presentes: PresenceRecord[];
+      totalPresentes: number;
+      totalAprovados: number;
+    }>();
+
+    dataToExport.forEach(p => {
+      const code = p.recrutadorCodigo ?? "00";
+      const name = getRecruiterName(code);
+      
+      if (!clusterMap.has(code)) {
+        clusterMap.set(code, {
+          code,
+          name,
+          presentes: [],
+          totalPresentes: 0,
+          totalAprovados: 0,
+        });
+      }
+      
+      const cluster = clusterMap.get(code)!;
+      cluster.presentes.push(p);
+      cluster.totalPresentes++;
+      if (p.aprovado) {
+        cluster.totalAprovados++;
+      }
+    });
+
+    // Ordenar por aprovados
+    const sortedClusters = Array.from(clusterMap.values()).sort(
+      (a, b) => b.totalAprovados - a.totalAprovados || b.totalPresentes - a.totalPresentes
+    );
+
+    const top5Clusters = sortedClusters.slice(0, 5);
+
+    // Gerar relatório
+    let report = "";
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "                 RELATÓRIO DE PRESENÇA NO ENCONTRO\n";
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += `Treinamento: ${selectedTraining === "all" ? "Todos" : selectedTraining}\n`;
+    report += `Data do Relatório: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}\n`;
+    report += "\n";
+    
+    // Resumo
+    const totalAprovadosReport = dataToExport.filter(p => p.aprovado).length;
+    const totalReprovadosReport = dataToExport.filter(p => !p.aprovado).length;
+    
+    report += "───────────────────────────────────────────────────────────────\n";
+    report += "                         RESUMO GERAL\n";
+    report += "───────────────────────────────────────────────────────────────\n";
+    report += `Total de Participantes: ${dataToExport.length}\n`;
+    report += `Aprovados (presença OK): ${totalAprovadosReport}\n`;
+    report += `Reprovados (faltou presença): ${totalReprovadosReport}\n`;
+    report += "\n";
+
+    // Ranking
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "           🏆 RANKING TOP 5 CLUSTERS (por aprovados)\n";
+    report += "═══════════════════════════════════════════════════════════════\n\n";
+    
+    top5Clusters.forEach((cluster, index) => {
+      const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "  ";
+      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalAprovados} aprovado(s) (${cluster.totalPresentes} presente(s))\n`;
+    });
+    report += "\n";
+
+    // Presentes por Cluster
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "                    PRESENTES POR CLUSTER\n";
+    report += "═══════════════════════════════════════════════════════════════\n";
+
+    sortedClusters.forEach(cluster => {
+      report += `\n┌─────────────────────────────────────────────────────────────┐\n`;
+      report += `│ CLUSTER: ${cluster.name.padEnd(47)} │\n`;
+      report += `│ Aprovados: ${cluster.totalAprovados} | Presentes: ${(cluster.totalPresentes.toString()).padEnd(25)} │\n`;
+      report += `└─────────────────────────────────────────────────────────────┘\n`;
+      
+      cluster.presentes.forEach((p, idx) => {
+        const status = p.aprovado ? "✓ Aprovado" : "✗ Reprovado";
+        report += `  ${(idx + 1).toString().padStart(2)}. ${p.nome}\n`;
+        if (p.participanteNomeZoom) {
+          report += `      Zoom: ${p.participanteNomeZoom}\n`;
+        }
+        if (p.telefone) {
+          report += `      Tel: ${p.telefone}\n`;
+        }
+        report += `      ${status} | Tempo: ${formatMinutes(p.tempoTotalMinutos)}\n`;
+      });
+    });
+
+    report += "\n═══════════════════════════════════════════════════════════════\n";
+    report += "                      FIM DO RELATÓRIO\n";
+    report += "═══════════════════════════════════════════════════════════════\n";
+
+    // Download
+    const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `relatorio-presenca-${selectedTraining === "all" ? "todos" : selectedTraining}-${new Date().toISOString().split("T")[0]}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   // Exportar CSV
   const handleExport = () => {
     const headers = [
@@ -352,15 +512,25 @@ export default function ConfirmedPresencesClient() {
             Participantes com presença validada nos treinamentos
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleExport}
-          disabled={filteredPresences.length === 0}
-          className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Download className="h-4 w-4" />
-          Exportar CSV
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={handleGenerateReport}
+            disabled={filteredPresences.length === 0}
+            className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            📊 Relatório com Ranking
+          </button>
+          <button
+            type="button"
+            onClick={handleExport}
+            disabled={filteredPresences.length === 0}
+            className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" />
+            Exportar CSV
+          </button>
+        </div>
       </header>
 
       {/* Stats Cards */}

@@ -1494,6 +1494,7 @@ interface ClusterData {
     tempoTotal: number;
   }>;
   totalPresentes: number;
+  totalAprovados: number;
 }
 
 function ConfirmStep({
@@ -1577,6 +1578,13 @@ function ConfirmStep({
       { code: "34", name: "Thais/Jorge" },
     ];
 
+    // Função para obter nome do recrutador pelo código
+    const getRecruiterName = (code: string | null): string => {
+      if (!code) return "Sem Cluster";
+      const recruiter = recruiters.find(r => r.code === code);
+      return recruiter ? recruiter.name : `Cluster ${code}`;
+    };
+
     // Para confirmados, agrupar por cluster
     confirmedParticipants.forEach(p => {
       const assoc = associations.get(p.participante.nomeOriginal);
@@ -1584,7 +1592,7 @@ function ConfirmStep({
       
       // Usar código do recrutador da associação
       const recruiterCode = assoc.inscricaoRecrutadorCodigo ?? "00";
-      const recruiterName = recruiters.find(r => r.code === recruiterCode)?.name ?? "Sem Cluster";
+      const recruiterName = getRecruiterName(recruiterCode);
       
       if (!clusterMap.has(recruiterCode)) {
         clusterMap.set(recruiterCode, {
@@ -1592,6 +1600,7 @@ function ConfirmStep({
           name: recruiterName,
           presentes: [],
           totalPresentes: 0,
+          totalAprovados: 0,
         });
       }
       
@@ -1604,11 +1613,14 @@ function ConfirmStep({
         tempoTotal: p.analise.tempoTotalMinutos,
       });
       cluster.totalPresentes++;
+      if (p.analise.aprovado) {
+        cluster.totalAprovados++;
+      }
     });
 
-    // Ordenar clusters por quantidade (ranking)
+    // Ordenar clusters por quantidade de APROVADOS (ranking)
     const sortedClusters = Array.from(clusterMap.values()).sort(
-      (a, b) => b.totalPresentes - a.totalPresentes
+      (a, b) => b.totalAprovados - a.totalAprovados || b.totalPresentes - a.totalPresentes
     );
 
     // Top 5 para ranking
@@ -1635,14 +1647,14 @@ function ConfirmStep({
     report += `Reprovados (faltou presença): ${reprovados.length}\n`;
     report += "\n";
 
-    // Ranking Top 5 Clusters
+    // Ranking Top 5 Clusters (ordenado por aprovados)
     report += "═══════════════════════════════════════════════════════════════\n";
-    report += "                    🏆 RANKING TOP 5 CLUSTERS\n";
+    report += "           🏆 RANKING TOP 5 CLUSTERS (por aprovados)\n";
     report += "═══════════════════════════════════════════════════════════════\n\n";
     
     top5Clusters.forEach((cluster, index) => {
       const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "  ";
-      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalPresentes} presente(s)\n`;
+      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalAprovados} aprovado(s) (${cluster.totalPresentes} presente(s))\n`;
     });
     report += "\n";
 
@@ -1654,7 +1666,7 @@ function ConfirmStep({
     sortedClusters.forEach(cluster => {
       report += `\n┌─────────────────────────────────────────────────────────────┐\n`;
       report += `│ CLUSTER: ${cluster.name.padEnd(47)} │\n`;
-      report += `│ Total de Presentes: ${cluster.totalPresentes.toString().padEnd(36)} │\n`;
+      report += `│ Aprovados: ${cluster.totalAprovados} | Presentes: ${(cluster.totalPresentes.toString()).padEnd(25)} │\n`;
       report += `└─────────────────────────────────────────────────────────────┘\n`;
       
       cluster.presentes.forEach((p, idx) => {
