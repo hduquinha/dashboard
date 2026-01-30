@@ -1994,6 +1994,7 @@ export interface TrainingWithStats {
   totalInscritos: number;
   leads: number;
   recrutadores: number;
+  presentes: number;
   last24h: number;
 }
 
@@ -2021,6 +2022,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       COUNT(*)::bigint AS total_inscritos,
       COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
       COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
+      COUNT(*) FILTER (WHERE i.payload->>'presenca_validada' = 'true')::bigint AS presentes,
       COUNT(*) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
       MIN(i.criado_em) AS first_inscrito,
       MAX(i.criado_em) AS last_inscrito
@@ -2035,6 +2037,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       total_inscritos: string;
       recrutadores: string;
       leads: string;
+      presentes: string;
       last_24h: string;
       first_inscrito: Date | string | null;
       last_inscrito: Date | string | null;
@@ -2064,6 +2067,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
+        presentes: Number(row.presentes) || 0,
         last24h: Number(row.last_24h) || 0,
       };
     });

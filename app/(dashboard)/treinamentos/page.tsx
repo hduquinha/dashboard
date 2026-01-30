@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { listTrainingsWithStats } from "@/lib/db";
-import { Calendar, Users, UserPlus, TrendingUp, ArrowRight, Trophy } from "lucide-react";
+import { Calendar, Users, UserPlus, TrendingUp, ArrowRight, Trophy, UserCheck } from "lucide-react";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +31,7 @@ export default async function TreinamentosPage() {
   const trainings = await listTrainingsWithStats();
   
   const totalInscritos = trainings.reduce((acc, t) => acc + t.totalInscritos, 0);
+  const totalPresentes = trainings.reduce((acc, t) => acc + t.presentes, 0);
   const totalLast24h = trainings.reduce((acc, t) => acc + t.last24h, 0);
   const totalRecrutadores = trainings.reduce((acc, t) => acc + t.recrutadores, 0);
 
@@ -47,13 +48,13 @@ export default async function TreinamentosPage() {
       </header>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#2DBDC2]/10">
             <Calendar className="h-6 w-6 text-[#2DBDC2]" />
           </div>
           <div>
-            <p className="text-sm font-medium text-neutral-500">Total Treinamentos</p>
+            <p className="text-sm font-medium text-neutral-500">Treinamentos</p>
             <p className="text-2xl font-bold text-neutral-900">{trainings.length}</p>
           </div>
         </div>
@@ -65,6 +66,16 @@ export default async function TreinamentosPage() {
           <div>
             <p className="text-sm font-medium text-neutral-500">Total Inscritos</p>
             <p className="text-2xl font-bold text-neutral-900">{totalInscritos.toLocaleString()}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-50">
+            <UserCheck className="h-6 w-6 text-cyan-500" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-neutral-500">Presentes</p>
+            <p className="text-2xl font-bold text-cyan-600">{totalPresentes.toLocaleString()}</p>
           </div>
         </div>
         
@@ -127,11 +138,11 @@ export default async function TreinamentosPage() {
               <div className="mt-4 grid grid-cols-3 gap-4 border-t border-neutral-100 pt-4">
                 <div className="text-center">
                   <p className="text-2xl font-bold text-neutral-900">{training.totalInscritos}</p>
-                  <p className="text-xs text-neutral-500">Total</p>
+                  <p className="text-xs text-neutral-500">Inscritos</p>
                 </div>
                 <div className="text-center">
-                  <p className="text-2xl font-bold text-emerald-600">{training.leads}</p>
-                  <p className="text-xs text-neutral-500">Leads</p>
+                  <p className="text-2xl font-bold text-cyan-600">{training.presentes}</p>
+                  <p className="text-xs text-neutral-500">Presentes</p>
                 </div>
                 <div className="text-center">
                   <p className="text-2xl font-bold text-purple-600">{training.recrutadores}</p>

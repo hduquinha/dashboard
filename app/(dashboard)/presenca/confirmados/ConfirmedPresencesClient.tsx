@@ -640,21 +640,6 @@ export default function ConfirmedPresencesClient() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={handleGeneratePDF}
-            disabled={filteredPresences.length === 0 || generatingPdf}
-            className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {generatingPdf ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Gerando...
-              </>
-            ) : (
-              <>📄 PDF com Gráfico</>
-            )}
-          </button>
-          <button
-            type="button"
             onClick={handleGenerateReport}
             disabled={filteredPresences.length === 0}
             className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
