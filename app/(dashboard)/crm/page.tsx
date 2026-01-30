@@ -228,10 +228,6 @@ export default async function CrmPage(props: CrmPageProps) {
               <select
                 name="treinamento"
                 defaultValue={activeTreinamentoId}
-                onChange={(e) => {
-                  const form = e.target.form;
-                  if (form) form.submit();
-                }}
                 className="appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
               >
                 <option value="">🎓 Treinamento</option>
@@ -251,10 +247,6 @@ export default async function CrmPage(props: CrmPageProps) {
               <select
                 name="presenca"
                 defaultValue={presencaFiltro ?? ""}
-                onChange={(e) => {
-                  const form = e.target.form;
-                  if (form) form.submit();
-                }}
                 className="appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
               >
                 <option value="">✓ Presença</option>
