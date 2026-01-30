@@ -142,6 +142,7 @@ interface ListInscricoesOptions {
     telefone?: string;
     indicacao?: string;
     treinamento?: string;
+    presenca?: "aprovada" | "reprovada" | "validada" | "nao-validada";
   };
 }
 
@@ -730,6 +731,24 @@ export async function listInscricoes(
       if (matches.length > 0) {
         conditions.push(`(${matches.join(' OR ')})`);
       }
+    }
+  }
+
+  // Filtro de presença
+  if (filters.presenca) {
+    switch (filters.presenca) {
+      case "aprovada":
+        conditions.push(`(i.payload->>'presenca_validada')::boolean = true AND (i.payload->>'presenca_aprovada')::boolean = true`);
+        break;
+      case "reprovada":
+        conditions.push(`(i.payload->>'presenca_validada')::boolean = true AND ((i.payload->>'presenca_aprovada')::boolean = false OR i.payload->>'presenca_aprovada' IS NULL)`);
+        break;
+      case "validada":
+        conditions.push(`(i.payload->>'presenca_validada')::boolean = true`);
+        break;
+      case "nao-validada":
+        conditions.push(`(i.payload->>'presenca_validada' IS NULL OR (i.payload->>'presenca_validada')::boolean = false)`);
+        break;
     }
   }
 

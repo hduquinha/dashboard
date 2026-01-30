@@ -76,6 +76,7 @@ export default async function CrmPage(props: CrmPageProps) {
   const telefone = pickStringParam(searchParams?.telefone) ?? "";
   const indicacao = pickStringParam(searchParams?.indicacao) ?? "";
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
+  const presencaFiltro = pickStringParam(searchParams?.presenca) as "aprovada" | "reprovada" | "validada" | "nao-validada" | undefined;
 
   const baseSearchParams = new URLSearchParams();
   if (searchParams && typeof searchParams === "object") {
@@ -114,6 +115,7 @@ export default async function CrmPage(props: CrmPageProps) {
       telefone,
       indicacao,
       treinamento: activeTreinamentoId || undefined,
+      presenca: presencaFiltro,
     },
   });
 
@@ -126,6 +128,12 @@ export default async function CrmPage(props: CrmPageProps) {
   const trainingFilterLabel = selectedTrainingOption
     ? selectedTrainingOption.label ?? selectedTrainingOption.id
     : activeTreinamentoId;
+  const presencaLabels: Record<string, string> = {
+    aprovada: "Presença Aprovada",
+    reprovada: "Presença Reprovada",
+    validada: "Presença Validada",
+    "nao-validada": "Sem Presença",
+  };
   const activeFilters = [
     nome ? { label: "Nome", value: nome } : null,
     telefone ? { label: "Telefone", value: telefone } : null,
@@ -134,6 +142,12 @@ export default async function CrmPage(props: CrmPageProps) {
       ? {
           label: "Treinamento",
           value: trainingFilterLabel ?? activeTreinamentoId,
+        }
+      : null,
+    presencaFiltro
+      ? {
+          label: "Presença",
+          value: presencaLabels[presencaFiltro] ?? presencaFiltro,
         }
       : null,
   ].filter((entry): entry is { label: string; value: string } => Boolean(entry));

@@ -412,15 +412,15 @@ export default function TrainingDetailsClient({
         )}
       </div>
 
-      {/* Link para presenças confirmadas */}
+      {/* Link para ver presentes no CRM */}
       <Link
-        href={`/presenca/confirmados?treinamento=${encodeURIComponent(treinamentoId)}`}
+        href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}&presenca=aprovada`}
         className="flex items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
       >
         <div className="flex items-center gap-3">
           <UserCheck className="h-5 w-5 text-emerald-500" />
           <span className="font-medium text-neutral-900">
-            Ver todas as presenças confirmadas
+            Ver inscritos presentes
           </span>
         </div>
         <ChevronRight className="h-5 w-5 text-neutral-400" />
