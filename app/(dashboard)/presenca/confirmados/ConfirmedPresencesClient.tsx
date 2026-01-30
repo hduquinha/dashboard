@@ -426,6 +426,95 @@ export default function ConfirmedPresencesClient() {
     URL.revokeObjectURL(url);
   };
 
+  // Gerar PDF com gráfico
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  
+  const handleGeneratePDF = async () => {
+    const dataToExport = selectedTraining === "all" 
+      ? filteredPresences 
+      : filteredPresences.filter(p => p.treinamentoId === selectedTraining);
+
+    // Agrupar por cluster
+    const clusterMap = new Map<string, {
+      code: string;
+      name: string;
+      presentes: Array<{
+        nome: string;
+        participanteNomeZoom: string | null;
+        telefone: string | null;
+        aprovado: boolean;
+        tempoTotalMinutos: number;
+      }>;
+      totalPresentes: number;
+      totalAprovados: number;
+    }>();
+
+    dataToExport.forEach(p => {
+      const code = p.recrutadorCodigo ?? "00";
+      const name = getRecruiterName(code);
+      
+      if (!clusterMap.has(code)) {
+        clusterMap.set(code, {
+          code,
+          name,
+          presentes: [],
+          totalPresentes: 0,
+          totalAprovados: 0,
+        });
+      }
+      
+      const cluster = clusterMap.get(code)!;
+      cluster.presentes.push({
+        nome: p.nome,
+        participanteNomeZoom: p.participanteNomeZoom,
+        telefone: p.telefone,
+        aprovado: p.aprovado,
+        tempoTotalMinutos: p.tempoTotalMinutos,
+      });
+      cluster.totalPresentes++;
+      if (p.aprovado) {
+        cluster.totalAprovados++;
+      }
+    });
+
+    const clusters = Array.from(clusterMap.values());
+    const totalAprovadosPdf = dataToExport.filter(p => p.aprovado).length;
+    const totalReprovadosPdf = dataToExport.filter(p => !p.aprovado).length;
+
+    setGeneratingPdf(true);
+    try {
+      const response = await fetch("/api/presence/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          treinamentoId: selectedTraining === "all" ? "Todos os Treinamentos" : selectedTraining,
+          clusters,
+          totalParticipantes: dataToExport.length,
+          totalAprovados: totalAprovadosPdf,
+          totalReprovados: totalReprovadosPdf,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Erro ao gerar PDF");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `relatorio-presenca-${selectedTraining === "all" ? "todos" : selectedTraining}-${new Date().toISOString().split("T")[0]}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erro ao gerar PDF");
+    } finally {
+      setGeneratingPdf(false);
+    }
+  };
+
   // Exportar CSV
   const handleExport = () => {
     const headers = [
@@ -512,14 +601,29 @@ export default function ConfirmedPresencesClient() {
             Participantes com presença validada nos treinamentos
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleGeneratePDF}
+            disabled={filteredPresences.length === 0 || generatingPdf}
+            className="inline-flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {generatingPdf ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Gerando...
+              </>
+            ) : (
+              <>📄 PDF com Gráfico</>
+            )}
+          </button>
           <button
             type="button"
             onClick={handleGenerateReport}
             disabled={filteredPresences.length === 0}
             className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            📊 Relatório com Ranking
+            📊 Relatório TXT
           </button>
           <button
             type="button"
@@ -528,7 +632,7 @@ export default function ConfirmedPresencesClient() {
             className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Download className="h-4 w-4" />
-            Exportar CSV
+            CSV
           </button>
         </div>
       </header>
