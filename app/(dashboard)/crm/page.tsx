@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
-import PrintHeader from "@/components/PrintHeader";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -195,15 +194,10 @@ export default async function CrmPage(props: CrmPageProps) {
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
 
-  // Título para impressão baseado nos filtros
-  const printTitle = activeFiltersCount > 0
-    ? `Listagem: ${activeFilters.map(f => `${f.label}: ${f.value}`).join(" | ")}`
-    : "Listagem Completa";
-
   return (
-    <main className="space-y-6 print:space-y-4">
+    <main className="space-y-6">
       {/* Header */}
-      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between print:hidden">
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900">CRM</h1>
           <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
@@ -225,13 +219,10 @@ export default async function CrmPage(props: CrmPageProps) {
         </div>
       </header>
 
-      {/* Print Header - só aparece na impressão */}
-      <PrintHeader title={printTitle} totalRecords={result.total} />
-
       {/* CRM Table Section */}
-      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm print:border-0 print:shadow-none">
+      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
         {/* Header with search */}
-        <div className="border-b border-neutral-200 px-6 py-4 print:hidden">
+        <div className="border-b border-neutral-200 px-6 py-4">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex-1">
               <h2 className="text-lg font-bold text-neutral-900">Inscrições</h2>
