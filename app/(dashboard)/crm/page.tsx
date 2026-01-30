@@ -128,6 +128,15 @@ export default async function CrmPage(props: CrmPageProps) {
   const trainingFilterLabel = selectedTrainingOption
     ? selectedTrainingOption.label ?? selectedTrainingOption.id
     : activeTreinamentoId;
+  
+  // Buscar nome do indicador pelo código
+  const selectedRecruiter = indicacao
+    ? recruiterOptions.find((r) => r.code.toLowerCase() === indicacao.toLowerCase())
+    : undefined;
+  const indicadorLabel = selectedRecruiter
+    ? `${selectedRecruiter.name} (${selectedRecruiter.code})`
+    : indicacao;
+
   const presencaLabels: Record<string, string> = {
     aprovada: "Presença Aprovada",
     reprovada: "Presença Reprovada",
@@ -137,7 +146,7 @@ export default async function CrmPage(props: CrmPageProps) {
   const activeFilters = [
     nome ? { label: "Nome", value: nome } : null,
     telefone ? { label: "Telefone", value: telefone } : null,
-    indicacao ? { label: "Indicador", value: indicacao } : null,
+    indicacao ? { label: "Indicador", value: indicadorLabel } : null,
     activeTreinamentoId
       ? {
           label: "Treinamento",
