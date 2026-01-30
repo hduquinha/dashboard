@@ -1095,9 +1095,6 @@ export default function InscricaoDetails({
               </div>
             </div>
           </details>
-              </div>
-            </div>
-          </details>
         </div>
       </div>
     </div>
