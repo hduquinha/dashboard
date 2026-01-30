@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -10,6 +10,7 @@ import {
   Percent,
   Medal,
   ChevronRight,
+  Calendar,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -26,9 +27,17 @@ interface PresenceRecord {
   telefone: string | null;
   cidade: string | null;
   treinamentoId: string;
+  recrutadorCodigo: string | null;
   recrutadorNome: string | null;
   aprovado: boolean;
   tempoTotalMinutos: number;
+}
+
+interface PresenceRanking {
+  recrutadorCodigo: string;
+  recrutadorNome: string;
+  totalPresentes: number;
+  totalAprovados: number;
 }
 
 interface TrainingDetailsClientProps {
@@ -77,6 +86,49 @@ export default function TrainingDetailsClient({
   const totalInscritos = ranking.reduce((acc, r) => acc + r.totalInscritos, 0);
   const totalAprovados = presences.filter((p) => p.aprovado).length;
   const totalReprovados = presences.filter((p) => !p.aprovado).length;
+
+  // Ranking de inscritos ordenado por aprovados, desempate por inscritos
+  const sortedRanking = useMemo(() => {
+    return [...ranking].sort((a, b) => {
+      if (b.totalAprovados !== a.totalAprovados) {
+        return b.totalAprovados - a.totalAprovados;
+      }
+      return b.totalInscritos - a.totalInscritos;
+    });
+  }, [ranking]);
+
+  // Ranking de presenças (agrupado por recrutador)
+  const presenceRanking = useMemo(() => {
+    const map = new Map<string, PresenceRanking>();
+    
+    presences.forEach((p) => {
+      const code = p.recrutadorCodigo ?? "00";
+      const name = p.recrutadorNome ?? "Sem Recrutador";
+      
+      if (!map.has(code)) {
+        map.set(code, {
+          recrutadorCodigo: code,
+          recrutadorNome: name,
+          totalPresentes: 0,
+          totalAprovados: 0,
+        });
+      }
+      
+      const entry = map.get(code)!;
+      entry.totalPresentes++;
+      if (p.aprovado) {
+        entry.totalAprovados++;
+      }
+    });
+    
+    // Ordenar por aprovados, desempate por presentes
+    return Array.from(map.values()).sort((a, b) => {
+      if (b.totalAprovados !== a.totalAprovados) {
+        return b.totalAprovados - a.totalAprovados;
+      }
+      return b.totalPresentes - a.totalPresentes;
+    });
+  }, [presences]);
 
   // Medalha para os 3 primeiros
   const getMedalColor = (index: number): string => {
@@ -196,16 +248,17 @@ export default function TrainingDetailsClient({
         </div>
       </div>
 
-      {/* Ranking de Recrutadores */}
+      {/* Ranking de Recrutadores (por Inscritos) */}
       <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
         <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
           <Trophy className="h-5 w-5 text-yellow-500" />
           <h2 className="text-lg font-semibold text-neutral-900">
-            Ranking de Recrutadores
+            Ranking de Inscritos
           </h2>
+          <span className="text-sm text-neutral-500">(ordenado por aprovados)</span>
         </div>
 
-        {ranking.length === 0 ? (
+        {sortedRanking.length === 0 ? (
           <div className="py-12 text-center">
             <Users className="mx-auto h-12 w-12 text-neutral-300" />
             <h3 className="mt-4 text-lg font-medium text-neutral-900">
@@ -217,7 +270,7 @@ export default function TrainingDetailsClient({
           </div>
         ) : (
           <div className="divide-y divide-neutral-100">
-            {ranking.map((r, index) => (
+            {sortedRanking.map((r, index) => (
               <div
                 key={r.recrutadorCodigo}
                 className="flex items-center gap-4 px-6 py-4 transition hover:bg-neutral-50"
@@ -244,16 +297,16 @@ export default function TrainingDetailsClient({
                 {/* Estatísticas */}
                 <div className="flex items-center gap-6 text-sm">
                   <div className="text-center">
-                    <p className="text-lg font-bold text-neutral-900">
-                      {r.totalInscritos}
-                    </p>
-                    <p className="text-xs text-neutral-500">Inscritos</p>
-                  </div>
-                  <div className="text-center">
                     <p className="text-lg font-bold text-emerald-600">
                       {r.totalAprovados}
                     </p>
                     <p className="text-xs text-neutral-500">Aprovados</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-lg font-bold text-neutral-900">
+                      {r.totalInscritos}
+                    </p>
+                    <p className="text-xs text-neutral-500">Inscritos</p>
                   </div>
                   <div className="text-center">
                     <p
@@ -268,6 +321,81 @@ export default function TrainingDetailsClient({
                       {r.percentualAprovacao}%
                     </p>
                     <p className="text-xs text-neutral-500">Taxa</p>
+                  </div>
+                </div>
+
+                {/* Link para detalhes */}
+                <Link
+                  href={`/recrutadores/${r.recrutadorCodigo}`}
+                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-200 transition hover:bg-neutral-100"
+                >
+                  <ChevronRight className="h-4 w-4 text-neutral-500" />
+                </Link>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Ranking de Presenças (participantes do encontro) */}
+      <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+        <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+          <Calendar className="h-5 w-5 text-emerald-500" />
+          <h2 className="text-lg font-semibold text-neutral-900">
+            Ranking de Presenças
+          </h2>
+          <span className="text-sm text-neutral-500">(quem participou do encontro)</span>
+        </div>
+
+        {presenceRanking.length === 0 ? (
+          <div className="py-12 text-center">
+            <UserCheck className="mx-auto h-12 w-12 text-neutral-300" />
+            <h3 className="mt-4 text-lg font-medium text-neutral-900">
+              Nenhuma presença confirmada
+            </h3>
+            <p className="mt-2 text-sm text-neutral-500">
+              Ainda não há presenças validadas neste treinamento.
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-neutral-100">
+            {presenceRanking.map((r, index) => (
+              <div
+                key={r.recrutadorCodigo}
+                className="flex items-center gap-4 px-6 py-4 transition hover:bg-neutral-50"
+              >
+                {/* Posição */}
+                <div className="flex h-10 w-10 items-center justify-center">
+                  {index < 3 ? (
+                    <Medal className={`h-6 w-6 ${getMedalColor(index)}`} />
+                  ) : (
+                    <span className="text-lg font-bold text-neutral-400">
+                      {index + 1}º
+                    </span>
+                  )}
+                </div>
+
+                {/* Nome */}
+                <div className="flex-1">
+                  <p className="font-medium text-neutral-900">{r.recrutadorNome}</p>
+                  <p className="text-xs text-neutral-500">
+                    Código: {r.recrutadorCodigo}
+                  </p>
+                </div>
+
+                {/* Estatísticas */}
+                <div className="flex items-center gap-6 text-sm">
+                  <div className="text-center">
+                    <p className="text-lg font-bold text-emerald-600">
+                      {r.totalAprovados}
+                    </p>
+                    <p className="text-xs text-neutral-500">Aprovados</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-lg font-bold text-neutral-900">
+                      {r.totalPresentes}
+                    </p>
+                    <p className="text-xs text-neutral-500">Presentes</p>
                   </div>
                 </div>
 
