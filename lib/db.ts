@@ -724,35 +724,27 @@ export async function listInscricoes(
   }
 
   if (filters.treinamento && filters.treinamento.trim().length > 0) {
-    const rawCandidates = buildTrainingFilterCandidates(filters.treinamento.trim());
-    const likePatterns = Array.from(
-      rawCandidates.reduce((accumulator, candidate) => {
-        const trimmed = candidate.trim();
-        if (!trimmed) {
-          return accumulator;
-        }
-        accumulator.add(`%${trimmed}%`);
-        return accumulator;
-      }, new Set<string>())
-    );
-
-    if (likePatterns.length > 0) {
-      filtersValues.push(likePatterns);
-      const arrayIndex = filtersValues.length;
-      const normalizedTrainingFields = TRAINING_FIELD_KEYS.map(
-        (key) => `NULLIF(TRIM(COALESCE(i.payload->>'${key}', '')), '')`
-      );
-      const trainingCityFields = ["cidade", "treinamento_cidade", "training_city"];
-      const normalizedCityFields = trainingCityFields.map(
-        (key) => `NULLIF(TRIM(COALESCE(i.payload->>'${key}', '')), '')`
-      );
-      const matches = [...normalizedTrainingFields, ...normalizedCityFields]
-        .filter((expr, index, all) => expr && all.indexOf(expr) === index)
-        .map((expr) => `${expr} IS NOT NULL AND ${expr} ILIKE ANY($${arrayIndex})`);
-      if (matches.length > 0) {
-        conditions.push(`(${matches.join(' OR ')})`);
-      }
-    }
+    const treinamentoValue = filters.treinamento.trim();
+    
+    // Usar correspondência EXATA com a mesma expressão de listTrainingsWithStats
+    // Isso garante que o ID do treinamento seja correspondido corretamente
+    const treinamentoExpr = `TRIM(COALESCE(
+      NULLIF(TRIM(i.payload->>'treinamento'), ''),
+      NULLIF(TRIM(i.payload->>'training'), ''),
+      NULLIF(TRIM(i.payload->>'training_date'), ''),
+      NULLIF(TRIM(i.payload->>'trainingDate'), ''),
+      NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
+      NULLIF(TRIM(i.payload->>'training_id'), ''),
+      NULLIF(TRIM(i.payload->>'trainingId'), ''),
+      NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
+      NULLIF(TRIM(i.payload->>'training_option'), ''),
+      NULLIF(TRIM(i.payload->>'trainingOption'), ''),
+      ''
+    ))`;
+    
+    filtersValues.push(treinamentoValue);
+    const paramIndex = filtersValues.length;
+    conditions.push(`${treinamentoExpr} = $${paramIndex}`);
   }
 
   // Filtro de presença
