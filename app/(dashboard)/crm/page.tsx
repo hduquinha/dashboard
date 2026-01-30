@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
+import PrintHeader from "@/components/PrintHeader";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -225,12 +226,7 @@ export default async function CrmPage(props: CrmPageProps) {
       </header>
 
       {/* Print Header - só aparece na impressão */}
-      <div className="hidden print:block print:mb-4">
-        <h1 className="text-xl font-bold text-neutral-900">{printTitle}</h1>
-        <p className="text-sm text-neutral-500">
-          {result.total} registros • Gerado em {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")}
-        </p>
-      </div>
+      <PrintHeader title={printTitle} totalRecords={result.total} />
 
       {/* CRM Table Section */}
       <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm print:border-0 print:shadow-none">
