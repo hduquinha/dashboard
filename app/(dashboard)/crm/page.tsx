@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import InscricoesTable from "@/components/InscricoesTable";
+import PrintButton from "@/components/PrintButton";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -170,15 +171,21 @@ export default async function CrmPage(props: CrmPageProps) {
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
 
+  // Título para impressão baseado nos filtros
+  const printTitle = activeFiltersCount > 0
+    ? `Listagem: ${activeFilters.map(f => `${f.label}: ${f.value}`).join(" | ")}`
+    : "Listagem Completa";
+
   return (
-    <main className="space-y-6">
+    <main className="space-y-6 print:space-y-4">
       {/* Header */}
-      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-neutral-900">CRM</h1>
           <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
         </div>
         <div className="flex gap-3">
+          <PrintButton className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50" />
           <Link
             href={exportUrl}
             className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
@@ -194,10 +201,18 @@ export default async function CrmPage(props: CrmPageProps) {
         </div>
       </header>
 
+      {/* Print Header - só aparece na impressão */}
+      <div className="hidden print:block print:mb-4">
+        <h1 className="text-xl font-bold text-neutral-900">{printTitle}</h1>
+        <p className="text-sm text-neutral-500">
+          {result.total} registros • Gerado em {new Date().toLocaleDateString("pt-BR")} às {new Date().toLocaleTimeString("pt-BR")}
+        </p>
+      </div>
+
       {/* CRM Table Section */}
-      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm print:border-0 print:shadow-none">
         {/* Header with search */}
-        <div className="border-b border-neutral-200 px-6 py-4">
+        <div className="border-b border-neutral-200 px-6 py-4 print:hidden">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex-1">
               <h2 className="text-lg font-bold text-neutral-900">Inscrições</h2>
