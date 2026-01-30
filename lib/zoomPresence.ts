@@ -570,6 +570,7 @@ export function processPresenceValidation(
       nome: i.nome || `Inscrição #${i.id}`,
       telefone: i.telefone,
       cidade: i.cidade,
+      recrutadorCodigo: i.recrutadorCodigo,
     }))
     .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR"));
 
