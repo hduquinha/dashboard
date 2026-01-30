@@ -176,7 +176,10 @@ export async function POST(request: NextRequest) {
       });
     });
 
-    return new NextResponse(buffer, {
+    // Converter Buffer para Uint8Array para compatibilidade com NextResponse
+    const uint8Array = new Uint8Array(buffer);
+
+    return new NextResponse(uint8Array, {
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `attachment; filename="relatorio-presenca-${treinamentoId}-${new Date().toISOString().split("T")[0]}.pdf"`,
