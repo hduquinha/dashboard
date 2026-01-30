@@ -45,7 +45,7 @@ export default function DashboardCharts({ growthData, distributionData, topRecru
               />
               <Legend />
               <Line type="monotone" dataKey="leads" stroke="#0f172a" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Leads" />
-              <Line type="monotone" dataKey="recruits" stroke="#2DBDC2" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Recrutadores" />
+              <Line type="monotone" dataKey="recruits" stroke="#2DBDC2" strokeWidth={3} dot={{ r: 4 }} activeDot={{ r: 6 }} name="Clusters" />
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -80,7 +80,7 @@ export default function DashboardCharts({ growthData, distributionData, topRecru
 
       {/* Top Performers Bar Chart */}
       <div className="col-span-1 rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm lg:col-span-2 xl:col-span-3">
-        <h3 className="mb-4 text-lg font-bold text-neutral-900">Top Recrutadores</h3>
+        <h3 className="mb-4 text-lg font-bold text-neutral-900">Top Clusters</h3>
         <div className="h-[250px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart

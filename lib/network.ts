@@ -15,6 +15,7 @@ export interface NetworkNode {
   parentNodeId: number | null;
   parentCode: string | null;
   recrutadorCodigo: string | null;
+  recrutadorNome: string | null;
   telefone: string | null;
   cidade: string | null;
   nivel: number | null;
@@ -37,6 +38,7 @@ export interface NetworkTreeStats {
 
 export interface NetworkTreeFocus {
   code: string | null;
+  name: string | null;
   nodeId: number | null;
   path: number[];
 }
@@ -91,7 +93,7 @@ function inferDisplayName(inscricao: InscricaoItem, fallback: string): string {
     return inscricao.nome.trim();
   }
   if (inscricao.codigoProprio) {
-    return `Recrutador ${inscricao.codigoProprio}`;
+    return `Cluster ${inscricao.codigoProprio}`;
   }
   if (inscricao.recrutadorCodigo) {
     return `${fallback} (${inscricao.recrutadorCodigo})`;
@@ -143,6 +145,7 @@ function toNetworkNode(inscricao: InscricaoItem): NetworkNode {
     parentNodeId: inscricao.parentInscricaoId ?? null,
     parentCode: inscricao.recrutadorCodigo,
     recrutadorCodigo: inscricao.recrutadorCodigo,
+    recrutadorNome: inscricao.recrutadorNome,
     telefone: inscricao.telefone,
     cidade: inscricao.cidade,
     nivel: inscricao.nivel ?? null,
@@ -412,6 +415,7 @@ export async function buildNetworkTree(
   const focus: NetworkTreeFocus | null = focusNode
     ? {
         code: focusNode.code,
+        name: focusNode.displayName,
         nodeId: focusNode.id,
         path: buildFocusPath(focusNode, nodeById),
       }

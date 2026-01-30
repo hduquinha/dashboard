@@ -203,7 +203,7 @@ export default function InscricaoDetails({
       return { label: "-", className: "bg-neutral-200 text-neutral-700" };
     }
     if (inscricao.tipo === "recrutador") {
-      return { label: "Recrutador", className: "bg-emerald-100 text-emerald-800" };
+      return { label: "Cluster", className: "bg-emerald-100 text-emerald-800" };
     }
     switch (inscricao.status) {
       case "aprovado":
@@ -698,7 +698,7 @@ export default function InscricaoDetails({
                 </label>
               </div>
               <label className="flex flex-col gap-1.5 text-sm font-medium text-[#0f172a]">
-                Indicador (Recrutador)
+                Indicador
                 <input
                   name="indicacao"
                   value={formState.indicacao}
@@ -709,7 +709,7 @@ export default function InscricaoDetails({
                   list={recruiterDatalistId}
                 />
                 <span className="text-xs text-neutral-500">
-                  As sugestões listam os recrutadores cadastrados. Deixe em branco para remover a indicação.
+                  As sugestões listam os clusters cadastrados. Deixe em branco para remover a indicação.
                 </span>
               </label>
               <datalist id={recruiterDatalistId}>
@@ -765,8 +765,8 @@ export default function InscricaoDetails({
                 </div>
                 {inscricao.codigoProprio ? (
                   <div className="rounded-lg bg-neutral-50 p-3">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-[#1A9A9E]">Código do Recrutador</dt>
-                    <dd className="mt-1 font-semibold text-neutral-900">{inscricao.codigoProprio}</dd>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-[#1A9A9E]">Cluster</dt>
+                    <dd className="mt-1 font-semibold text-neutral-900">{inscricao.nome ?? inscricao.codigoProprio}</dd>
                   </div>
                 ) : null}
                 <div className="rounded-lg bg-neutral-50 p-3">
@@ -785,7 +785,7 @@ export default function InscricaoDetails({
                   </dd>
                 </div>
                 <div className="rounded-lg bg-neutral-50 p-3 sm:col-span-2">
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-[#1A9A9E]">Indicador (Recrutador)</dt>
+                  <dt className="text-xs font-semibold uppercase tracking-wide text-[#1A9A9E]">Indicador</dt>
                   <dd className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="font-semibold text-neutral-900">
                       {inscricao.recrutadorNome ?? "Sem indicador"}
@@ -873,7 +873,7 @@ export default function InscricaoDetails({
             </section>
           )}
 
-          {/* Seção de Anamnese - aparece quando o recrutador tem anamnese vinculada */}
+          {/* Seção de Anamnese - aparece quando o cluster tem anamnese vinculada */}
           {inscricao.codigoProprio && (
             <section className="space-y-3 rounded-xl border border-purple-200 bg-gradient-to-r from-purple-50 to-purple-100/50 p-4 shadow-sm">
               <header className="flex items-center justify-between">
@@ -896,7 +896,7 @@ export default function InscricaoDetails({
                 </div>
               ) : anamneses.length === 0 ? (
                 <p className="py-4 text-center text-sm text-purple-600">
-                  Nenhuma anamnese vinculada a este recrutador.
+                  Nenhuma anamnese vinculada a este cluster.
                 </p>
               ) : (
                 <div className="space-y-4">

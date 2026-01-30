@@ -73,7 +73,7 @@ function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry 
   return {
     id: inscricao.id,
     inscricaoId: inscricao.id > 0 ? inscricao.id : null,
-    name: inscricao.nome ?? `Recrutador ${code || inscricao.id}`,
+    name: inscricao.nome ?? `Cluster ${code || inscricao.id}`,
     code: code || String(inscricao.id),
     url,
     isVirtual: Boolean(inscricao.isVirtual),
@@ -294,7 +294,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
     };
 
     if (mode === 'create') {
-      payload.name = name.trim() || `Recrutador ${normalizedCode}`;
+      payload.name = name.trim() || `Cluster ${normalizedCode}`;
     } else {
       if (!existingInscricaoId.trim()) {
         setErrorMessage('Selecione um cadastro existente pelo nome antes de promover.');
@@ -339,7 +339,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
 
       if (!response.ok) {
         const data = (await response.json().catch(() => null)) as { error?: string } | null;
-        setErrorMessage(data?.error ?? 'Não foi possível criar o recrutador.');
+        setErrorMessage(data?.error ?? 'Não foi possível criar o cluster.');
         return;
       }
 
@@ -368,13 +368,13 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
 
       setSuccessMessage(
         mode === 'create'
-          ? 'Recrutador criado com sucesso.'
-          : 'Inscrição promovida para recrutador com sucesso.'
+          ? 'Cluster criado com sucesso.'
+          : 'Inscrição promovida para cluster com sucesso.';
       );
       resetForm();
     } catch (error) {
       console.error('Failed to create recruiter', error);
-      setErrorMessage('Erro inesperado ao criar o recrutador.');
+      setErrorMessage('Erro inesperado ao criar o cluster.');
     } finally {
       setIsSubmitting(false);
     }
@@ -383,7 +383,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
   const openInscricaoDetails = useCallback(
     async (inscricaoId: number | null) => {
       if (!inscricaoId) {
-        setDetailsError('Este recrutador ainda não está vinculado a uma inscrição editável.');
+        setDetailsError('Este cluster ainda não está vinculado a uma inscrição editável.');
         setSelectedInscricao(null);
         return;
       }
@@ -417,9 +417,9 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
     <div className="flex flex-col gap-6">
       <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
         <header className="flex flex-col gap-1">
-          <h2 className="text-lg font-semibold text-neutral-900">Cadastrar recrutador</h2>
+          <h2 className="text-lg font-semibold text-neutral-900">Cadastrar cluster</h2>
           <p className="text-sm text-neutral-600">
-            Gere um novo código ou promova uma inscrição existente para o papel de recrutador.
+            Gere um novo código ou promova uma inscrição existente para o papel de cluster.
           </p>
         </header>
 
@@ -454,12 +454,12 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                   : 'border-neutral-300 text-neutral-700 hover:border-neutral-500 hover:text-neutral-900'
               }`}
             >
-              Criar recrutador
+              Criar cluster
             </button>
           </div>
           <p className="text-sm text-neutral-600">
             {mode === 'create'
-              ? 'Crie um novo recrutador e gere automaticamente o cadastro no CRM.'
+              ? 'Crie um novo cluster e gere automaticamente o cadastro no CRM.'
               : 'Localize um cadastro existente no CRM. A tela abre focada na busca para agilizar a vinculação.'}
           </p>
 
@@ -535,7 +535,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                   </div>
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                      Código do recrutador
+                      Código do cluster
                       <input
                         value={code}
                         onChange={(event) => setCode(event.target.value)}
@@ -561,7 +561,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                Código do recrutador
+                Código do cluster
                 <input
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
@@ -570,7 +570,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                 />
               </label>
               <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
-                Nome do recrutador
+                Nome do cluster
                 <input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
@@ -631,7 +631,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                     ))}
                   </datalist>
                   <span className="text-xs text-neutral-500">
-                    Use o código do recrutador responsável (opcional).
+                    Use o código do cluster responsável (opcional).
                   </span>
                 </label>
                 <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
@@ -656,7 +656,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
               {isSubmitting
                 ? 'Processando...'
                 : mode === 'create'
-                ? 'Criar recrutador'
+                ? 'Criar cluster'
                 : 'Vincular selecionado'}
             </button>
           </div>
@@ -677,7 +677,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
           <header className="flex flex-col gap-1 mb-4">
             <h2 className="text-lg font-semibold text-neutral-900">Anamneses Pendentes</h2>
             <p className="text-sm text-neutral-600">
-              Respostas de anamnese que precisam ser vinculadas a um recrutador.
+              Respostas de anamnese que precisam ser vinculadas a um cluster.
             </p>
           </header>
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -698,7 +698,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                     className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
                     onChange={(e) => {
                       if (e.target.value) {
-                        if (confirm(`Vincular anamnese de ${anamnese.nome} ao recrutador ${e.target.options[e.target.selectedIndex].text}?`)) {
+                        if (confirm(`Vincular anamnese de ${anamnese.nome} ao cluster ${e.target.options[e.target.selectedIndex].text}?`)) {
                           handleLinkAnamnese(anamnese.id, e.target.value);
                         } else {
                           e.target.value = "";
@@ -724,7 +724,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
       <section className="rounded-lg border border-neutral-200 bg-white p-6 shadow-sm">
         <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-1">
-            <h2 className="text-lg font-semibold text-neutral-900">Lista de recrutadores</h2>
+            <h2 className="text-lg font-semibold text-neutral-900">Lista de clusters</h2>
             <p className="text-sm text-neutral-600">
               Consulte rapidamente os códigos de indicação e seus respectivos links.
             </p>
@@ -742,7 +742,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
             <thead className="bg-neutral-100 text-xs font-semibold uppercase tracking-wide text-neutral-600">
               <tr>
                 <th className="px-4 py-3 text-left">Código</th>
-                <th className="px-4 py-3 text-left">Recrutador</th>
+                <th className="px-4 py-3 text-left">Cluster</th>
                 <th className="px-4 py-3 text-left">Contato</th>
                 <th className="px-4 py-3 text-left">Link</th>
                 <th className="px-4 py-3 text-right">Ações</th>
@@ -752,7 +752,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
               {filteredEntries.length === 0 ? (
                 <tr>
                   <td className="px-4 py-6 text-center text-neutral-500" colSpan={5}>
-                    Nenhum recrutador encontrado.
+                    Nenhum cluster encontrado.
                   </td>
                 </tr>
               ) : (

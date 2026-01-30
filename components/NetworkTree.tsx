@@ -150,11 +150,8 @@ function NetworkTreeInner({
             {node.tipo === "recrutador" ? "👤" : "🧲"}
           </span>
           <span className="text-sm font-semibold text-neutral-900">{node.displayName}</span>
-          {node.code ? (
-            <span className="mt-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">{`Código ${node.code}`}</span>
-          ) : null}
           <div className="mt-2 text-[11px] text-neutral-600">
-            {node.recrutadorCodigo ? <p>Indicador: {node.recrutadorCodigo}</p> : null}
+            {node.recrutadorNome ? <p>Indicador: {node.recrutadorNome}</p> : null}
             {node.telefone ? <p>Telefone: {node.telefone}</p> : null}
             {node.cidade ? <p>Cidade: {node.cidade}</p> : null}
             <p>
@@ -231,7 +228,7 @@ function NetworkTreeInner({
           <strong className="text-lg text-neutral-900">{stats.total}</strong>
         </div>
         <div>
-          <span className="block text-xs uppercase tracking-wide text-neutral-500">Recrutadores</span>
+          <span className="block text-xs uppercase tracking-wide text-neutral-500">Clusters</span>
           <strong className="text-lg text-neutral-900">{stats.recruiters}</strong>
         </div>
         <div>
@@ -239,7 +236,7 @@ function NetworkTreeInner({
           <strong className="text-lg text-neutral-900">{stats.leads}</strong>
         </div>
         <div>
-          <span className="block text-xs uppercase tracking-wide text-neutral-500">Recrutadores virtuais</span>
+          <span className="block text-xs uppercase tracking-wide text-neutral-500">Clusters virtuais</span>
           <strong className="text-lg text-neutral-900">{stats.virtualRecruiters}</strong>
         </div>
         <div>
@@ -251,7 +248,7 @@ function NetworkTreeInner({
       {focus?.nodeId ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
           <span>
-            Mostrando a rede do recrutador {focus.code ?? `#${focus.nodeId}`}.
+            Mostrando a rede do cluster {focus.name ?? focus.code ?? `#${focus.nodeId}`}.
           </span>
           <button
             type="button"
@@ -266,7 +263,7 @@ function NetworkTreeInner({
       <div className="space-y-6">
         {displayedRoots.length > 0 ? (
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Redes de recrutadores</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-neutral-600">Redes de clusters</h2>
             <div className="space-y-8 overflow-x-auto pb-6">
               <div className="flex min-w-full w-fit flex-col items-center">
                 {displayedRoots.map((root) => (
@@ -279,7 +276,7 @@ function NetworkTreeInner({
           </section>
         ) : (
           <p className="rounded-md border border-neutral-200 bg-white px-4 py-3 text-sm text-neutral-600">
-            Nenhum recrutador encontrado.
+            Nenhum cluster encontrado.
           </p>
         )}
 
