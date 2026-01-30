@@ -112,6 +112,19 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
     const payload = (row.payload ?? {}) as Record<string, unknown>;
     const parsed = parsePayload(payload);
 
+    // Normalizar código do recrutador
+    const rawRecruiterCode = row.traffic_source ?? parsed.codigoRecrutador ?? null;
+    let recrutadorCodigo: string | null = null;
+    if (rawRecruiterCode) {
+      const digits = rawRecruiterCode.replace(/\D+/g, "");
+      if (digits) {
+        const numeric = Number.parseInt(digits, 10);
+        if (!Number.isNaN(numeric)) {
+          recrutadorCodigo = String(numeric).padStart(2, "0");
+        }
+      }
+    }
+
     return {
       id: Number(row.id),
       payload,
@@ -123,7 +136,7 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
       telefone: row.telefone ?? null,
       cidade: row.cidade ?? null,
       profissao: row.profissao ?? null,
-      recrutadorCodigo: null,
+      recrutadorCodigo,
       recrutadorNome: null,
       recrutadorUrl: null,
       treinamentoId: row.treinamento ?? null,
@@ -226,6 +239,7 @@ export async function POST(request: NextRequest) {
       nome: i.nome || "Sem nome",
       telefone: i.telefone,
       cidade: i.cidade,
+      recrutadorCodigo: i.recrutadorCodigo,
     }));
 
     return NextResponse.json({

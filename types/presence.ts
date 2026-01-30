@@ -66,7 +66,9 @@ export type AssociationStatus =
   | "suggested"         // Sugestão de match (precisa confirmação)
   | "manual-pending"    // Sem match, aguardando associação manual
   | "confirmed"         // Confirmado por humano
-  | "rejected";         // Rejeitado por humano
+  | "rejected"          // Rejeitado por humano
+  | "not-found"         // Não foi possível encontrar a inscrição
+  | "doubt";            // Dúvida de inscrição (pode ter 2 candidatas)
 
 /**
  * Associação entre participante e inscrição
@@ -91,6 +93,7 @@ export interface InscricaoSimplificada {
   nome: string;
   telefone: string | null;
   cidade: string | null;
+  recrutadorCodigo: string | null;
 }
 
 /**

@@ -634,6 +634,7 @@ export function matchParticipantsToInscricoes(
   inscricaoId: number | null;
   inscricaoNome: string | null;
   inscricaoTelefone: string | null;
+  inscricaoRecrutadorCodigo: string | null;
   status: AssociationStatus;
   matchScore: number;
   matchReason: string | null;
@@ -644,6 +645,7 @@ export function matchParticipantsToInscricoes(
     inscricaoId: number | null;
     inscricaoNome: string | null;
     inscricaoTelefone: string | null;
+    inscricaoRecrutadorCodigo: string | null;
     status: AssociationStatus;
     matchScore: number;
     matchReason: string | null;
@@ -670,6 +672,7 @@ export function matchParticipantsToInscricoes(
           inscricaoId: altInscricao.id,
           inscricaoNome: altInscricao.nome,
           inscricaoTelefone: altInscricao.telefone,
+          inscricaoRecrutadorCodigo: altInscricao.recrutadorCodigo,
           status: determineAssociationStatus(altScore),
           matchScore: altScore,
           matchReason: altReason,
@@ -681,6 +684,7 @@ export function matchParticipantsToInscricoes(
           inscricaoId: null,
           inscricaoNome: null,
           inscricaoTelefone: null,
+          inscricaoRecrutadorCodigo: null,
           status: "manual-pending",
           matchScore: 0,
           matchReason: null,
@@ -694,6 +698,7 @@ export function matchParticipantsToInscricoes(
         inscricaoId: inscricao.id,
         inscricaoNome: inscricao.nome,
         inscricaoTelefone: inscricao.telefone,
+        inscricaoRecrutadorCodigo: inscricao.recrutadorCodigo,
         status: determineAssociationStatus(score),
         matchScore: score,
         matchReason: reason,
@@ -705,6 +710,7 @@ export function matchParticipantsToInscricoes(
         inscricaoId: null,
         inscricaoNome: null,
         inscricaoTelefone: null,
+        inscricaoRecrutadorCodigo: null,
         status: "manual-pending",
         matchScore: 0,
         matchReason: null,

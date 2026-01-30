@@ -31,9 +31,15 @@ interface AssociationData {
   inscricaoId: number | null;
   inscricaoNome: string | null;
   inscricaoTelefone: string | null;
+  inscricaoRecrutadorCodigo: string | null;
   status: AssociationStatus;
   matchScore: number;
   matchReason: string | null;
+  // Para status "doubt" - segunda inscrição candidata
+  inscricaoId2?: number | null;
+  inscricaoNome2?: string | null;
+  inscricaoTelefone2?: string | null;
+  inscricaoRecrutadorCodigo2?: string | null;
 }
 
 interface ParsedCSVState {
@@ -65,6 +71,12 @@ export default function PresenceValidationForm() {
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [searchModalParticipante, setSearchModalParticipante] = useState<string | null>(null);
   const [searchModalQuery, setSearchModalQuery] = useState("");
+
+  // Modal de dúvida (selecionar duas inscrições)
+  const [doubtModalOpen, setDoubtModalOpen] = useState(false);
+  const [doubtModalParticipante, setDoubtModalParticipante] = useState<string | null>(null);
+  const [doubtModalQuery, setDoubtModalQuery] = useState("");
+  const [doubtSelectedInscricoes, setDoubtSelectedInscricoes] = useState<InscricaoSimplificada[]>([]);
 
   // Confirmação
   const [isConfirming, startConfirm] = useTransition();
@@ -99,21 +111,27 @@ export default function PresenceValidationForm() {
     let confirmed = 0;
     let pending = 0;
     let autoMatched = 0;
+    let notFound = 0;
+    let doubt = 0;
 
     activeParticipants.forEach((p: ParticipantWithAnalysis) => {
       const assoc = associations.get(p.participante.nomeOriginal);
-      if (!assoc || !assoc.inscricaoId) {
+      if (!assoc || assoc.status === "manual-pending") {
         pending++;
       } else if (assoc.status === "confirmed") {
         confirmed++;
       } else if (assoc.status === "auto-matched") {
         autoMatched++;
+      } else if (assoc.status === "not-found") {
+        notFound++;
+      } else if (assoc.status === "doubt") {
+        doubt++;
       } else {
         pending++;
       }
     });
 
-    return { confirmed, pending, autoMatched, total: activeParticipants.length };
+    return { confirmed, pending, autoMatched, notFound, doubt, total: activeParticipants.length };
   }, [activeParticipants, associations]);
 
   // IDs de inscrições já usadas
@@ -129,7 +147,8 @@ export default function PresenceValidationForm() {
 
   // Verifica se pode avançar para próxima etapa
   const canProceedToAssociate = activeParticipants.length > 0;
-  const canProceedToConfirm = associationStats.pending === 0 && associationStats.total > 0;
+  // Agora também aceita not-found e doubt como "resolvidos"
+  const canProceedToConfirm = associationStats.pending === 0 && associationStats.autoMatched === 0 && associationStats.total > 0;
 
   // ============================================================================
   // CARREGA TREINAMENTOS
@@ -187,6 +206,7 @@ export default function PresenceValidationForm() {
           inscricaoId: match.inscricaoId,
           inscricaoNome: match.inscricaoNome,
           inscricaoTelefone: match.inscricaoTelefone,
+          inscricaoRecrutadorCodigo: match.inscricaoRecrutadorCodigo ?? null,
           status: match.status,
           matchScore: match.matchScore,
           matchReason: match.matchReason,
@@ -368,6 +388,7 @@ export default function PresenceValidationForm() {
         inscricaoId: inscricao?.id ?? null,
         inscricaoNome: inscricao?.nome ?? null,
         inscricaoTelefone: inscricao?.telefone ?? null,
+        inscricaoRecrutadorCodigo: inscricao?.recrutadorCodigo ?? null,
         status,
         matchScore: 100,
         matchReason: "manual",
@@ -375,6 +396,74 @@ export default function PresenceValidationForm() {
       return next;
     });
   }, []);
+
+  // Marca como "Não foi possível encontrar"
+  const markAsNotFound = useCallback((participanteNome: string) => {
+    setAssociations((prev: Map<string, AssociationData>) => {
+      const next = new Map(prev);
+      next.set(participanteNome, {
+        inscricaoId: null,
+        inscricaoNome: null,
+        inscricaoTelefone: null,
+        inscricaoRecrutadorCodigo: null,
+        status: "not-found",
+        matchScore: 0,
+        matchReason: "not-found",
+      });
+      return next;
+    });
+  }, []);
+
+  // Abre modal de dúvida
+  const openDoubtModal = useCallback((participanteNome: string) => {
+    const firstName = participanteNome.split(" ")[0];
+    setDoubtModalParticipante(participanteNome);
+    setDoubtModalQuery(firstName);
+    setDoubtSelectedInscricoes([]);
+    setDoubtModalOpen(true);
+  }, []);
+
+  // Toggle seleção no modal de dúvida
+  const toggleDoubtSelection = useCallback((inscricao: InscricaoSimplificada) => {
+    setDoubtSelectedInscricoes((prev) => {
+      const exists = prev.find((i) => i.id === inscricao.id);
+      if (exists) {
+        return prev.filter((i) => i.id !== inscricao.id);
+      } else if (prev.length < 2) {
+        return [...prev, inscricao];
+      }
+      // Se já tem 2, substitui o segundo
+      return [prev[0], inscricao];
+    });
+  }, []);
+
+  // Confirma dúvida com duas inscrições
+  const confirmDoubt = useCallback(() => {
+    if (!doubtModalParticipante || doubtSelectedInscricoes.length !== 2) return;
+    
+    setAssociations((prev: Map<string, AssociationData>) => {
+      const next = new Map(prev);
+      next.set(doubtModalParticipante, {
+        inscricaoId: doubtSelectedInscricoes[0].id,
+        inscricaoNome: doubtSelectedInscricoes[0].nome,
+        inscricaoTelefone: doubtSelectedInscricoes[0].telefone,
+        inscricaoRecrutadorCodigo: doubtSelectedInscricoes[0].recrutadorCodigo,
+        status: "doubt",
+        matchScore: 0,
+        matchReason: "doubt",
+        inscricaoId2: doubtSelectedInscricoes[1].id,
+        inscricaoNome2: doubtSelectedInscricoes[1].nome,
+        inscricaoTelefone2: doubtSelectedInscricoes[1].telefone,
+        inscricaoRecrutadorCodigo2: doubtSelectedInscricoes[1].recrutadorCodigo,
+      });
+      return next;
+    });
+
+    setDoubtModalOpen(false);
+    setDoubtModalParticipante(null);
+    setDoubtModalQuery("");
+    setDoubtSelectedInscricoes([]);
+  }, [doubtModalParticipante, doubtSelectedInscricoes]);
 
   // Confirma associação (transforma auto-matched em confirmed)
   const confirmAssociation = useCallback((participanteNome: string) => {
@@ -500,6 +589,42 @@ export default function PresenceValidationForm() {
       });
   }, [parsedData?.inscricoesDisponiveis, searchModalQuery, usedInscricaoIds]);
 
+  // Inscrições filtradas para modal de dúvida
+  const doubtFilteredInscricoes = useMemo((): FilteredInscricao[] => {
+    if (!parsedData?.inscricoesDisponiveis) return [];
+    
+    const query = doubtModalQuery.toLowerCase().trim();
+    
+    return parsedData.inscricoesDisponiveis
+      .map((insc: InscricaoSimplificada): FilteredInscricao => {
+        const firstName = insc.nome.split(" ")[0].toLowerCase();
+        const matchesQuery: boolean = !query || 
+          insc.nome.toLowerCase().includes(query) ||
+          (insc.telefone?.includes(query) ?? false) ||
+          (insc.cidade?.toLowerCase().includes(query) ?? false);
+        
+        const relevance: number = query && insc.nome.toLowerCase().startsWith(query) ? 2 :
+                         query && firstName === query ? 1 : 0;
+        
+        const isUsed: boolean = usedInscricaoIds.has(insc.id) === true;
+        return {
+          id: insc.id,
+          nome: insc.nome,
+          telefone: insc.telefone,
+          cidade: insc.cidade,
+          matchesQuery,
+          relevance,
+          isUsed,
+        };
+      })
+      .filter((insc: FilteredInscricao) => insc.matchesQuery)
+      .sort((a: FilteredInscricao, b: FilteredInscricao) => {
+        if (a.isUsed !== b.isUsed) return a.isUsed ? 1 : -1;
+        if (a.relevance !== b.relevance) return b.relevance - a.relevance;
+        return a.nome.localeCompare(b.nome);
+      });
+  }, [parsedData?.inscricoesDisponiveis, doubtModalQuery, usedInscricaoIds]);
+
   // ============================================================================
   // RENDER
   // ============================================================================
@@ -561,6 +686,8 @@ export default function PresenceValidationForm() {
           onConfirmAssociation={confirmAssociation}
           onOpenSearch={openSearchModal}
           onUpdateAssociation={updateAssociation}
+          onMarkNotFound={markAsNotFound}
+          onOpenDoubtModal={openDoubtModal}
           onBack={() => setCurrentStep("review")}
           onNext={() => setCurrentStep("confirm")}
           canProceed={canProceedToConfirm}
@@ -572,6 +699,8 @@ export default function PresenceValidationForm() {
         <ConfirmStep
           participants={activeParticipants}
           associations={associations}
+          inscricoesDisponiveis={parsedData.inscricoesDisponiveis}
+          treinamentoId={parsedData.config?.treinamentoId ?? ""}
           isConfirming={isConfirming}
           confirmResult={confirmResult}
           onBack={() => setCurrentStep("associate")}
@@ -593,6 +722,25 @@ export default function PresenceValidationForm() {
             setSearchModalOpen(false);
             setSearchModalParticipante(null);
             setSearchModalQuery("");
+          }}
+        />
+      )}
+
+      {/* Modal de Dúvida */}
+      {doubtModalOpen && parsedData && (
+        <DoubtModal
+          participanteNome={doubtModalParticipante}
+          query={doubtModalQuery}
+          onQueryChange={setDoubtModalQuery}
+          filteredInscricoes={doubtFilteredInscricoes}
+          selectedInscricoes={doubtSelectedInscricoes}
+          onToggleSelection={toggleDoubtSelection}
+          onConfirm={confirmDoubt}
+          onClose={() => {
+            setDoubtModalOpen(false);
+            setDoubtModalParticipante(null);
+            setDoubtModalQuery("");
+            setDoubtSelectedInscricoes([]);
           }}
         />
       )}
@@ -1059,16 +1207,20 @@ function AssociateStep({
   onConfirmAssociation,
   onOpenSearch,
   onUpdateAssociation,
+  onMarkNotFound,
+  onOpenDoubtModal,
   onBack,
   onNext,
   canProceed,
 }: {
   participants: ParticipantWithAnalysis[];
   associations: Map<string, AssociationData>;
-  stats: { confirmed: number; pending: number; autoMatched: number; total: number };
+  stats: { confirmed: number; pending: number; autoMatched: number; notFound: number; doubt: number; total: number };
   onConfirmAssociation: (nome: string) => void;
   onOpenSearch: (nome: string) => void;
   onUpdateAssociation: (nome: string, inscricao: InscricaoSimplificada | null, status: AssociationStatus) => void;
+  onMarkNotFound: (nome: string) => void;
+  onOpenDoubtModal: (nome: string) => void;
   onBack: () => void;
   onNext: () => void;
   canProceed: boolean;
@@ -1086,11 +1238,13 @@ function AssociateStep({
       </div>
 
       {/* Progresso */}
-      <div className="grid gap-3 sm:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <SummaryCard label="Total" value={stats.total} color="neutral" />
         <SummaryCard label="Confirmados" value={stats.confirmed} color="emerald" />
         <SummaryCard label="Auto (pendente)" value={stats.autoMatched} color="violet" />
         <SummaryCard label="Sem Associação" value={stats.pending} color="amber" />
+        <SummaryCard label="Não Encontrado" value={stats.notFound} color="red" />
+        <SummaryCard label="Em Dúvida" value={stats.doubt} color="sky" />
       </div>
 
       {!canProceed && (
@@ -1120,10 +1274,12 @@ function AssociateStep({
                 const hasAssociation = assoc?.inscricaoId != null;
                 const isConfirmed = assoc?.status === "confirmed";
                 const isAuto = assoc?.status === "auto-matched";
+                const isNotFound = assoc?.status === "not-found";
+                const isDoubt = assoc?.status === "doubt";
 
                 return (
                   <tr key={p.participante.nomeOriginal} className={`hover:bg-neutral-50 ${
-                    !hasAssociation ? "bg-amber-50/50" : ""
+                    !hasAssociation && !isNotFound && !isDoubt ? "bg-amber-50/50" : ""
                   }`}>
                     <td className="px-4 py-3">
                       <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
@@ -1137,13 +1293,21 @@ function AssociateStep({
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      {hasAssociation ? (
+                      {isNotFound ? (
+                        <span className="italic text-red-600">Não foi possível encontrar</span>
+                      ) : isDoubt ? (
                         <div>
-                          <p className="font-medium text-neutral-900">{assoc.inscricaoNome}</p>
-                          {assoc.inscricaoTelefone && (
+                          <p className="font-medium text-sky-700">Em dúvida entre:</p>
+                          <p className="text-xs text-neutral-600">1. {assoc?.inscricaoNome}</p>
+                          <p className="text-xs text-neutral-600">2. {assoc?.inscricaoNome2}</p>
+                        </div>
+                      ) : hasAssociation ? (
+                        <div>
+                          <p className="font-medium text-neutral-900">{assoc?.inscricaoNome}</p>
+                          {assoc?.inscricaoTelefone && (
                             <p className="text-xs text-neutral-500">{assoc.inscricaoTelefone}</p>
                           )}
-                          {isAuto && assoc.matchScore && (
+                          {isAuto && assoc?.matchScore && (
                             <p className="text-xs text-violet-600">
                               Auto: {assoc.matchScore}% {assoc.matchReason && `(${assoc.matchReason})`}
                             </p>
@@ -1162,6 +1326,14 @@ function AssociateStep({
                         <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
                           Auto-match
                         </span>
+                      ) : isNotFound ? (
+                        <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
+                          ✗ Não encontrado
+                        </span>
+                      ) : isDoubt ? (
+                        <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
+                          ⚠ Em dúvida
+                        </span>
                       ) : (
                         <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                           Pendente
@@ -1169,7 +1341,7 @@ function AssociateStep({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1">
+                      <div className="flex flex-wrap gap-1">
                         {isAuto && (
                           <button
                             onClick={() => onConfirmAssociation(p.participante.nomeOriginal)}
@@ -1178,13 +1350,41 @@ function AssociateStep({
                             Confirmar
                           </button>
                         )}
-                        <button
-                          onClick={() => onOpenSearch(p.participante.nomeOriginal)}
-                          className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-200"
-                        >
-                          {hasAssociation ? "Alterar" : "Buscar"}
-                        </button>
-                        {hasAssociation && !isConfirmed && (
+                        {!isNotFound && !isDoubt && (
+                          <button
+                            onClick={() => onOpenSearch(p.participante.nomeOriginal)}
+                            className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-200"
+                          >
+                            {hasAssociation ? "Alterar" : "Buscar"}
+                          </button>
+                        )}
+                        {!isNotFound && !isDoubt && !isConfirmed && (
+                          <button
+                            onClick={() => onMarkNotFound(p.participante.nomeOriginal)}
+                            className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
+                            title="Não foi possível encontrar a inscrição"
+                          >
+                            Não encontrado
+                          </button>
+                        )}
+                        {!isNotFound && !isDoubt && !isConfirmed && (
+                          <button
+                            onClick={() => onOpenDoubtModal(p.participante.nomeOriginal)}
+                            className="rounded bg-sky-100 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-200"
+                            title="Dúvida entre duas inscrições"
+                          >
+                            Dúvida
+                          </button>
+                        )}
+                        {(isNotFound || isDoubt) && (
+                          <button
+                            onClick={() => onUpdateAssociation(p.participante.nomeOriginal, null, "manual-pending")}
+                            className="rounded bg-neutral-100 px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-200"
+                          >
+                            Refazer
+                          </button>
+                        )}
+                        {hasAssociation && !isConfirmed && !isNotFound && !isDoubt && (
                           <button
                             onClick={() => onUpdateAssociation(p.participante.nomeOriginal, null, "manual-pending")}
                             className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-200"
@@ -1226,9 +1426,24 @@ function AssociateStep({
 // ETAPA 4: CONFIRMAÇÃO
 // ============================================================================
 
+interface ClusterData {
+  code: string;
+  name: string;
+  presentes: Array<{
+    participanteNome: string;
+    inscricaoNome: string;
+    inscricaoTelefone: string | null;
+    aprovado: boolean;
+    tempoTotal: number;
+  }>;
+  totalPresentes: number;
+}
+
 function ConfirmStep({
   participants,
   associations,
+  inscricoesDisponiveis,
+  treinamentoId,
   isConfirming,
   confirmResult,
   onBack,
@@ -1237,6 +1452,8 @@ function ConfirmStep({
 }: {
   participants: ParticipantWithAnalysis[];
   associations: Map<string, AssociationData>;
+  inscricoesDisponiveis: InscricaoSimplificada[];
+  treinamentoId: string;
   isConfirming: boolean;
   confirmResult: { success: boolean; message: string } | null;
   onBack: () => void;
@@ -1245,6 +1462,205 @@ function ConfirmStep({
 }) {
   const aprovados = participants.filter(p => p.analise.aprovado);
   const reprovados = participants.filter(p => !p.analise.aprovado);
+  
+  // Separar por status
+  const confirmedParticipants = participants.filter(p => {
+    const assoc = associations.get(p.participante.nomeOriginal);
+    return assoc?.status === "confirmed";
+  });
+  const notFoundParticipants = participants.filter(p => {
+    const assoc = associations.get(p.participante.nomeOriginal);
+    return assoc?.status === "not-found";
+  });
+  const doubtParticipants = participants.filter(p => {
+    const assoc = associations.get(p.participante.nomeOriginal);
+    return assoc?.status === "doubt";
+  });
+
+  // Gerar relatório para download
+  const generateReport = () => {
+    // Agrupar por Cluster (recrutador)
+    const clusterMap = new Map<string, ClusterData>();
+    
+    // Inicializar clusters
+    const recruiters = [
+      { code: "01", name: "Rodrigo" },
+      { code: "02", name: "Vanessa" },
+      { code: "03", name: "Jane" },
+      { code: "04", name: "Jhonatha" },
+      { code: "05", name: "Agatha" },
+      { code: "06", name: "Valda" },
+      { code: "07", name: "Cely" },
+      { code: "08", name: "Lourenço" },
+      { code: "09", name: "Bárbara" },
+      { code: "10", name: "Sandra" },
+      { code: "11", name: "Karina" },
+      { code: "12", name: "Paula Porto" },
+      { code: "13", name: "Regina Gondim" },
+      { code: "14", name: "Salete" },
+      { code: "15", name: "Marcos" },
+      { code: "16", name: "Ivaneide" },
+      { code: "17", name: "Karen" },
+      { code: "18", name: "Claudia Talib" },
+      { code: "19", name: "Anselmo" },
+      { code: "20", name: "Alessandra" },
+      { code: "21", name: "Cleidiane" },
+      { code: "22", name: "Renata Vergílio" },
+      { code: "23", name: "Alice" },
+      { code: "24", name: "Eliane/Márcio" },
+      { code: "25", name: "Adriana Davies" },
+      { code: "26", name: "Maria Léo" },
+      { code: "27", name: "Marcelo" },
+      { code: "28", name: "Adryelly" },
+      { code: "29", name: "Aline Nobile" },
+      { code: "30", name: "Kleidiane" },
+      { code: "31", name: "Gilsemara" },
+      { code: "32", name: "Josefa" },
+      { code: "33", name: "Mara" },
+      { code: "34", name: "Thais/Jorge" },
+    ];
+
+    // Para confirmados, agrupar por cluster
+    confirmedParticipants.forEach(p => {
+      const assoc = associations.get(p.participante.nomeOriginal);
+      if (!assoc || !assoc.inscricaoId) return;
+      
+      // Usar código do recrutador da associação
+      const recruiterCode = assoc.inscricaoRecrutadorCodigo ?? "00";
+      const recruiterName = recruiters.find(r => r.code === recruiterCode)?.name ?? "Sem Cluster";
+      
+      if (!clusterMap.has(recruiterCode)) {
+        clusterMap.set(recruiterCode, {
+          code: recruiterCode,
+          name: recruiterName,
+          presentes: [],
+          totalPresentes: 0,
+        });
+      }
+      
+      const cluster = clusterMap.get(recruiterCode)!;
+      cluster.presentes.push({
+        participanteNome: p.participante.nomeOriginal,
+        inscricaoNome: assoc.inscricaoNome ?? "",
+        inscricaoTelefone: assoc.inscricaoTelefone,
+        aprovado: p.analise.aprovado,
+        tempoTotal: p.analise.tempoTotalMinutos,
+      });
+      cluster.totalPresentes++;
+    });
+
+    // Ordenar clusters por quantidade (ranking)
+    const sortedClusters = Array.from(clusterMap.values()).sort(
+      (a, b) => b.totalPresentes - a.totalPresentes
+    );
+
+    // Top 5 para ranking
+    const top5Clusters = sortedClusters.slice(0, 5);
+
+    // Gerar texto do relatório
+    let report = "";
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "                 RELATÓRIO DE PRESENÇA NO ENCONTRO\n";
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += `Treinamento: ${treinamentoId}\n`;
+    report += `Data do Relatório: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}\n`;
+    report += "\n";
+    
+    // Resumo geral
+    report += "───────────────────────────────────────────────────────────────\n";
+    report += "                         RESUMO GERAL\n";
+    report += "───────────────────────────────────────────────────────────────\n";
+    report += `Total de Participantes: ${participants.length}\n`;
+    report += `Confirmados com Inscrição: ${confirmedParticipants.length}\n`;
+    report += `Não Encontrados: ${notFoundParticipants.length}\n`;
+    report += `Em Dúvida: ${doubtParticipants.length}\n`;
+    report += `Aprovados (presença OK): ${aprovados.length}\n`;
+    report += `Reprovados (faltou presença): ${reprovados.length}\n`;
+    report += "\n";
+
+    // Ranking Top 5 Clusters
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "                    🏆 RANKING TOP 5 CLUSTERS\n";
+    report += "═══════════════════════════════════════════════════════════════\n\n";
+    
+    top5Clusters.forEach((cluster, index) => {
+      const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "  ";
+      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalPresentes} presente(s)\n`;
+    });
+    report += "\n";
+
+    // Presentes por Cluster
+    report += "═══════════════════════════════════════════════════════════════\n";
+    report += "                    PRESENTES POR CLUSTER\n";
+    report += "═══════════════════════════════════════════════════════════════\n\n";
+
+    sortedClusters.forEach(cluster => {
+      report += `\n┌─────────────────────────────────────────────────────────────┐\n`;
+      report += `│ CLUSTER: ${cluster.name.padEnd(47)} │\n`;
+      report += `│ Total de Presentes: ${cluster.totalPresentes.toString().padEnd(36)} │\n`;
+      report += `└─────────────────────────────────────────────────────────────┘\n`;
+      
+      cluster.presentes.forEach((p, idx) => {
+        const status = p.aprovado ? "✓ Aprovado" : "✗ Reprovado";
+        report += `  ${(idx + 1).toString().padStart(2)}. ${p.inscricaoNome}\n`;
+        report += `      Zoom: ${p.participanteNome}\n`;
+        if (p.inscricaoTelefone) {
+          report += `      Tel: ${p.inscricaoTelefone}\n`;
+        }
+        report += `      ${status} | Tempo: ${formatDuration(p.tempoTotal)}\n`;
+      });
+    });
+
+    // Não Encontrados
+    if (notFoundParticipants.length > 0) {
+      report += "\n═══════════════════════════════════════════════════════════════\n";
+      report += "              ❌ NÃO FOI POSSÍVEL ENCONTRAR INSCRIÇÃO\n";
+      report += "═══════════════════════════════════════════════════════════════\n\n";
+      
+      notFoundParticipants.forEach((p, idx) => {
+        const status = p.analise.aprovado ? "Aprovado (tempo OK)" : "Reprovado (tempo insuficiente)";
+        report += `  ${(idx + 1).toString().padStart(2)}. ${p.participante.nomeOriginal}\n`;
+        if (p.participante.email) {
+          report += `      Email: ${p.participante.email}\n`;
+        }
+        report += `      ${status} | Tempo: ${formatDuration(p.analise.tempoTotalMinutos)}\n`;
+      });
+    }
+
+    // Em Dúvida
+    if (doubtParticipants.length > 0) {
+      report += "\n═══════════════════════════════════════════════════════════════\n";
+      report += "                    ⚠️ EM DÚVIDA DE INSCRIÇÃO\n";
+      report += "═══════════════════════════════════════════════════════════════\n\n";
+      
+      doubtParticipants.forEach((p, idx) => {
+        const assoc = associations.get(p.participante.nomeOriginal);
+        const status = p.analise.aprovado ? "Aprovado (tempo OK)" : "Reprovado (tempo insuficiente)";
+        report += `  ${(idx + 1).toString().padStart(2)}. ${p.participante.nomeOriginal}\n`;
+        if (p.participante.email) {
+          report += `      Email: ${p.participante.email}\n`;
+        }
+        report += `      ${status} | Tempo: ${formatDuration(p.analise.tempoTotalMinutos)}\n`;
+        report += `      Candidata 1: ${assoc?.inscricaoNome ?? "N/A"}\n`;
+        report += `      Candidata 2: ${assoc?.inscricaoNome2 ?? "N/A"}\n`;
+      });
+    }
+
+    report += "\n═══════════════════════════════════════════════════════════════\n";
+    report += "                      FIM DO RELATÓRIO\n";
+    report += "═══════════════════════════════════════════════════════════════\n";
+
+    // Download do arquivo
+    const blob = new Blob([report], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `relatorio-presenca-${treinamentoId || "encontro"}-${new Date().toISOString().split("T")[0]}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="space-y-6">
@@ -1258,19 +1674,41 @@ function ConfirmStep({
       </div>
 
       {/* Resumo */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        <SummaryCard label="Total de Participantes" value={participants.length} color="sky" />
-        <SummaryCard label="Aprovados (presença OK)" value={aprovados.length} color="emerald" />
-        <SummaryCard label="Reprovados (faltou presença)" value={reprovados.length} color="red" />
+      <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <SummaryCard label="Total" value={participants.length} color="neutral" />
+        <SummaryCard label="Confirmados" value={confirmedParticipants.length} color="emerald" />
+        <SummaryCard label="Não Encontrados" value={notFoundParticipants.length} color="red" />
+        <SummaryCard label="Em Dúvida" value={doubtParticipants.length} color="sky" />
+        <SummaryCard label="Aprovados" value={aprovados.length} color="violet" />
       </div>
 
-      {/* Lista resumida */}
-      <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
-        <div className="border-b border-neutral-100 p-4">
-          <h3 className="font-semibold text-neutral-900">Associações Confirmadas</h3>
+      {/* Botão de Relatório */}
+      <div className="rounded-xl border border-neutral-200 bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-neutral-900">Relatório de Presença</h3>
+            <p className="text-sm text-neutral-500">
+              Baixe o relatório com todos os Clusters, presenças, não encontrados e ranking
+            </p>
+          </div>
+          <button
+            onClick={generateReport}
+            className="flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-500"
+          >
+            📥 Baixar Relatório
+          </button>
         </div>
-        <div className="max-h-96 overflow-y-auto divide-y divide-neutral-100">
-          {participants.map((p) => {
+      </div>
+
+      {/* Lista resumida - Confirmados */}
+      <div className="rounded-xl border border-neutral-200 bg-white overflow-hidden">
+        <div className="border-b border-neutral-100 p-4 bg-emerald-50">
+          <h3 className="font-semibold text-emerald-900">
+            ✓ Associações Confirmadas ({confirmedParticipants.length})
+          </h3>
+        </div>
+        <div className="max-h-64 overflow-y-auto divide-y divide-neutral-100">
+          {confirmedParticipants.map((p) => {
             const assoc = associations.get(p.participante.nomeOriginal);
             return (
               <div key={p.participante.nomeOriginal} className="flex items-center justify-between p-3">
@@ -1291,6 +1729,72 @@ function ConfirmStep({
           })}
         </div>
       </div>
+
+      {/* Lista - Não Encontrados */}
+      {notFoundParticipants.length > 0 && (
+        <div className="rounded-xl border border-red-200 bg-white overflow-hidden">
+          <div className="border-b border-red-100 p-4 bg-red-50">
+            <h3 className="font-semibold text-red-900">
+              ✗ Não Foi Possível Encontrar ({notFoundParticipants.length})
+            </h3>
+          </div>
+          <div className="max-h-48 overflow-y-auto divide-y divide-neutral-100">
+            {notFoundParticipants.map((p) => (
+              <div key={p.participante.nomeOriginal} className="flex items-center justify-between p-3">
+                <div className="flex items-center gap-3">
+                  <span className={`inline-block h-2 w-2 rounded-full ${
+                    p.analise.aprovado ? "bg-emerald-500" : "bg-red-500"
+                  }`} />
+                  <div>
+                    <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
+                    {p.participante.email && (
+                      <p className="text-xs text-neutral-500">{p.participante.email}</p>
+                    )}
+                  </div>
+                </div>
+                <span className="text-sm text-neutral-500">
+                  {formatDuration(p.analise.tempoTotalMinutos)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lista - Em Dúvida */}
+      {doubtParticipants.length > 0 && (
+        <div className="rounded-xl border border-sky-200 bg-white overflow-hidden">
+          <div className="border-b border-sky-100 p-4 bg-sky-50">
+            <h3 className="font-semibold text-sky-900">
+              ⚠ Em Dúvida ({doubtParticipants.length})
+            </h3>
+          </div>
+          <div className="max-h-48 overflow-y-auto divide-y divide-neutral-100">
+            {doubtParticipants.map((p) => {
+              const assoc = associations.get(p.participante.nomeOriginal);
+              return (
+                <div key={p.participante.nomeOriginal} className="p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className={`inline-block h-2 w-2 rounded-full ${
+                        p.analise.aprovado ? "bg-emerald-500" : "bg-red-500"
+                      }`} />
+                      <p className="font-medium text-neutral-900">{p.participante.nomeOriginal}</p>
+                    </div>
+                    <span className="text-sm text-neutral-500">
+                      {formatDuration(p.analise.tempoTotalMinutos)}
+                    </span>
+                  </div>
+                  <div className="mt-1 ml-5 text-xs text-sky-600">
+                    <p>Candidata 1: {assoc?.inscricaoNome}</p>
+                    <p>Candidata 2: {assoc?.inscricaoNome2}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Resultado da confirmação */}
       {confirmResult && (
@@ -1456,6 +1960,157 @@ function SearchModal({
             className="w-full rounded-lg border border-neutral-300 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
           >
             Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DoubtModal({
+  participanteNome,
+  query,
+  onQueryChange,
+  filteredInscricoes,
+  selectedInscricoes,
+  onToggleSelection,
+  onConfirm,
+  onClose,
+}: {
+  participanteNome: string | null;
+  query: string;
+  onQueryChange: (q: string) => void;
+  filteredInscricoes: Array<InscricaoSimplificada & { isUsed: boolean; relevance: number }>;
+  selectedInscricoes: InscricaoSimplificada[];
+  onToggleSelection: (inscricao: InscricaoSimplificada) => void;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const selectedIds = new Set(selectedInscricoes.map((i) => i.id));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-neutral-200 p-4">
+          <div>
+            <h3 className="text-lg font-semibold text-neutral-900">Dúvida de Inscrição</h3>
+            <p className="text-sm text-neutral-500">
+              Participante: <strong>{participanteNome}</strong>
+            </p>
+            <p className="text-xs text-sky-600 mt-1">
+              Selecione exatamente 2 inscrições candidatas
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 hover:bg-neutral-100">
+            ✕
+          </button>
+        </div>
+
+        {/* Selecionadas */}
+        {selectedInscricoes.length > 0 && (
+          <div className="border-b border-neutral-100 bg-sky-50 p-4">
+            <p className="text-xs font-medium text-sky-700 mb-2">
+              Selecionadas ({selectedInscricoes.length}/2):
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {selectedInscricoes.map((insc, idx) => (
+                <span
+                  key={insc.id}
+                  className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-3 py-1 text-sm text-sky-800"
+                >
+                  {idx + 1}. {insc.nome}
+                  <button
+                    onClick={() => onToggleSelection(insc)}
+                    className="ml-1 text-sky-600 hover:text-sky-800"
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Search */}
+        <div className="border-b border-neutral-100 p-4">
+          <input
+            type="text"
+            placeholder="Buscar por nome, telefone ou cidade..."
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+            autoFocus
+            className="w-full rounded-lg border border-neutral-300 px-4 py-2 text-sm focus:border-neutral-500 focus:outline-none"
+          />
+          <p className="mt-2 text-xs text-neutral-500">
+            {filteredInscricoes.length} resultados
+          </p>
+        </div>
+
+        {/* Lista */}
+        <div className="max-h-72 overflow-y-auto p-2">
+          {filteredInscricoes.length === 0 ? (
+            <p className="py-8 text-center text-neutral-500">Nenhuma inscrição encontrada</p>
+          ) : (
+            <div className="space-y-1">
+              {filteredInscricoes.map((insc) => {
+                const isSelected = selectedIds.has(insc.id);
+                const canSelect = !insc.isUsed && (isSelected || selectedInscricoes.length < 2);
+                
+                return (
+                  <button
+                    key={insc.id}
+                    onClick={() => canSelect && onToggleSelection(insc)}
+                    disabled={insc.isUsed || (!isSelected && selectedInscricoes.length >= 2)}
+                    className={`w-full rounded-lg p-3 text-left transition ${
+                      isSelected
+                        ? "bg-sky-100 border-2 border-sky-400"
+                        : insc.isUsed
+                        ? "cursor-not-allowed bg-neutral-50 opacity-50"
+                        : selectedInscricoes.length >= 2
+                        ? "cursor-not-allowed opacity-50"
+                        : "hover:bg-neutral-100"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <p className="font-medium text-neutral-900">{insc.nome}</p>
+                        <p className="text-sm text-neutral-500">
+                          {insc.telefone || "Sem telefone"}
+                          {insc.cidade && ` • ${insc.cidade}`}
+                        </p>
+                      </div>
+                      {isSelected ? (
+                        <span className="text-xs text-sky-600 font-medium">✓ Selecionada</span>
+                      ) : insc.isUsed ? (
+                        <span className="text-xs text-neutral-400">Já associada</span>
+                      ) : selectedInscricoes.length >= 2 ? (
+                        <span className="text-xs text-neutral-400">Máximo atingido</span>
+                      ) : (
+                        <span className="text-xs text-sky-600">Selecionar</span>
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex gap-2 border-t border-neutral-200 p-4">
+          <button
+            onClick={onClose}
+            className="flex-1 rounded-lg border border-neutral-300 py-2 text-sm font-medium text-neutral-700 hover:bg-neutral-50"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={selectedInscricoes.length !== 2}
+            className="flex-1 rounded-lg bg-sky-600 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Confirmar Dúvida ({selectedInscricoes.length}/2)
           </button>
         </div>
       </div>
