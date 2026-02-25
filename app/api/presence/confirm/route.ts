@@ -10,13 +10,7 @@ interface AssociationPayload {
   tempoTotal: number;
   tempoDinamica: number;
   percentualDinamica: number;
-  perDay?: Array<{
-    day: number;
-    tempoTotalMinutos: number;
-    tempoDinamicaMinutos: number;
-    percentualDinamica: number;
-    aprovado: boolean;
-  }>;
+  hasDinamica: boolean;
 }
 
 interface PendingPayload {
@@ -37,12 +31,17 @@ interface RequestBody {
   pending?: PendingPayload[];
   treinamentoId: string;
   totalDays?: number;
+  currentDay?: number;
+  dinamicaDays?: string;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: RequestBody = await request.json();
-    const { associations, pending, treinamentoId, totalDays } = body;
+    const { associations, pending, treinamentoId, totalDays, currentDay, dinamicaDays } = body;
+
+    const dayNum = currentDay ?? 1;
+    const days = totalDays ?? 1;
 
     if (!associations || !Array.isArray(associations)) {
       return NextResponse.json(
@@ -68,29 +67,47 @@ export async function POST(request: NextRequest) {
       if (!assoc.inscricaoId) continue;
 
       try {
-        // Dados de presença a serem salvos no payload
+        // Build presence data namespaced by day
+        const prefix = days > 1 ? `presenca_dia${dayNum}` : "presenca";
         const presenceData: Record<string, unknown> = {
           presenca_validada: true,
-          presenca_aprovada: assoc.aprovado,
-          presenca_participante_nome: assoc.participanteNome,
-          presenca_tempo_total_minutos: assoc.tempoTotal,
-          presenca_tempo_dinamica_minutos: assoc.tempoDinamica,
-          presenca_percentual_dinamica: assoc.percentualDinamica,
           presenca_treinamento_id: treinamentoId,
           presenca_validada_em: new Date().toISOString(),
           presenca_status: "confirmed",
-          presenca_total_dias: totalDays ?? 1,
+          presenca_total_dias: days,
+          presenca_dia_processado: dayNum,
+          presenca_dinamica_dias: dinamicaDays ?? "none",
+          // Namespaced per-day data
+          [`${prefix}_participante_nome`]: assoc.participanteNome,
+          [`${prefix}_aprovado`]: assoc.aprovado,
+          [`${prefix}_tempo_total`]: assoc.tempoTotal,
+          [`${prefix}_tempo_dinamica`]: assoc.tempoDinamica,
+          [`${prefix}_percentual_dinamica`]: assoc.percentualDinamica,
+          [`${prefix}_tem_dinamica`]: assoc.hasDinamica,
         };
 
-        // Store per-day data for multi-day trainings
-        if (assoc.perDay && assoc.perDay.length > 0) {
-          for (const dayData of assoc.perDay) {
-            const prefix = `presenca_dia${dayData.day}`;
-            presenceData[`${prefix}_tempo_total`] = dayData.tempoTotalMinutos;
-            presenceData[`${prefix}_tempo_dinamica`] = dayData.tempoDinamicaMinutos;
-            presenceData[`${prefix}_percentual_dinamica`] = dayData.percentualDinamica;
-            presenceData[`${prefix}_aprovado`] = dayData.aprovado;
-          }
+        // For single-day training, also set the top-level approval
+        if (days === 1) {
+          presenceData.presenca_aprovada = assoc.aprovado;
+          presenceData.presenca_participante_nome = assoc.participanteNome;
+          presenceData.presenca_tempo_total_minutos = assoc.tempoTotal;
+          presenceData.presenca_tempo_dinamica_minutos = assoc.tempoDinamica;
+          presenceData.presenca_percentual_dinamica = assoc.percentualDinamica;
+        }
+
+        // For 2-day training Day 1: set top-level with Day 1 data, mark partial
+        if (days === 2 && dayNum === 1) {
+          presenceData.presenca_participante_nome = assoc.participanteNome;
+          presenceData.presenca_tempo_total_minutos = assoc.tempoTotal;
+          presenceData.presenca_tempo_dinamica_minutos = assoc.tempoDinamica;
+          presenceData.presenca_percentual_dinamica = assoc.percentualDinamica;
+          presenceData.presenca_aprovada = false; // partial, pending Day 2
+        }
+
+        // For 2-day training Day 2: recalculate overall approval
+        if (days === 2 && dayNum === 2) {
+          // We'll handle recalculation after the update by reading existing Day 1 data
+          presenceData.presenca_participante_nome = assoc.participanteNome;
         }
 
         await pool.query(
@@ -99,6 +116,36 @@ export async function POST(request: NextRequest) {
            WHERE id = $2`,
           [JSON.stringify(presenceData), assoc.inscricaoId]
         );
+
+        // For Day 2 of 2-day training: recalculate overall approval based on both days
+        if (days === 2 && dayNum === 2) {
+          const { rows } = await pool.query<{ payload: Record<string, unknown> }>(
+            `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1`,
+            [assoc.inscricaoId]
+          );
+          if (rows.length > 0) {
+            const p = rows[0].payload;
+            const dia1Aprovado = p.presenca_dia1_aprovado === true;
+            const dia2Aprovado = p.presenca_dia2_aprovado === true;
+            const overallApproved = dia1Aprovado && dia2Aprovado;
+            // Sum both days for top-level fields
+            const dia1Tempo = typeof p.presenca_dia1_tempo_total === "number" ? p.presenca_dia1_tempo_total : 0;
+            const dia2Tempo = typeof p.presenca_dia2_tempo_total === "number" ? p.presenca_dia2_tempo_total : 0;
+            const dia1Dinamica = typeof p.presenca_dia1_tempo_dinamica === "number" ? p.presenca_dia1_tempo_dinamica : 0;
+            const dia2Dinamica = typeof p.presenca_dia2_tempo_dinamica === "number" ? p.presenca_dia2_tempo_dinamica : 0;
+            await pool.query(
+              `UPDATE ${SCHEMA_NAME}.inscricoes 
+               SET payload = payload || $1::jsonb 
+               WHERE id = $2`,
+              [JSON.stringify({
+                presenca_aprovada: overallApproved,
+                presenca_dia_processado: 2,
+                presenca_tempo_total_minutos: dia1Tempo + dia2Tempo,
+                presenca_tempo_dinamica_minutos: dia1Dinamica + dia2Dinamica,
+              }), assoc.inscricaoId]
+            );
+          }
+        }
 
         savedCount++;
       } catch (err) {

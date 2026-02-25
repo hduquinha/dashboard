@@ -54,8 +54,9 @@ export interface DayConfig {
   day: number; // 1 or 2
   inicioLive: Date;
   fimLive: Date;
-  inicioDinamica: Date;
-  fimDinamica: Date;
+  hasDinamica: boolean;
+  inicioDinamica?: Date;
+  fimDinamica?: Date;
 }
 
 /**
@@ -65,12 +66,17 @@ export interface PresenceConfig {
   treinamentoId: string;
   inicioLive: Date;
   fimLive: Date;
-  inicioDinamica: Date;
-  fimDinamica: Date;
+  hasDinamica: boolean;
+  inicioDinamica?: Date;
+  fimDinamica?: Date;
   tempoMinimoMinutos: number;
   percentualMinimoDinamica: number;
   /** Number of days in this training (1 or 2). Defaults to 1. */
   totalDays?: number;
+  /** Which day is being processed right now (1 or 2). Defaults to 1. */
+  currentDay?: number;
+  /** Which days have dinâmica: 'both' | 'day1' | 'day2' | 'none' */
+  dinamicaDays?: 'both' | 'day1' | 'day2' | 'none';
   /** Per-day configs when totalDays > 1 */
   dayConfigs?: DayConfig[];
 }
@@ -86,6 +92,7 @@ export interface DayPresenceAnalysis {
   cumpriuTempoMinimo: boolean;
   cumpriuDinamica: boolean;
   aprovado: boolean;
+  hasDinamica: boolean;
 }
 
 /**

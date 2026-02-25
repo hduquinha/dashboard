@@ -7,7 +7,6 @@ import type {
   InscricaoSimplificada,
   ZoomParticipantConsolidated,
   PresenceAnalysis,
-  DayPresenceAnalysis,
 } from "@/types/presence";
 import { formatDuration, analyzePresence, calculatePresenceInInterval } from "@/lib/zoomPresence";
 import { listRecruiters, isPlaceholderName } from "@/lib/recruiters";
@@ -21,6 +20,8 @@ interface TrainingOption {
   label: string;
   days?: number;
 }
+
+type DinamicaDays = 'both' | 'day1' | 'day2' | 'none';
 
 type Step = "upload" | "review" | "associate" | "confirm";
 
@@ -80,6 +81,9 @@ export default function PresenceValidationForm() {
   const [doubtModalParticipante, setDoubtModalParticipante] = useState<string | null>(null);
   const [doubtModalQuery, setDoubtModalQuery] = useState("");
   const [doubtSelectedInscricoes, setDoubtSelectedInscricoes] = useState<InscricaoSimplificada[]>([]);
+
+  // Day tracking for 2-day trainings
+  const [existingDay1, setExistingDay1] = useState<Record<number, { aprovado: boolean; tempoTotal: number; participanteNome: string }> | null>(null);
 
   // Confirmação
   const [isConfirming, startConfirm] = useTransition();
@@ -190,18 +194,14 @@ export default function PresenceValidationForm() {
         treinamentoId: data.config.treinamentoId,
         inicioLive: new Date(data.config.inicioLive),
         fimLive: new Date(data.config.fimLive),
-        inicioDinamica: new Date(data.config.inicioDinamica),
-        fimDinamica: new Date(data.config.fimDinamica),
+        hasDinamica: data.config.hasDinamica ?? false,
+        inicioDinamica: data.config.inicioDinamica ? new Date(data.config.inicioDinamica) : undefined,
+        fimDinamica: data.config.fimDinamica ? new Date(data.config.fimDinamica) : undefined,
         tempoMinimoMinutos: data.config.tempoMinimoMinutos,
         percentualMinimoDinamica: data.config.percentualMinimoDinamica,
         totalDays: data.config.totalDays ?? 1,
-        dayConfigs: data.config.dayConfigs?.map((dc: { day: number; inicioLive: string; fimLive: string; inicioDinamica: string; fimDinamica: string }) => ({
-          day: dc.day,
-          inicioLive: new Date(dc.inicioLive),
-          fimLive: new Date(dc.fimLive),
-          inicioDinamica: new Date(dc.inicioDinamica),
-          fimDinamica: new Date(dc.fimDinamica),
-        })),
+        currentDay: data.config.currentDay ?? 1,
+        dinamicaDays: data.config.dinamicaDays ?? "none",
       };
 
       // Inicializa estado dos participantes (também converte datas das entradas)
@@ -229,6 +229,11 @@ export default function PresenceValidationForm() {
         inscricoesDisponiveis: data.inscricoesDisponiveis,
         filename: data.filename,
       });
+
+      // Store existing Day 1 data if processing Day 2
+      if (data.existingDay1) {
+        setExistingDay1(data.existingDay1);
+      }
 
       // Inicializa associações com auto-match
       const newAssociations = new Map<string, AssociationData>();
@@ -565,7 +570,7 @@ export default function PresenceValidationForm() {
           tempoTotal: p.analise.tempoTotalMinutos,
           tempoDinamica: p.analise.tempoDinamicaMinutos,
           percentualDinamica: p.analise.percentualDinamica,
-          perDay: p.analise.perDay ?? undefined,
+          hasDinamica: parsedData.config!.hasDinamica ?? false,
         };
       });
 
@@ -601,7 +606,8 @@ export default function PresenceValidationForm() {
             pending: pendingToSave,
             treinamentoId: parsedData.config!.treinamentoId,
             totalDays: parsedData.config!.totalDays ?? 1,
-            treinamentoId: parsedData.config!.treinamentoId,
+            currentDay: parsedData.config!.currentDay ?? 1,
+            dinamicaDays: parsedData.config!.dinamicaDays ?? "none",
           }),
         });
 
@@ -624,6 +630,18 @@ export default function PresenceValidationForm() {
     setError(null);
     setSuccessMessage(null);
     setConfirmResult(null);
+    setExistingDay1(null);
+  };
+
+  // After confirming Day 1 of a 2-day training, go back to upload for Day 2
+  const startDay2 = () => {
+    setCurrentStep("upload");
+    setParsedData(null);
+    setAssociations(new Map());
+    setError(null);
+    setSuccessMessage(null);
+    setConfirmResult(null);
+    // Keep existingDay1 data for reference
   };
 
   // ============================================================================
@@ -782,11 +800,13 @@ export default function PresenceValidationForm() {
           associations={associations}
           inscricoesDisponiveis={parsedData.inscricoesDisponiveis}
           treinamentoId={parsedData.config?.treinamentoId ?? ""}
+          config={parsedData.config}
           isConfirming={isConfirming}
           confirmResult={confirmResult}
           onBack={() => setCurrentStep("associate")}
           onConfirm={handleConfirmAll}
           onReset={resetForm}
+          onStartDay2={startDay2}
         />
       )}
 
@@ -886,14 +906,19 @@ function StepIndicator({ currentStep }: { currentStep: Step }) {
 function UploadStep({ 
   trainings, 
   isLoading, 
-  onSubmit 
+  onSubmit,
+  forceDay2,
 }: { 
   trainings: TrainingOption[];
   isLoading: boolean;
   onSubmit: (formData: FormData) => void;
+  forceDay2?: boolean;
 }) {
   const [selectedTrainingId, setSelectedTrainingId] = React.useState("");
-  const [isTwoDays, setIsTwoDays] = React.useState(false);
+  const [isTwoDays, setIsTwoDays] = React.useState(forceDay2 ?? false);
+  const [currentDay, setCurrentDay] = React.useState<1 | 2>(forceDay2 ? 2 : 1);
+  const [dinamicaDays, setDinamicaDays] = React.useState<DinamicaDays>("none");
+  const [hasDinamicaToday, setHasDinamicaToday] = React.useState(false);
 
   // Auto-detect if selected training is 2-day
   const selectedTraining = trainings.find(t => t.id === selectedTrainingId);
@@ -903,10 +928,30 @@ function UploadStep({
     }
   }, [selectedTraining]);
 
+  // Determine if current day has dinâmica based on dinamicaDays selector
+  React.useEffect(() => {
+    if (!isTwoDays) {
+      // For single-day: user controls via a simple checkbox (managed separately)
+      return;
+    }
+    if (dinamicaDays === "both") {
+      setHasDinamicaToday(true);
+    } else if (dinamicaDays === "day1" && currentDay === 1) {
+      setHasDinamicaToday(true);
+    } else if (dinamicaDays === "day2" && currentDay === 2) {
+      setHasDinamicaToday(true);
+    } else {
+      setHasDinamicaToday(false);
+    }
+  }, [isTwoDays, dinamicaDays, currentDay]);
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     formData.set("totalDays", isTwoDays ? "2" : "1");
+    formData.set("currentDay", String(currentDay));
+    formData.set("dinamicaDays", isTwoDays ? dinamicaDays : (hasDinamicaToday ? "both" : "none"));
+    formData.set("hasDinamica", String(hasDinamicaToday));
     onSubmit(formData);
   };
 
@@ -915,17 +960,18 @@ function UploadStep({
       className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm"
       onSubmit={handleSubmit}
     >
-      <div className="space-y-4">
+      <div className="space-y-5">
         <h2 className="text-lg font-semibold text-neutral-900">
-          Passo 1: Importar Relatório do Zoom
+          Passo 1: Configuração e Upload
         </h2>
         <p className="text-sm text-neutral-600">
-          Faça upload do CSV exportado do Zoom e configure os horários do encontro.
+          Configure o treinamento, defina os parâmetros de presença e faça upload do CSV do Zoom.
         </p>
         
-        <div className="grid gap-4 sm:grid-cols-2">
+        {/* ── SEÇÃO: TREINAMENTO ── */}
+        <div className="space-y-4">
           {/* Treinamento */}
-          <div className="sm:col-span-2">
+          <div>
             <label className="block text-sm font-medium text-neutral-700">
               Treinamento
               <select
@@ -945,14 +991,20 @@ function UploadStep({
             </label>
           </div>
 
-          {/* Toggle 2 dias */}
-          <div className="sm:col-span-2">
+          {/* Duração: 1 ou 2 dias */}
+          <div className="flex items-center gap-3">
             <label className="flex items-center gap-3 cursor-pointer">
               <div className="relative">
                 <input
                   type="checkbox"
                   checked={isTwoDays}
-                  onChange={(e) => setIsTwoDays(e.target.checked)}
+                  onChange={(e) => {
+                    setIsTwoDays(e.target.checked);
+                    if (!e.target.checked) {
+                      setCurrentDay(1);
+                      setDinamicaDays("none");
+                    }
+                  }}
                   className="sr-only peer"
                 />
                 <div className="h-6 w-11 rounded-full bg-neutral-200 peer-checked:bg-[#2DBDC2] transition-colors" />
@@ -961,170 +1013,189 @@ function UploadStep({
               <span className="text-sm font-medium text-neutral-700">
                 Treinamento de 2 dias
               </span>
-              {isTwoDays && (
-                <span className="text-xs text-[#2DBDC2] font-semibold bg-[#2DBDC2]/10 px-2 py-0.5 rounded-full">
-                  Validação em ambos os dias
-                </span>
-              )}
             </label>
           </div>
 
-          {/* ============ DIA 1 ============ */}
+          {/* ── SEÇÃO: DINÂMICA (só aparece se 2 dias) ── */}
           {isTwoDays && (
-            <div className="sm:col-span-2">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="h-6 w-6 rounded-full bg-sky-500 text-white flex items-center justify-center text-xs font-bold">1</div>
-                <span className="text-sm font-semibold text-neutral-800">Dia 1</span>
+            <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 space-y-3">
+              <p className="text-sm font-semibold text-neutral-800">Dinâmica — em quais dias teve?</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {([
+                  { value: "both" as DinamicaDays, label: "Nos dois dias" },
+                  { value: "day1" as DinamicaDays, label: "Só no Dia 1" },
+                  { value: "day2" as DinamicaDays, label: "Só no Dia 2" },
+                  { value: "none" as DinamicaDays, label: "Sem dinâmica" },
+                ]).map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setDinamicaDays(opt.value)}
+                    className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                      dinamicaDays === opt.value
+                        ? "border-[#2DBDC2] bg-[#2DBDC2]/10 text-[#2DBDC2]"
+                        : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-100"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Day selector */}
+              <div className="pt-2 border-t border-neutral-200">
+                <p className="text-sm font-semibold text-neutral-800 mb-2">Qual dia está processando agora?</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentDay(1)}
+                    className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-semibold transition ${
+                      currentDay === 1
+                        ? "border-sky-500 bg-sky-500 text-white"
+                        : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
+                    }`}
+                  >
+                    📅 Dia 1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentDay(2)}
+                    className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-semibold transition ${
+                      currentDay === 2
+                        ? "border-violet-500 bg-violet-500 text-white"
+                        : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
+                    }`}
+                  >
+                    📅 Dia 2
+                  </button>
+                </div>
               </div>
             </div>
           )}
 
-          {/* Arquivo CSV */}
-          <div className="sm:col-span-2">
-            <label className="block text-sm font-medium text-neutral-700">
-              {isTwoDays ? "CSV do Zoom — Dia 1" : "Arquivo CSV do Zoom"}
-              <input
-                type="file"
-                name="csvFile"
-                accept=".csv"
-                required
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
-              />
-            </label>
-            <p className="mt-1 text-xs text-neutral-500">
-              Exportado em: Zoom → Relatórios → Uso → Participantes
-            </p>
-          </div>
-
-          {/* Horário de início da live */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              {isTwoDays ? "Início da Live (Dia 1)" : "Início da Live"}
-              <input
-                type="datetime-local"
-                name="inicioLive"
-                required
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          {/* Horário de início da dinâmica */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              {isTwoDays ? "Início da Dinâmica (Dia 1)" : "Início da Dinâmica"}
-              <input
-                type="datetime-local"
-                name="inicioDinamica"
-                required
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          {/* Horário de fim da dinâmica */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              {isTwoDays ? "Término da Dinâmica (Dia 1)" : "Término da Dinâmica"}
-              <input
-                type="datetime-local"
-                name="fimDinamica"
-                required
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          {/* Tempo mínimo */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              Tempo mínimo {isTwoDays ? "por dia" : "total"} (minutos)
-              <input
-                type="number"
-                name="tempoMinimo"
-                defaultValue={60}
-                min={1}
-                max={300}
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          {/* Percentual mínimo dinâmica */}
-          <div>
-            <label className="block text-sm font-medium text-neutral-700">
-              % mínimo na Dinâmica
-              <input
-                type="number"
-                name="percentualMinimo"
-                defaultValue={90}
-                min={1}
-                max={100}
-                className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-              />
-            </label>
-          </div>
-
-          {/* ============ DIA 2 ============ */}
-          {isTwoDays && (
-            <>
-              <div className="sm:col-span-2 mt-4 pt-4 border-t border-neutral-200">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="h-6 w-6 rounded-full bg-violet-500 text-white flex items-center justify-center text-xs font-bold">2</div>
-                  <span className="text-sm font-semibold text-neutral-800">Dia 2</span>
-                </div>
+          {/* ── Dinâmica para 1 dia (checkbox simples) ── */}
+          {!isTwoDays && (
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={hasDinamicaToday}
+                  onChange={(e) => setHasDinamicaToday(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="h-6 w-11 rounded-full bg-neutral-200 peer-checked:bg-amber-500 transition-colors" />
+                <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5" />
               </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-neutral-700">
-                  CSV do Zoom — Dia 2
-                  <input
-                    type="file"
-                    name="day2CsvFile"
-                    accept=".csv"
-                    required={isTwoDays}
-                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
-                  />
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-neutral-700">
-                  Início da Live (Dia 2)
-                  <input
-                    type="datetime-local"
-                    name="day2InicioLive"
-                    required={isTwoDays}
-                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                  />
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-neutral-700">
-                  Início da Dinâmica (Dia 2)
-                  <input
-                    type="datetime-local"
-                    name="day2InicioDinamica"
-                    required={isTwoDays}
-                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                  />
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-neutral-700">
-                  Término da Dinâmica (Dia 2)
-                  <input
-                    type="datetime-local"
-                    name="day2FimDinamica"
-                    required={isTwoDays}
-                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
-                  />
-                </label>
-              </div>
-            </>
+              <span className="text-sm font-medium text-neutral-700">Teve dinâmica</span>
+            </label>
           )}
+        </div>
+
+        {/* ── SEÇÃO: UPLOAD & CONFIGURAÇÃO DO DIA ── */}
+        <div className="rounded-xl border border-neutral-200 bg-white p-5 space-y-4">
+          {/* Day header */}
+          {isTwoDays && (
+            <div className="flex items-center gap-2 mb-1">
+              <div className={`h-7 w-7 rounded-full ${currentDay === 1 ? "bg-sky-500" : "bg-violet-500"} text-white flex items-center justify-center text-xs font-bold`}>
+                {currentDay}
+              </div>
+              <span className="text-sm font-semibold text-neutral-800">
+                Processando Dia {currentDay}
+                {hasDinamicaToday && <span className="ml-2 text-xs text-amber-600 font-medium">(com dinâmica)</span>}
+                {!hasDinamicaToday && <span className="ml-2 text-xs text-neutral-400 font-medium">(sem dinâmica)</span>}
+              </span>
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {/* Arquivo CSV */}
+            <div className="sm:col-span-2">
+              <label className="block text-sm font-medium text-neutral-700">
+                {isTwoDays ? `CSV do Zoom — Dia ${currentDay}` : "Arquivo CSV do Zoom"}
+                <input
+                  type="file"
+                  name="csvFile"
+                  accept=".csv"
+                  required
+                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
+                />
+              </label>
+              <p className="mt-1 text-xs text-neutral-500">
+                Exportado em: Zoom → Relatórios → Uso → Participantes
+              </p>
+            </div>
+
+            {/* Início da live */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700">
+                {isTwoDays ? `Início da Live (Dia ${currentDay})` : "Início da Live"}
+                <input
+                  type="datetime-local"
+                  name="inicioLive"
+                  required
+                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                />
+              </label>
+            </div>
+
+            {/* Tempo mínimo */}
+            <div>
+              <label className="block text-sm font-medium text-neutral-700">
+                Tempo mínimo {isTwoDays ? `(Dia ${currentDay})` : ""} (minutos)
+                <input
+                  type="number"
+                  name="tempoMinimo"
+                  defaultValue={60}
+                  min={1}
+                  max={300}
+                  className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                />
+              </label>
+            </div>
+
+            {/* ── Campos de dinâmica (só se hasDinamica pro dia atual) ── */}
+            {hasDinamicaToday && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700">
+                    {isTwoDays ? `Início da Dinâmica (Dia ${currentDay})` : "Início da Dinâmica"}
+                    <input
+                      type="datetime-local"
+                      name="inicioDinamica"
+                      required
+                      className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700">
+                    {isTwoDays ? `Término da Dinâmica (Dia ${currentDay})` : "Término da Dinâmica"}
+                    <input
+                      type="datetime-local"
+                      name="fimDinamica"
+                      required
+                      className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-neutral-700">
+                    % mínimo na Dinâmica
+                    <input
+                      type="number"
+                      name="percentualMinimo"
+                      defaultValue={90}
+                      min={1}
+                      max={100}
+                      className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                    />
+                  </label>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="flex justify-end pt-2">
@@ -1133,7 +1204,7 @@ function UploadStep({
             disabled={isLoading}
             className="rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800 disabled:opacity-50"
           >
-            {isLoading ? "Processando..." : "Importar e Continuar →"}
+            {isLoading ? "Processando..." : `Importar ${isTwoDays ? `Dia ${currentDay}` : ""} e Continuar →`}
           </button>
         </div>
       </div>
@@ -1206,10 +1277,17 @@ function ReviewStep({
         <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm">
           <h3 className="font-medium text-neutral-700">Configuração:</h3>
           <div className="mt-2 flex flex-wrap gap-4 text-neutral-600">
-            <span>Tempo mínimo{config.totalDays === 2 ? " (por dia)" : ""}: <strong>{config.tempoMinimoMinutos}min</strong></span>
-            <span>% dinâmica: <strong>{config.percentualMinimoDinamica}%</strong></span>
+            <span>Tempo mínimo: <strong>{config.tempoMinimoMinutos}min</strong></span>
+            {config.hasDinamica && (
+              <span>% dinâmica: <strong>{config.percentualMinimoDinamica}%</strong></span>
+            )}
+            {!config.hasDinamica && (
+              <span className="text-neutral-400">Sem dinâmica neste dia</span>
+            )}
             {config.totalDays === 2 && (
-              <span className="text-violet-600 font-medium">🗓 Treinamento de 2 dias — aprovação exige presença nos 2 dias</span>
+              <span className="text-violet-600 font-medium">
+                🗓 Dia {config.currentDay ?? 1} de 2
+              </span>
             )}
           </div>
         </div>
@@ -1314,7 +1392,7 @@ function ReviewStep({
                   </td>
                   <td className="px-4 py-3">
                     <span className={p.analise.cumpriuDinamica ? "text-emerald-600" : "text-red-600"}>
-                      {p.analise.percentualDinamica}%
+                      {config?.hasDinamica ? `${p.analise.percentualDinamica}%` : "—"}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -1326,23 +1404,6 @@ function ReviewStep({
                       <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
                         Reprovado
                       </span>
-                    )}
-                    {p.analise.perDay && p.analise.perDay.length > 0 && (
-                      <div className="mt-1 flex gap-1">
-                        {p.analise.perDay.map((d) => (
-                          <span
-                            key={d.day}
-                            className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                              d.aprovado
-                                ? "bg-emerald-50 text-emerald-600"
-                                : "bg-red-50 text-red-600"
-                            }`}
-                            title={`Dia ${d.day}: ${d.tempoTotalMinutos}min | ${d.percentualDinamica}% dinâmica`}
-                          >
-                            D{d.day} {d.aprovado ? "✓" : "✗"}
-                          </span>
-                        ))}
-                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">
@@ -1670,21 +1731,25 @@ function ConfirmStep({
   associations,
   inscricoesDisponiveis,
   treinamentoId,
+  config,
   isConfirming,
   confirmResult,
   onBack,
   onConfirm,
   onReset,
+  onStartDay2,
 }: {
   participants: ParticipantWithAnalysis[];
   associations: Map<string, AssociationData>;
   inscricoesDisponiveis: InscricaoSimplificada[];
   treinamentoId: string;
+  config: PresenceConfig | null;
   isConfirming: boolean;
   confirmResult: { success: boolean; message: string } | null;
   onBack: () => void;
   onConfirm: () => void;
   onReset: () => void;
+  onStartDay2: () => void;
 }) {
   const aprovados = participants.filter(p => p.analise.aprovado);
   const reprovados = participants.filter(p => !p.analise.aprovado);
@@ -1774,6 +1839,10 @@ function ConfirmStep({
     report += "                 RELATÓRIO DE PRESENÇA NO ENCONTRO\n";
     report += "═══════════════════════════════════════════════════════════════\n";
     report += `Treinamento: ${treinamentoId}\n`;
+    if (config?.totalDays === 2) {
+      report += `Tipo: Treinamento de 2 dias — Dia ${config.currentDay ?? 1}\n`;
+      report += `Dinâmica: ${config.hasDinamica ? "Sim" : "Não"} (neste dia)\n`;
+    }
     report += `Data do Relatório: ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR")}\n`;
     report += "\n";
     
@@ -1866,7 +1935,7 @@ function ConfirmStep({
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `relatorio-presenca-${treinamentoId || "encontro"}-${new Date().toISOString().split("T")[0]}.txt`;
+    link.download = `relatorio-presenca-${treinamentoId || "encontro"}${config?.totalDays === 2 ? `-dia${config.currentDay ?? 1}` : ""}-${new Date().toISOString().split("T")[0]}.txt`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1878,9 +1947,19 @@ function ConfirmStep({
       <div className="rounded-2xl border border-neutral-200 bg-white p-6">
         <h2 className="text-lg font-semibold text-neutral-900">
           Passo 4: Confirmar e Salvar
+          {config?.totalDays === 2 && (
+            <span className={`ml-2 inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+              (config.currentDay ?? 1) === 1 ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"
+            }`}>
+              Dia {config.currentDay ?? 1}
+            </span>
+          )}
         </h2>
         <p className="mt-1 text-sm text-neutral-600">
-          Revise o resumo final e clique em &quot;Salvar&quot; para registrar as presenças.
+          {config?.totalDays === 2 && (config?.currentDay ?? 1) === 1
+            ? "Revise e salve as presenças do Dia 1. Depois, processe o Dia 2 separadamente."
+            : "Revise o resumo final e clique em \"Salvar\" para registrar as presenças."
+          }
         </p>
       </div>
 
@@ -2033,16 +2112,26 @@ function ConfirmStep({
               disabled={isConfirming}
               className="rounded-xl bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
             >
-              {isConfirming ? "Salvando..." : "✓ Salvar Presenças"}
+              {isConfirming ? "Salvando..." : `✓ Salvar Presenças${config?.totalDays === 2 ? ` (Dia ${config.currentDay ?? 1})` : ""}`}
             </button>
           </>
         ) : (
-          <button
-            onClick={onReset}
-            className="ml-auto rounded-xl bg-neutral-900 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-neutral-800"
-          >
-            Importar Novo Arquivo
-          </button>
+          <div className="flex w-full items-center justify-between">
+            <button
+              onClick={onReset}
+              className="rounded-xl border border-neutral-300 px-6 py-2.5 text-sm font-semibold text-neutral-700 hover:bg-neutral-50"
+            >
+              Importar Novo Arquivo
+            </button>
+            {config?.totalDays === 2 && (config?.currentDay ?? 1) === 1 && (
+              <button
+                onClick={onStartDay2}
+                className="rounded-xl bg-violet-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-500"
+              >
+                📅 Processar Dia 2 →
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -7,7 +7,7 @@ import {
   detectEndTime,
 } from "@/lib/zoomPresence";
 import { getPool } from "@/lib/db";
-import type { PresenceConfig, InscricaoSimplificada, DayConfig } from "@/types/presence";
+import type { PresenceConfig, InscricaoSimplificada } from "@/types/presence";
 import type { InscricaoItem } from "@/types/inscricao";
 import { parsePayload } from "@/lib/parsePayload";
 
@@ -153,18 +153,22 @@ export async function POST(request: NextRequest) {
     const file = formData.get("csvFile") as File | null;
     const treinamentoId = formData.get("treinamentoId") as string;
     const inicioLiveStr = formData.get("inicioLive") as string;
-    const inicioDinamicaStr = formData.get("inicioDinamica") as string;
-    const fimDinamicaStr = formData.get("fimDinamica") as string;
     const tempoMinimoStr = formData.get("tempoMinimo") as string;
     const percentualMinimoStr = formData.get("percentualMinimo") as string;
 
-    // Day 2 fields (optional)
-    const day2File = formData.get("day2CsvFile") as File | null;
-    const day2InicioLiveStr = formData.get("day2InicioLive") as string | null;
-    const day2InicioDinamicaStr = formData.get("day2InicioDinamica") as string | null;
-    const day2FimDinamicaStr = formData.get("day2FimDinamica") as string | null;
+    // Day configuration
     const totalDaysStr = formData.get("totalDays") as string | null;
+    const currentDayStr = formData.get("currentDay") as string | null;
+    const hasDinamicaStr = formData.get("hasDinamica") as string | null;
+    const dinamicaDays = formData.get("dinamicaDays") as string | null; // 'both' | 'day1' | 'day2' | 'none'
+
     const totalDays = totalDaysStr ? parseInt(totalDaysStr, 10) : 1;
+    const currentDay = currentDayStr ? parseInt(currentDayStr, 10) : 1;
+    const hasDinamica = hasDinamicaStr === "true";
+
+    // Dinâmica fields (only required if hasDinamica)
+    const inicioDinamicaStr = formData.get("inicioDinamica") as string | null;
+    const fimDinamicaStr = formData.get("fimDinamica") as string | null;
 
     // Validações
     if (!file || file.size === 0) {
@@ -181,102 +185,56 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!inicioLiveStr || !inicioDinamicaStr || !fimDinamicaStr) {
+    if (!inicioLiveStr) {
       return NextResponse.json(
-        { error: "Preencha todos os horários obrigatórios (Dia 1)." },
+        { error: `Preencha o horário de início da live (Dia ${currentDay}).` },
         { status: 400 }
       );
     }
 
-    if (totalDays === 2) {
-      if (!day2File || day2File.size === 0) {
-        return NextResponse.json(
-          { error: "Selecione o arquivo CSV do Dia 2." },
-          { status: 400 }
-        );
-      }
-      if (!day2InicioLiveStr || !day2InicioDinamicaStr || !day2FimDinamicaStr) {
-        return NextResponse.json(
-          { error: "Preencha todos os horários obrigatórios (Dia 2)." },
-          { status: 400 }
-        );
-      }
+    if (hasDinamica && (!inicioDinamicaStr || !fimDinamicaStr)) {
+      return NextResponse.json(
+        { error: `Preencha os horários da dinâmica (Dia ${currentDay}).` },
+        { status: 400 }
+      );
     }
 
-    // Parse do CSV Day 1
+    // Parse do CSV
     const csvContent = await file.text();
     const rawParticipants = parseZoomCSV(csvContent);
 
     if (rawParticipants.length === 0) {
       return NextResponse.json(
-        { error: "Nenhum participante encontrado no CSV do Dia 1." },
+        { error: `Nenhum participante encontrado no CSV (Dia ${currentDay}).` },
         { status: 400 }
       );
     }
 
-    // Parse Day 2 CSV if present
-    let rawDay2Participants: typeof rawParticipants = [];
-    if (totalDays === 2 && day2File) {
-      const csv2Content = await day2File.text();
-      rawDay2Participants = parseZoomCSV(csv2Content);
-      if (rawDay2Participants.length === 0) {
-        return NextResponse.json(
-          { error: "Nenhum participante encontrado no CSV do Dia 2." },
-          { status: 400 }
-        );
-      }
-    }
-
-    // Combine all raw participants into one consolidated list
-    const allRaw = [...rawParticipants, ...rawDay2Participants];
-    const consolidated = consolidateParticipants(allRaw, []);
+    const consolidated = consolidateParticipants(rawParticipants, []);
 
     // Parse das datas
     const inicioLive = new Date(inicioLiveStr);
-    const inicioDinamica = new Date(inicioDinamicaStr);
-    const fimDinamica = new Date(fimDinamicaStr);
-    const fimLive = detectEndTime(rawParticipants) || fimDinamica;
+    const fimLive = detectEndTime(rawParticipants) || inicioLive;
+
+    const inicioDinamica = hasDinamica && inicioDinamicaStr ? new Date(inicioDinamicaStr) : undefined;
+    const fimDinamica = hasDinamica && fimDinamicaStr ? new Date(fimDinamicaStr) : undefined;
 
     const tempoMinimoMinutos = tempoMinimoStr ? parseInt(tempoMinimoStr, 10) : 60;
     const percentualMinimoDinamica = percentualMinimoStr ? parseInt(percentualMinimoStr, 10) : 90;
 
-    // Build day configs for multi-day
-    const dayConfigs: Array<{day: number; inicioLive: Date; fimLive: Date; inicioDinamica: Date; fimDinamica: Date}> = [];
-    
-    if (totalDays === 2) {
-      dayConfigs.push({
-        day: 1,
-        inicioLive,
-        fimLive,
-        inicioDinamica,
-        fimDinamica,
-      });
-
-      const day2InicioLive = new Date(day2InicioLiveStr!);
-      const day2InicioDinamica = new Date(day2InicioDinamicaStr!);
-      const day2FimDinamica = new Date(day2FimDinamicaStr!);
-      const day2FimLive = detectEndTime(rawDay2Participants) || day2FimDinamica;
-
-      dayConfigs.push({
-        day: 2,
-        inicioLive: day2InicioLive,
-        fimLive: day2FimLive,
-        inicioDinamica: day2InicioDinamica,
-        fimDinamica: day2FimDinamica,
-      });
-    }
-
-    // Configuração
+    // Configuração para este dia
     const config: PresenceConfig = {
       treinamentoId,
       inicioLive,
       fimLive,
+      hasDinamica,
       inicioDinamica,
       fimDinamica,
       tempoMinimoMinutos,
       percentualMinimoDinamica,
       totalDays,
-      dayConfigs: totalDays === 2 ? dayConfigs : undefined,
+      currentDay,
+      dinamicaDays: (dinamicaDays as PresenceConfig["dinamicaDays"]) ?? (hasDinamica ? "both" : "none"),
     };
 
     // Busca inscrições do treinamento
@@ -289,7 +247,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Analisa presença de cada participante
+    // Analisa presença de cada participante (apenas para o dia atual)
     const participants = consolidated.map(participante => ({
       participante,
       analise: analyzePresence(participante, config),
@@ -310,14 +268,39 @@ export async function POST(request: NextRequest) {
       recrutadorCodigo: i.recrutadorCodigo,
     }));
 
+    // Se estamos processando Dia 2, busca dados já salvos do Dia 1
+    let existingDay1: Record<number, { aprovado: boolean; tempoTotal: number; participanteNome: string }> | undefined;
+    if (currentDay === 2 && totalDays === 2) {
+      const pool = getPool();
+      const { rows } = await pool.query<{ id: number; payload: Record<string, unknown> }>(
+        `SELECT id, payload FROM ${SCHEMA_NAME}.inscricoes
+         WHERE (payload->>'presenca_validada')::boolean = true
+           AND payload->>'presenca_treinamento_id' = $1
+           AND (payload->>'presenca_dia_processado')::int >= 1`,
+        [treinamentoId]
+      );
+      if (rows.length > 0) {
+        existingDay1 = {};
+        for (const row of rows) {
+          const p = row.payload;
+          existingDay1[row.id] = {
+            aprovado: p.presenca_dia1_aprovado === true,
+            tempoTotal: typeof p.presenca_dia1_tempo_total === "number" ? p.presenca_dia1_tempo_total : 0,
+            participanteNome: typeof p.presenca_participante_nome === "string" ? p.presenca_participante_nome : "",
+          };
+        }
+      }
+    }
+
     return NextResponse.json({
       participants,
       config,
       autoMatches,
       inscricoesDisponiveis,
-      filename: totalDays === 2 ? `${file.name} + ${day2File?.name}` : file.name,
-      totalRaw: allRaw.length,
+      filename: file.name,
+      totalRaw: rawParticipants.length,
       totalConsolidated: consolidated.length,
+      existingDay1: existingDay1 ?? null,
     });
   } catch (error) {
     console.error("Erro ao processar CSV:", error);

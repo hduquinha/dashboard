@@ -10,8 +10,6 @@ import type {
   PresenceAssociation,
   PresenceValidationResult,
   AssociationStatus,
-  DayPresenceAnalysis,
-  DayConfig,
 } from "@/types/presence";
 import type { InscricaoItem } from "@/types/inscricao";
 
@@ -358,84 +356,61 @@ export function calculatePresenceInInterval(
 }
 
 /**
- * Analisa presença de um participante com base na configuração
+ * Analisa presença de um participante com base na configuração.
+ * Suporta:
+ *  - Treinamentos de 1 dia (com ou sem dinâmica)
+ *  - Processamento incremental por dia para treinamentos de 2 dias
  */
 export function analyzePresence(
   participante: ZoomParticipantConsolidated,
   config: PresenceConfig
 ): PresenceAnalysis {
-  // Tempo durante a dinâmica
-  const tempoDinamica = calculatePresenceInInterval(
+  const hasDinamica = config.hasDinamica !== false; // default true for backward compat
+
+  // Tempo durante a dinâmica (0 se não houve dinâmica)
+  let tempoDinamica = 0;
+  let duracaoDinamica = 0;
+  let percentualDinamica = 0;
+  let cumpriuDinamica = true; // default true when no dinâmica
+
+  if (hasDinamica && config.inicioDinamica && config.fimDinamica) {
+    tempoDinamica = calculatePresenceInInterval(
+      participante.entradas,
+      config.inicioDinamica,
+      config.fimDinamica
+    );
+    duracaoDinamica = Math.round(
+      (config.fimDinamica.getTime() - config.inicioDinamica.getTime()) / (1000 * 60)
+    );
+    percentualDinamica = duracaoDinamica > 0
+      ? Math.round((tempoDinamica / duracaoDinamica) * 100)
+      : 0;
+    cumpriuDinamica = percentualDinamica >= config.percentualMinimoDinamica;
+  }
+
+  // Tempo total na live (usamos duração entre inicioLive e fimLive como referência)
+  const tempoNaLive = calculatePresenceInInterval(
     participante.entradas,
-    config.inicioDinamica,
-    config.fimDinamica
+    config.inicioLive,
+    config.fimLive
   );
-
-  // Duração total da dinâmica
-  const duracaoDinamica = Math.round(
-    (config.fimDinamica.getTime() - config.inicioDinamica.getTime()) / (1000 * 60)
-  );
-
-  // Percentual de presença na dinâmica
-  const percentualDinamica = duracaoDinamica > 0 
-    ? Math.round((tempoDinamica / duracaoDinamica) * 100) 
-    : 0;
 
   // Verificações
-  const cumpriuTempoMinimo = participante.duracaoTotalMinutos >= config.tempoMinimoMinutos;
-  const cumpriuDinamica = percentualDinamica >= config.percentualMinimoDinamica;
+  const cumpriuTempoMinimo = tempoNaLive >= config.tempoMinimoMinutos;
 
-  // Multi-day analysis
-  let perDay: DayPresenceAnalysis[] | undefined;
-  let aprovado: boolean;
-
-  if (config.totalDays && config.totalDays > 1 && config.dayConfigs && config.dayConfigs.length > 1) {
-    perDay = config.dayConfigs.map((dc: DayConfig) => {
-      const dayTempo = calculatePresenceInInterval(
-        participante.entradas,
-        dc.inicioLive,
-        dc.fimLive
-      );
-      const dayTempoDinamica = calculatePresenceInInterval(
-        participante.entradas,
-        dc.inicioDinamica,
-        dc.fimDinamica
-      );
-      const dayDuracaoDinamica = Math.round(
-        (dc.fimDinamica.getTime() - dc.inicioDinamica.getTime()) / (1000 * 60)
-      );
-      const dayPercentual = dayDuracaoDinamica > 0
-        ? Math.round((dayTempoDinamica / dayDuracaoDinamica) * 100)
-        : 0;
-      const dayCumpriuTempo = dayTempo >= config.tempoMinimoMinutos;
-      const dayCumpriuDinamica = dayPercentual >= config.percentualMinimoDinamica;
-
-      return {
-        day: dc.day,
-        tempoTotalMinutos: dayTempo,
-        tempoDinamicaMinutos: dayTempoDinamica,
-        percentualDinamica: dayPercentual,
-        cumpriuTempoMinimo: dayCumpriuTempo,
-        cumpriuDinamica: dayCumpriuDinamica,
-        aprovado: dayCumpriuTempo && dayCumpriuDinamica,
-      };
-    });
-
-    // Approved only if approved on ALL days
-    aprovado = perDay.every((d: DayPresenceAnalysis) => d.aprovado);
-  } else {
-    aprovado = cumpriuTempoMinimo && cumpriuDinamica;
-  }
+  // Aprovado = cumpriu tempo + (dinâmica se teve)
+  const aprovado = hasDinamica
+    ? cumpriuTempoMinimo && cumpriuDinamica
+    : cumpriuTempoMinimo;
 
   return {
     participante,
-    tempoTotalMinutos: participante.duracaoTotalMinutos,
+    tempoTotalMinutos: tempoNaLive,
     tempoDinamicaMinutos: tempoDinamica,
     percentualDinamica,
     cumpriuTempoMinimo,
     cumpriuDinamica,
     aprovado,
-    perDay,
   };
 }
 
