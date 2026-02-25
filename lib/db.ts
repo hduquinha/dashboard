@@ -2030,6 +2030,7 @@ export interface TrainingWithStats {
   id: string;
   label: string;
   startsAt: string | null;
+  days: number;
   totalInscritos: number;
   leads: number;
   recrutadores: number;
@@ -2103,6 +2104,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
         id: treinamentoId,
         label,
         startsAt,
+        days: trainingInfo?.days ?? 1,
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
