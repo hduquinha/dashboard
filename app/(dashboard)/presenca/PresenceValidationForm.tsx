@@ -6,7 +6,8 @@ import type {
   AssociationStatus, 
   InscricaoSimplificada,
   ZoomParticipantConsolidated,
-  PresenceAnalysis
+  PresenceAnalysis,
+  DayPresenceAnalysis,
 } from "@/types/presence";
 import { formatDuration, analyzePresence, calculatePresenceInInterval } from "@/lib/zoomPresence";
 import { listRecruiters, isPlaceholderName } from "@/lib/recruiters";
@@ -18,6 +19,7 @@ import { listRecruiters, isPlaceholderName } from "@/lib/recruiters";
 interface TrainingOption {
   id: string;
   label: string;
+  days?: number;
 }
 
 type Step = "upload" | "review" | "associate" | "confirm";
@@ -192,6 +194,14 @@ export default function PresenceValidationForm() {
         fimDinamica: new Date(data.config.fimDinamica),
         tempoMinimoMinutos: data.config.tempoMinimoMinutos,
         percentualMinimoDinamica: data.config.percentualMinimoDinamica,
+        totalDays: data.config.totalDays ?? 1,
+        dayConfigs: data.config.dayConfigs?.map((dc: { day: number; inicioLive: string; fimLive: string; inicioDinamica: string; fimDinamica: string }) => ({
+          day: dc.day,
+          inicioLive: new Date(dc.inicioLive),
+          fimLive: new Date(dc.fimLive),
+          inicioDinamica: new Date(dc.inicioDinamica),
+          fimDinamica: new Date(dc.fimDinamica),
+        })),
       };
 
       // Inicializa estado dos participantes (também converte datas das entradas)
@@ -555,6 +565,7 @@ export default function PresenceValidationForm() {
           tempoTotal: p.analise.tempoTotalMinutos,
           tempoDinamica: p.analise.tempoDinamicaMinutos,
           percentualDinamica: p.analise.percentualDinamica,
+          perDay: p.analise.perDay ?? undefined,
         };
       });
 
@@ -588,6 +599,8 @@ export default function PresenceValidationForm() {
           body: JSON.stringify({
             associations: toSave,
             pending: pendingToSave,
+            treinamentoId: parsedData.config!.treinamentoId,
+            totalDays: parsedData.config!.totalDays ?? 1,
             treinamentoId: parsedData.config!.treinamentoId,
           }),
         });
@@ -879,9 +892,21 @@ function UploadStep({
   isLoading: boolean;
   onSubmit: (formData: FormData) => void;
 }) {
+  const [selectedTrainingId, setSelectedTrainingId] = React.useState("");
+  const [isTwoDays, setIsTwoDays] = React.useState(false);
+
+  // Auto-detect if selected training is 2-day
+  const selectedTraining = trainings.find(t => t.id === selectedTrainingId);
+  React.useEffect(() => {
+    if (selectedTraining?.days === 2) {
+      setIsTwoDays(true);
+    }
+  }, [selectedTraining]);
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
+    formData.set("totalDays", isTwoDays ? "2" : "1");
     onSubmit(formData);
   };
 
@@ -906,20 +931,58 @@ function UploadStep({
               <select
                 name="treinamentoId"
                 required
+                value={selectedTrainingId}
+                onChange={(e) => setSelectedTrainingId(e.target.value)}
                 className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
               >
                 <option value="">Selecione o treinamento...</option>
                 {trainings.map((t) => (
-                  <option key={t.id} value={t.id}>{t.label}</option>
+                  <option key={t.id} value={t.id}>
+                    {t.label}{t.days === 2 ? " (2 dias)" : ""}
+                  </option>
                 ))}
               </select>
             </label>
           </div>
 
+          {/* Toggle 2 dias */}
+          <div className="sm:col-span-2">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div className="relative">
+                <input
+                  type="checkbox"
+                  checked={isTwoDays}
+                  onChange={(e) => setIsTwoDays(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="h-6 w-11 rounded-full bg-neutral-200 peer-checked:bg-[#2DBDC2] transition-colors" />
+                <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5" />
+              </div>
+              <span className="text-sm font-medium text-neutral-700">
+                Treinamento de 2 dias
+              </span>
+              {isTwoDays && (
+                <span className="text-xs text-[#2DBDC2] font-semibold bg-[#2DBDC2]/10 px-2 py-0.5 rounded-full">
+                  Validação em ambos os dias
+                </span>
+              )}
+            </label>
+          </div>
+
+          {/* ============ DIA 1 ============ */}
+          {isTwoDays && (
+            <div className="sm:col-span-2">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-6 w-6 rounded-full bg-sky-500 text-white flex items-center justify-center text-xs font-bold">1</div>
+                <span className="text-sm font-semibold text-neutral-800">Dia 1</span>
+              </div>
+            </div>
+          )}
+
           {/* Arquivo CSV */}
           <div className="sm:col-span-2">
             <label className="block text-sm font-medium text-neutral-700">
-              Arquivo CSV do Zoom
+              {isTwoDays ? "CSV do Zoom — Dia 1" : "Arquivo CSV do Zoom"}
               <input
                 type="file"
                 name="csvFile"
@@ -936,7 +999,7 @@ function UploadStep({
           {/* Horário de início da live */}
           <div>
             <label className="block text-sm font-medium text-neutral-700">
-              Início da Live
+              {isTwoDays ? "Início da Live (Dia 1)" : "Início da Live"}
               <input
                 type="datetime-local"
                 name="inicioLive"
@@ -949,7 +1012,7 @@ function UploadStep({
           {/* Horário de início da dinâmica */}
           <div>
             <label className="block text-sm font-medium text-neutral-700">
-              Início da Dinâmica
+              {isTwoDays ? "Início da Dinâmica (Dia 1)" : "Início da Dinâmica"}
               <input
                 type="datetime-local"
                 name="inicioDinamica"
@@ -962,7 +1025,7 @@ function UploadStep({
           {/* Horário de fim da dinâmica */}
           <div>
             <label className="block text-sm font-medium text-neutral-700">
-              Término da Dinâmica
+              {isTwoDays ? "Término da Dinâmica (Dia 1)" : "Término da Dinâmica"}
               <input
                 type="datetime-local"
                 name="fimDinamica"
@@ -975,7 +1038,7 @@ function UploadStep({
           {/* Tempo mínimo */}
           <div>
             <label className="block text-sm font-medium text-neutral-700">
-              Tempo mínimo total (minutos)
+              Tempo mínimo {isTwoDays ? "por dia" : "total"} (minutos)
               <input
                 type="number"
                 name="tempoMinimo"
@@ -1001,6 +1064,67 @@ function UploadStep({
               />
             </label>
           </div>
+
+          {/* ============ DIA 2 ============ */}
+          {isTwoDays && (
+            <>
+              <div className="sm:col-span-2 mt-4 pt-4 border-t border-neutral-200">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="h-6 w-6 rounded-full bg-violet-500 text-white flex items-center justify-center text-xs font-bold">2</div>
+                  <span className="text-sm font-semibold text-neutral-800">Dia 2</span>
+                </div>
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-sm font-medium text-neutral-700">
+                  CSV do Zoom — Dia 2
+                  <input
+                    type="file"
+                    name="day2CsvFile"
+                    accept=".csv"
+                    required={isTwoDays}
+                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm file:mr-4 file:rounded file:border-0 file:bg-neutral-100 file:px-4 file:py-1 file:text-sm file:font-medium focus:border-neutral-500 focus:outline-none"
+                  />
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Início da Live (Dia 2)
+                  <input
+                    type="datetime-local"
+                    name="day2InicioLive"
+                    required={isTwoDays}
+                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Início da Dinâmica (Dia 2)
+                  <input
+                    type="datetime-local"
+                    name="day2InicioDinamica"
+                    required={isTwoDays}
+                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-neutral-700">
+                  Término da Dinâmica (Dia 2)
+                  <input
+                    type="datetime-local"
+                    name="day2FimDinamica"
+                    required={isTwoDays}
+                    className="mt-1 block w-full rounded-lg border border-neutral-300 px-4 py-2.5 text-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+                  />
+                </label>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="flex justify-end pt-2">
@@ -1082,8 +1206,11 @@ function ReviewStep({
         <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4 text-sm">
           <h3 className="font-medium text-neutral-700">Configuração:</h3>
           <div className="mt-2 flex flex-wrap gap-4 text-neutral-600">
-            <span>Tempo mínimo: <strong>{config.tempoMinimoMinutos}min</strong></span>
+            <span>Tempo mínimo{config.totalDays === 2 ? " (por dia)" : ""}: <strong>{config.tempoMinimoMinutos}min</strong></span>
             <span>% dinâmica: <strong>{config.percentualMinimoDinamica}%</strong></span>
+            {config.totalDays === 2 && (
+              <span className="text-violet-600 font-medium">🗓 Treinamento de 2 dias — aprovação exige presença nos 2 dias</span>
+            )}
           </div>
         </div>
       )}
@@ -1199,6 +1326,23 @@ function ReviewStep({
                       <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
                         Reprovado
                       </span>
+                    )}
+                    {p.analise.perDay && p.analise.perDay.length > 0 && (
+                      <div className="mt-1 flex gap-1">
+                        {p.analise.perDay.map((d) => (
+                          <span
+                            key={d.day}
+                            className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                              d.aprovado
+                                ? "bg-emerald-50 text-emerald-600"
+                                : "bg-red-50 text-red-600"
+                            }`}
+                            title={`Dia ${d.day}: ${d.tempoTotalMinutos}min | ${d.percentualDinamica}% dinâmica`}
+                          >
+                            D{d.day} {d.aprovado ? "✓" : "✗"}
+                          </span>
+                        ))}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-3">

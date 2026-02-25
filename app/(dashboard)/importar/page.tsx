@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import ImportForm from "./ImportForm";
 import { previewImportAction } from "./actions";
 
@@ -12,6 +13,12 @@ export default function ImportarPage() {
     <main className="px-4 py-8 sm:px-6 lg:px-10">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
         <header className="space-y-3">
+          <Link
+            href="/crm"
+            className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+          >
+            ← Voltar ao CRM
+          </Link>
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">Importar</p>
             <h1 className="text-2xl font-semibold text-neutral-900">Importar planilha</h1>

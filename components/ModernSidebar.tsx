@@ -20,7 +20,8 @@ import {
   FileText,
   X,
   CalendarDays,
-  ClipboardCheck
+  ClipboardCheck,
+  BarChart3
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
@@ -35,6 +36,7 @@ const ICON_MAP: Record<string, any> = {
   importar: Upload,
   anamnese: FileText,
   presenca: ClipboardCheck,
+  relatorios: BarChart3,
 };
 
 interface ModernSidebarProps {
@@ -119,7 +121,7 @@ export default function ModernSidebar({
 
         {/* Navigation */}
         <nav className="flex-1 space-y-1 px-3 py-6">
-          {NAV_LINKS.filter(link => !['importar', 'duplicados'].includes(link.key)).map((link) => {
+          {NAV_LINKS.map((link) => {
             const Icon = ICON_MAP[link.key] || LayoutDashboard;
             const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
             const showBadge = link.key === "duplicados" && duplicateCount > 0;

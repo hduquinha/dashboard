@@ -7,7 +7,7 @@ import {
   detectEndTime,
 } from "@/lib/zoomPresence";
 import { getPool } from "@/lib/db";
-import type { PresenceConfig, InscricaoSimplificada } from "@/types/presence";
+import type { PresenceConfig, InscricaoSimplificada, DayConfig } from "@/types/presence";
 import type { InscricaoItem } from "@/types/inscricao";
 import { parsePayload } from "@/lib/parsePayload";
 
@@ -158,6 +158,14 @@ export async function POST(request: NextRequest) {
     const tempoMinimoStr = formData.get("tempoMinimo") as string;
     const percentualMinimoStr = formData.get("percentualMinimo") as string;
 
+    // Day 2 fields (optional)
+    const day2File = formData.get("day2CsvFile") as File | null;
+    const day2InicioLiveStr = formData.get("day2InicioLive") as string | null;
+    const day2InicioDinamicaStr = formData.get("day2InicioDinamica") as string | null;
+    const day2FimDinamicaStr = formData.get("day2FimDinamica") as string | null;
+    const totalDaysStr = formData.get("totalDays") as string | null;
+    const totalDays = totalDaysStr ? parseInt(totalDaysStr, 10) : 1;
+
     // Validações
     if (!file || file.size === 0) {
       return NextResponse.json(
@@ -175,30 +183,88 @@ export async function POST(request: NextRequest) {
 
     if (!inicioLiveStr || !inicioDinamicaStr || !fimDinamicaStr) {
       return NextResponse.json(
-        { error: "Preencha todos os horários obrigatórios." },
+        { error: "Preencha todos os horários obrigatórios (Dia 1)." },
         { status: 400 }
       );
     }
 
-    // Parse do CSV
+    if (totalDays === 2) {
+      if (!day2File || day2File.size === 0) {
+        return NextResponse.json(
+          { error: "Selecione o arquivo CSV do Dia 2." },
+          { status: 400 }
+        );
+      }
+      if (!day2InicioLiveStr || !day2InicioDinamicaStr || !day2FimDinamicaStr) {
+        return NextResponse.json(
+          { error: "Preencha todos os horários obrigatórios (Dia 2)." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Parse do CSV Day 1
     const csvContent = await file.text();
     const rawParticipants = parseZoomCSV(csvContent);
 
     if (rawParticipants.length === 0) {
       return NextResponse.json(
-        { error: "Nenhum participante encontrado no CSV." },
+        { error: "Nenhum participante encontrado no CSV do Dia 1." },
         { status: 400 }
       );
     }
 
-    // Consolida participantes (sem excluir ninguém - isso é feito manualmente no passo 2)
-    const consolidated = consolidateParticipants(rawParticipants, []);
+    // Parse Day 2 CSV if present
+    let rawDay2Participants: typeof rawParticipants = [];
+    if (totalDays === 2 && day2File) {
+      const csv2Content = await day2File.text();
+      rawDay2Participants = parseZoomCSV(csv2Content);
+      if (rawDay2Participants.length === 0) {
+        return NextResponse.json(
+          { error: "Nenhum participante encontrado no CSV do Dia 2." },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Combine all raw participants into one consolidated list
+    const allRaw = [...rawParticipants, ...rawDay2Participants];
+    const consolidated = consolidateParticipants(allRaw, []);
 
     // Parse das datas
     const inicioLive = new Date(inicioLiveStr);
     const inicioDinamica = new Date(inicioDinamicaStr);
     const fimDinamica = new Date(fimDinamicaStr);
     const fimLive = detectEndTime(rawParticipants) || fimDinamica;
+
+    const tempoMinimoMinutos = tempoMinimoStr ? parseInt(tempoMinimoStr, 10) : 60;
+    const percentualMinimoDinamica = percentualMinimoStr ? parseInt(percentualMinimoStr, 10) : 90;
+
+    // Build day configs for multi-day
+    const dayConfigs: Array<{day: number; inicioLive: Date; fimLive: Date; inicioDinamica: Date; fimDinamica: Date}> = [];
+    
+    if (totalDays === 2) {
+      dayConfigs.push({
+        day: 1,
+        inicioLive,
+        fimLive,
+        inicioDinamica,
+        fimDinamica,
+      });
+
+      const day2InicioLive = new Date(day2InicioLiveStr!);
+      const day2InicioDinamica = new Date(day2InicioDinamicaStr!);
+      const day2FimDinamica = new Date(day2FimDinamicaStr!);
+      const day2FimLive = detectEndTime(rawDay2Participants) || day2FimDinamica;
+
+      dayConfigs.push({
+        day: 2,
+        inicioLive: day2InicioLive,
+        fimLive: day2FimLive,
+        inicioDinamica: day2InicioDinamica,
+        fimDinamica: day2FimDinamica,
+      });
+    }
 
     // Configuração
     const config: PresenceConfig = {
@@ -207,8 +273,10 @@ export async function POST(request: NextRequest) {
       fimLive,
       inicioDinamica,
       fimDinamica,
-      tempoMinimoMinutos: tempoMinimoStr ? parseInt(tempoMinimoStr, 10) : 60,
-      percentualMinimoDinamica: percentualMinimoStr ? parseInt(percentualMinimoStr, 10) : 90,
+      tempoMinimoMinutos,
+      percentualMinimoDinamica,
+      totalDays,
+      dayConfigs: totalDays === 2 ? dayConfigs : undefined,
     };
 
     // Busca inscrições do treinamento
@@ -247,8 +315,8 @@ export async function POST(request: NextRequest) {
       config,
       autoMatches,
       inscricoesDisponiveis,
-      filename: file.name,
-      totalRaw: rawParticipants.length,
+      filename: totalDays === 2 ? `${file.name} + ${day2File?.name}` : file.name,
+      totalRaw: allRaw.length,
       totalConsolidated: consolidated.length,
     });
   } catch (error) {

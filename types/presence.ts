@@ -43,6 +43,19 @@ export interface PresenceAnalysis {
   cumpriuTempoMinimo: boolean;
   cumpriuDinamica: boolean;
   aprovado: boolean;
+  /** Per-day breakdown when training has multiple days */
+  perDay?: DayPresenceAnalysis[];
+}
+
+/**
+ * Configuração de horários para um dia específico
+ */
+export interface DayConfig {
+  day: number; // 1 or 2
+  inicioLive: Date;
+  fimLive: Date;
+  inicioDinamica: Date;
+  fimDinamica: Date;
 }
 
 /**
@@ -56,6 +69,23 @@ export interface PresenceConfig {
   fimDinamica: Date;
   tempoMinimoMinutos: number;
   percentualMinimoDinamica: number;
+  /** Number of days in this training (1 or 2). Defaults to 1. */
+  totalDays?: number;
+  /** Per-day configs when totalDays > 1 */
+  dayConfigs?: DayConfig[];
+}
+
+/**
+ * Resultado da análise de presença por dia
+ */
+export interface DayPresenceAnalysis {
+  day: number;
+  tempoTotalMinutos: number;
+  tempoDinamicaMinutos: number;
+  percentualDinamica: number;
+  cumpriuTempoMinimo: boolean;
+  cumpriuDinamica: boolean;
+  aprovado: boolean;
 }
 
 /**

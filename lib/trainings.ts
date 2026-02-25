@@ -47,11 +47,15 @@ function parseEntry(value: unknown): TrainingOption | null {
   const clusterValue = record.cluster;
   const cluster = typeof clusterValue === "number" ? clusterValue : null;
 
+  const daysValue = record.days;
+  const days = typeof daysValue === "number" && (daysValue === 1 || daysValue === 2) ? daysValue : undefined;
+
   return {
     id,
     label: labelCandidate ?? formattedDate ?? label,
     startsAt,
     cluster,
+    days,
   };
 }
 

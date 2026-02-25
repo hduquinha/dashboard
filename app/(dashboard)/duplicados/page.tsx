@@ -1,5 +1,6 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { assertToken } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
 import DuplicateAlerts from "@/components/DuplicateAlerts";
@@ -22,6 +23,12 @@ export default async function DuplicadosPage() {
     <main className="min-h-screen bg-white">
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 lg:px-8">
         <header className="space-y-4">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-900 transition-colors"
+          >
+            ← Voltar ao Início
+          </Link>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">

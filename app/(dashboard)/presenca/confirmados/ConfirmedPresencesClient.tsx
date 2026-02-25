@@ -17,9 +17,11 @@ import {
   Loader2,
   AlertTriangle,
   HelpCircle,
-  Link,
+  Link as LinkIcon,
   UserPlus,
+  ArrowLeft,
 } from "lucide-react";
+import Link from "next/link";
 
 interface PresenceRecord {
   inscricaoId: number;
@@ -702,31 +704,40 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
   return (
     <main className="space-y-6">
       {/* Header */}
-      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Presenças Confirmadas</h1>
-          <p className="text-sm text-neutral-500">
-            Participantes com presença validada nos treinamentos
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleGenerateReport}
-            disabled={filteredPresences.length === 0}
-            className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            📊 Relatório TXT
-          </button>
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={filteredPresences.length === 0}
-            className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <Download className="h-4 w-4" />
-            CSV
-          </button>
+      <header className="flex flex-col gap-4">
+        <Link
+          href="/presenca"
+          className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-900 transition-colors w-fit"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Voltar para Presença
+        </Link>
+        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-neutral-900">Presenças Confirmadas</h1>
+            <p className="text-sm text-neutral-500">
+              Participantes com presença validada nos treinamentos
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleGenerateReport}
+              disabled={filteredPresences.length === 0}
+              className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              📊 Relatório TXT
+            </button>
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={filteredPresences.length === 0}
+              className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-neutral-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Download className="h-4 w-4" />
+              CSV
+            </button>
+          </div>
         </div>
       </header>
 

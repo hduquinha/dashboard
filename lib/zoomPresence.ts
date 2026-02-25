@@ -10,6 +10,8 @@ import type {
   PresenceAssociation,
   PresenceValidationResult,
   AssociationStatus,
+  DayPresenceAnalysis,
+  DayConfig,
 } from "@/types/presence";
 import type { InscricaoItem } from "@/types/inscricao";
 
@@ -382,7 +384,48 @@ export function analyzePresence(
   // Verificações
   const cumpriuTempoMinimo = participante.duracaoTotalMinutos >= config.tempoMinimoMinutos;
   const cumpriuDinamica = percentualDinamica >= config.percentualMinimoDinamica;
-  const aprovado = cumpriuTempoMinimo && cumpriuDinamica;
+
+  // Multi-day analysis
+  let perDay: DayPresenceAnalysis[] | undefined;
+  let aprovado: boolean;
+
+  if (config.totalDays && config.totalDays > 1 && config.dayConfigs && config.dayConfigs.length > 1) {
+    perDay = config.dayConfigs.map((dc: DayConfig) => {
+      const dayTempo = calculatePresenceInInterval(
+        participante.entradas,
+        dc.inicioLive,
+        dc.fimLive
+      );
+      const dayTempoDinamica = calculatePresenceInInterval(
+        participante.entradas,
+        dc.inicioDinamica,
+        dc.fimDinamica
+      );
+      const dayDuracaoDinamica = Math.round(
+        (dc.fimDinamica.getTime() - dc.inicioDinamica.getTime()) / (1000 * 60)
+      );
+      const dayPercentual = dayDuracaoDinamica > 0
+        ? Math.round((dayTempoDinamica / dayDuracaoDinamica) * 100)
+        : 0;
+      const dayCumpriuTempo = dayTempo >= config.tempoMinimoMinutos;
+      const dayCumpriuDinamica = dayPercentual >= config.percentualMinimoDinamica;
+
+      return {
+        day: dc.day,
+        tempoTotalMinutos: dayTempo,
+        tempoDinamicaMinutos: dayTempoDinamica,
+        percentualDinamica: dayPercentual,
+        cumpriuTempoMinimo: dayCumpriuTempo,
+        cumpriuDinamica: dayCumpriuDinamica,
+        aprovado: dayCumpriuTempo && dayCumpriuDinamica,
+      };
+    });
+
+    // Approved only if approved on ALL days
+    aprovado = perDay.every((d: DayPresenceAnalysis) => d.aprovado);
+  } else {
+    aprovado = cumpriuTempoMinimo && cumpriuDinamica;
+  }
 
   return {
     participante,
@@ -392,6 +435,7 @@ export function analyzePresence(
     cumpriuTempoMinimo,
     cumpriuDinamica,
     aprovado,
+    perDay,
   };
 }
 

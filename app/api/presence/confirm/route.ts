@@ -10,6 +10,13 @@ interface AssociationPayload {
   tempoTotal: number;
   tempoDinamica: number;
   percentualDinamica: number;
+  perDay?: Array<{
+    day: number;
+    tempoTotalMinutos: number;
+    tempoDinamicaMinutos: number;
+    percentualDinamica: number;
+    aprovado: boolean;
+  }>;
 }
 
 interface PendingPayload {
@@ -29,12 +36,13 @@ interface RequestBody {
   associations: AssociationPayload[];
   pending?: PendingPayload[];
   treinamentoId: string;
+  totalDays?: number;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body: RequestBody = await request.json();
-    const { associations, pending, treinamentoId } = body;
+    const { associations, pending, treinamentoId, totalDays } = body;
 
     if (!associations || !Array.isArray(associations)) {
       return NextResponse.json(
@@ -61,7 +69,7 @@ export async function POST(request: NextRequest) {
 
       try {
         // Dados de presença a serem salvos no payload
-        const presenceData = {
+        const presenceData: Record<string, unknown> = {
           presenca_validada: true,
           presenca_aprovada: assoc.aprovado,
           presenca_participante_nome: assoc.participanteNome,
@@ -71,7 +79,19 @@ export async function POST(request: NextRequest) {
           presenca_treinamento_id: treinamentoId,
           presenca_validada_em: new Date().toISOString(),
           presenca_status: "confirmed",
+          presenca_total_dias: totalDays ?? 1,
         };
+
+        // Store per-day data for multi-day trainings
+        if (assoc.perDay && assoc.perDay.length > 0) {
+          for (const dayData of assoc.perDay) {
+            const prefix = `presenca_dia${dayData.day}`;
+            presenceData[`${prefix}_tempo_total`] = dayData.tempoTotalMinutos;
+            presenceData[`${prefix}_tempo_dinamica`] = dayData.tempoDinamicaMinutos;
+            presenceData[`${prefix}_percentual_dinamica`] = dayData.percentualDinamica;
+            presenceData[`${prefix}_aprovado`] = dayData.aprovado;
+          }
+        }
 
         await pool.query(
           `UPDATE ${SCHEMA_NAME}.inscricoes 

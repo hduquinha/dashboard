@@ -10,6 +10,7 @@ export async function GET() {
         id: t.id,
         label: t.label,
         startsAt: t.startsAt,
+        days: t.days ?? 1,
       })),
     });
   } catch (error) {

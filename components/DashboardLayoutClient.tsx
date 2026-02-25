@@ -31,7 +31,7 @@ export default function DashboardLayoutClient({ children, duplicateCount }: Dash
           >
             <Menu size={24} />
           </button>
-          <span className="text-lg font-bold text-neutral-900">Nexus</span>
+          <span className="text-lg font-bold text-neutral-900">Instituto UP</span>
         </div>
       </div>
 
