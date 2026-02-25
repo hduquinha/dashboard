@@ -19,6 +19,13 @@ interface PresenceRecord {
   percentualDinamica: number;
   aprovado: boolean;
   validadoEm: string | null;
+  // Multi-day fields
+  totalDias: number;
+  diaProcessado: number;
+  dia1Aprovado: boolean | null;
+  dia2Aprovado: boolean | null;
+  dia1Tempo: number | null;
+  dia2Tempo: number | null;
 }
 
 interface PendingRecord {
@@ -83,7 +90,13 @@ export async function GET(request: NextRequest) {
         COALESCE((payload->>'presenca_tempo_dinamica_minutos')::integer, 0) AS tempo_dinamica_minutos,
         COALESCE((payload->>'presenca_percentual_dinamica')::integer, 0) AS percentual_dinamica,
         COALESCE((payload->>'presenca_aprovada')::boolean, false) AS aprovado,
-        payload->>'presenca_validada_em' AS validado_em
+        payload->>'presenca_validada_em' AS validado_em,
+        COALESCE((payload->>'presenca_total_dias')::integer, 1) AS total_dias,
+        COALESCE((payload->>'presenca_dia_processado')::integer, 1) AS dia_processado,
+        (payload->>'presenca_dia1_aprovado')::boolean AS dia1_aprovado,
+        (payload->>'presenca_dia2_aprovado')::boolean AS dia2_aprovado,
+        (payload->>'presenca_dia1_tempo_total')::integer AS dia1_tempo,
+        (payload->>'presenca_dia2_tempo_total')::integer AS dia2_tempo
       FROM ${SCHEMA_NAME}.inscricoes
       WHERE payload->>'presenca_validada' = 'true'
     `;
@@ -117,6 +130,12 @@ export async function GET(request: NextRequest) {
       percentual_dinamica: number;
       aprovado: boolean;
       validado_em: string | null;
+      total_dias: number;
+      dia_processado: number;
+      dia1_aprovado: boolean | null;
+      dia2_aprovado: boolean | null;
+      dia1_tempo: number | null;
+      dia2_tempo: number | null;
     }>(query, params);
 
     // Carrega cache de recrutadores do banco de dados
@@ -143,6 +162,12 @@ export async function GET(request: NextRequest) {
         percentualDinamica: row.percentual_dinamica,
         aprovado: row.aprovado,
         validadoEm: row.validado_em,
+        totalDias: row.total_dias,
+        diaProcessado: row.dia_processado,
+        dia1Aprovado: row.dia1_aprovado,
+        dia2Aprovado: row.dia2_aprovado,
+        dia1Tempo: row.dia1_tempo,
+        dia2Tempo: row.dia2_tempo,
       };
     });
 
@@ -211,13 +236,21 @@ export async function GET(request: NextRequest) {
 
     // Estatísticas
     const totalAprovados = presences.filter((p) => p.aprovado).length;
-    const totalReprovados = presences.filter((p) => !p.aprovado).length;
+    // Parciais: 2-day training, only Day 1 processed so far
+    const totalParciais = presences.filter(
+      (p) => p.totalDias === 2 && p.diaProcessado < 2 && !p.aprovado
+    ).length;
+    // Reprovados: NOT approved AND not partial (either 1-day failed or both days processed and failed)
+    const totalReprovados = presences.filter(
+      (p) => !p.aprovado && !(p.totalDias === 2 && p.diaProcessado < 2)
+    ).length;
 
     return NextResponse.json({
       success: true,
       total: presences.length,
       totalAprovados,
       totalReprovados,
+      totalParciais,
       presences,
       pending: pendingRecords,
       totalPending: pendingRecords.length,

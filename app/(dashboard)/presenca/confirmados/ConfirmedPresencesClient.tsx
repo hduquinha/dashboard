@@ -38,6 +38,13 @@ interface PresenceRecord {
   percentualDinamica: number;
   aprovado: boolean;
   validadoEm: string | null;
+  // Multi-day fields
+  totalDias: number;
+  diaProcessado: number;
+  dia1Aprovado: boolean | null;
+  dia2Aprovado: boolean | null;
+  dia1Tempo: number | null;
+  dia2Tempo: number | null;
 }
 
 interface PendingRecord {
@@ -70,6 +77,7 @@ interface ApiResponse {
   total: number;
   totalAprovados: number;
   totalReprovados: number;
+  totalParciais: number;
   presences: PresenceRecord[];
   pending?: PendingRecord[];
   totalPending?: number;
@@ -110,11 +118,13 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
   const [selectedTraining, setSelectedTraining] = useState<string>(initialTraining ?? "all");
   const [showApproved, setShowApproved] = useState(true);
   const [showRejected, setShowRejected] = useState(true);
+  const [showPartial, setShowPartial] = useState(true);
   const [activeTab, setActiveTab] = useState<"confirmed" | "pending">("confirmed");
 
   // Stats
   const [totalAprovados, setTotalAprovados] = useState(0);
   const [totalReprovados, setTotalReprovados] = useState(0);
+  const [totalParciais, setTotalParciais] = useState(0);
 
   // Seleção em massa
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -193,7 +203,8 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       // Atualiza contadores antes de remover
       const removedItems = presences.filter((p) => selectedIds.has(p.inscricaoId));
       const removedAprovados = removedItems.filter((p) => p.aprovado).length;
-      const removedReprovados = removedItems.filter((p) => !p.aprovado).length;
+      const removedParciais = removedItems.filter((p) => getPresenceStatus(p) === "partial").length;
+      const removedReprovados = removedItems.filter((p) => getPresenceStatus(p) === "rejected").length;
 
       // Remove da lista local
       setPresences((prev) => prev.filter((p) => !selectedIds.has(p.inscricaoId)));
@@ -201,6 +212,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       // Atualiza contadores
       setTotalAprovados((prev) => prev - removedAprovados);
       setTotalReprovados((prev) => prev - removedReprovados);
+      setTotalParciais((prev) => prev - removedParciais);
 
       // Limpa seleção
       setSelectedIds(new Set());
@@ -240,10 +252,13 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       // Atualiza contadores
       const removed = presences.find((p) => p.inscricaoId === inscricaoId);
       if (removed) {
-        if (removed.aprovado) {
+        const status = getPresenceStatus(removed);
+        if (status === "approved") {
           setTotalAprovados((prev) => prev - 1);
-        } else {
+        } else if (status === "rejected") {
           setTotalReprovados((prev) => prev - 1);
+        } else {
+          setTotalParciais((prev) => prev - 1);
         }
       }
     } catch (err) {
@@ -269,6 +284,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         setPendingRecords(data.pending ?? []);
         setTotalAprovados(data.totalAprovados);
         setTotalReprovados(data.totalReprovados);
+        setTotalParciais(data.totalParciais ?? 0);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erro desconhecido");
       } finally {
@@ -355,6 +371,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         setPresences(presencesData.presences);
         setTotalAprovados(presencesData.totalAprovados);
         setTotalReprovados(presencesData.totalReprovados);
+        setTotalParciais(presencesData.totalParciais ?? 0);
       }
 
       alert("Presença associada com sucesso!");
@@ -370,6 +387,13 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
     const unique = new Set(presences.map((p) => p.treinamentoId));
     return Array.from(unique).sort();
   }, [presences]);
+
+  // Helper to determine presence status
+  const getPresenceStatus = (p: PresenceRecord): "approved" | "rejected" | "partial" => {
+    if (p.aprovado) return "approved";
+    if (p.totalDias === 2 && p.diaProcessado < 2) return "partial";
+    return "rejected";
+  };
 
   // Filtrar presenças
   const filteredPresences = useMemo(() => {
@@ -392,13 +416,15 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         return false;
       }
 
-      // Filtro de aprovado/reprovado
-      if (p.aprovado && !showApproved) return false;
-      if (!p.aprovado && !showRejected) return false;
+      // Filtro de status
+      const status = getPresenceStatus(p);
+      if (status === "approved" && !showApproved) return false;
+      if (status === "rejected" && !showRejected) return false;
+      if (status === "partial" && !showPartial) return false;
 
       return true;
     });
-  }, [presences, searchQuery, selectedTraining, showApproved, showRejected]);
+  }, [presences, searchQuery, selectedTraining, showApproved, showRejected, showPartial]);
 
   // Filtrar pendentes
   const filteredPending = useMemo(() => {
@@ -433,6 +459,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       presentes: PresenceRecord[];
       totalPresentes: number;
       totalAprovados: number;
+      totalParciais: number;
     }>();
 
     dataToExport.forEach(p => {
@@ -446,6 +473,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
           presentes: [],
           totalPresentes: 0,
           totalAprovados: 0,
+          totalParciais: 0,
         });
       }
       
@@ -455,14 +483,22 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       if (p.aprovado) {
         cluster.totalAprovados++;
       }
+      if (getPresenceStatus(p) === "partial") {
+        cluster.totalParciais++;
+      }
     });
 
-    // Ordenar por aprovados
+    // Ranking: ordenar por aprovados (ambos os dias)
     const sortedClusters = Array.from(clusterMap.values()).sort(
       (a, b) => b.totalAprovados - a.totalAprovados || b.totalPresentes - a.totalPresentes
     );
 
     const top5Clusters = sortedClusters.slice(0, 5);
+
+    // Stats
+    const totalAprovadosReport = dataToExport.filter(p => p.aprovado).length;
+    const totalParciaisReport = dataToExport.filter(p => getPresenceStatus(p) === "partial").length;
+    const totalReprovadosReport = dataToExport.filter(p => getPresenceStatus(p) === "rejected").length;
 
     // Gerar relatório
     let report = "";
@@ -474,25 +510,25 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
     report += "\n";
     
     // Resumo
-    const totalAprovadosReport = dataToExport.filter(p => p.aprovado).length;
-    const totalReprovadosReport = dataToExport.filter(p => !p.aprovado).length;
-    
     report += "───────────────────────────────────────────────────────────────\n";
     report += "                         RESUMO GERAL\n";
     report += "───────────────────────────────────────────────────────────────\n";
     report += `Total de Participantes: ${dataToExport.length}\n`;
-    report += `Aprovados (presença OK): ${totalAprovadosReport}\n`;
+    report += `Aprovados (presença completa): ${totalAprovadosReport}\n`;
+    if (totalParciaisReport > 0) {
+      report += `Parciais (aguardando Dia 2): ${totalParciaisReport}\n`;
+    }
     report += `Reprovados (faltou presença): ${totalReprovadosReport}\n`;
     report += "\n";
 
-    // Ranking
+    // Ranking — apenas aprovados contam
     report += "═══════════════════════════════════════════════════════════════\n";
-    report += "           🏆 RANKING TOP 5 CLUSTERS\n";
+    report += "           🏆 RANKING TOP 5 CLUSTERS (APROVADOS)\n";
     report += "═══════════════════════════════════════════════════════════════\n\n";
     
     top5Clusters.forEach((cluster, index) => {
       const medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : "  ";
-      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalPresentes} presente(s)\n`;
+      report += `${medal} ${index + 1}º Lugar: ${cluster.name} - ${cluster.totalAprovados} aprovado(s) de ${cluster.totalPresentes} presente(s)\n`;
     });
     report += "\n";
 
@@ -504,11 +540,12 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
     sortedClusters.forEach(cluster => {
       report += `\n┌─────────────────────────────────────────────────────────────┐\n`;
       report += `│ CLUSTER: ${cluster.name.padEnd(47)} │\n`;
-      report += `│ Presentes: ${(cluster.totalPresentes.toString()).padEnd(43)} │\n`;
+      report += `│ Presentes: ${(cluster.totalPresentes.toString()).padEnd(10)} Aprovados: ${(cluster.totalAprovados.toString()).padEnd(10)} ${cluster.totalParciais > 0 ? `Parciais: ${cluster.totalParciais}` : ""}`.padEnd(62) + `│\n`;
       report += `└─────────────────────────────────────────────────────────────┘\n`;
       
       cluster.presentes.forEach((p, idx) => {
-        const status = p.aprovado ? "✓ Aprovado" : "✗ Reprovado";
+        const status = getPresenceStatus(p);
+        const statusLabel = status === "approved" ? "✓ Aprovado" : status === "partial" ? "⏳ Parcial (Dia 1)" : "✗ Reprovado";
         report += `  ${(idx + 1).toString().padStart(2)}. ${p.nome}\n`;
         if (p.participanteNomeZoom) {
           report += `      Zoom: ${p.participanteNomeZoom}\n`;
@@ -516,7 +553,12 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         if (p.telefone) {
           report += `      Tel: ${p.telefone}\n`;
         }
-        report += `      ${status} | Tempo: ${formatMinutes(p.tempoTotalMinutos)}\n`;
+        report += `      ${statusLabel} | Tempo: ${formatMinutes(p.tempoTotalMinutos)}`;
+        if (p.totalDias === 2) {
+          report += ` (D1: ${p.dia1Tempo != null ? formatMinutes(p.dia1Tempo) : "—"}`;
+          report += ` · D2: ${p.dia2Tempo != null ? formatMinutes(p.dia2Tempo) : "—"})`;
+        }
+        report += "\n";
       });
     });
 
@@ -554,6 +596,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         telefone: string | null;
         aprovado: boolean;
         tempoTotalMinutos: number;
+        status: "approved" | "rejected" | "partial";
       }>;
       totalPresentes: number;
       totalAprovados: number;
@@ -580,6 +623,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
         telefone: p.telefone,
         aprovado: p.aprovado,
         tempoTotalMinutos: p.tempoTotalMinutos,
+        status: getPresenceStatus(p),
       });
       cluster.totalPresentes++;
       if (p.aprovado) {
@@ -589,7 +633,8 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
 
     const clusters = Array.from(clusterMap.values());
     const totalAprovadosPdf = dataToExport.filter(p => p.aprovado).length;
-    const totalReprovadosPdf = dataToExport.filter(p => !p.aprovado).length;
+    const totalParciaisPdf = dataToExport.filter(p => getPresenceStatus(p) === "partial").length;
+    const totalReprovadosPdf = dataToExport.filter(p => getPresenceStatus(p) === "rejected").length;
 
     setGeneratingPdf(true);
     try {
@@ -601,6 +646,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
           clusters,
           totalParticipantes: dataToExport.length,
           totalAprovados: totalAprovadosPdf,
+          totalParciais: totalParciaisPdf,
           totalReprovados: totalReprovadosPdf,
         }),
       });
@@ -636,9 +682,11 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       "Recrutador",
       "Nome Zoom",
       "Tempo Total (min)",
-      "Tempo Dinâmica (min)",
-      "% Dinâmica",
-      "Aprovado",
+      "Tempo Dia 1 (min)",
+      "Tempo Dia 2 (min)",
+      "Total Dias",
+      "Dia Processado",
+      "Status",
       "Validado Em",
     ];
 
@@ -651,9 +699,11 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       p.recrutadorNome ?? p.recrutadorCodigo ?? "",
       p.participanteNomeZoom ?? "",
       p.tempoTotalMinutos.toString(),
-      p.tempoDinamicaMinutos.toString(),
-      p.percentualDinamica.toString(),
-      p.aprovado ? "Sim" : "Não",
+      p.dia1Tempo != null ? p.dia1Tempo.toString() : "",
+      p.dia2Tempo != null ? p.dia2Tempo.toString() : "",
+      p.totalDias.toString(),
+      p.diaProcessado.toString(),
+      getPresenceStatus(p) === "approved" ? "Aprovado" : getPresenceStatus(p) === "partial" ? "Parcial (Dia 1)" : "Reprovado",
       p.validadoEm ?? "",
     ]);
 
@@ -742,7 +792,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       </header>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#2DBDC2]/10">
             <Users className="h-6 w-6 text-[#2DBDC2]" />
@@ -760,6 +810,16 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
           <div>
             <p className="text-sm font-medium text-neutral-500">Aprovados</p>
             <p className="text-2xl font-bold text-emerald-600">{totalAprovados}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-sky-50">
+            <Clock className="h-6 w-6 text-sky-500" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-neutral-500">Parciais (Dia 1)</p>
+            <p className="text-2xl font-bold text-sky-600">{totalParciais}</p>
           </div>
         </div>
 
@@ -871,6 +931,18 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
               </button>
               <button
                 type="button"
+                onClick={() => setShowPartial(!showPartial)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                  showPartial
+                    ? "bg-sky-100 text-sky-700"
+                    : "bg-neutral-100 text-neutral-400"
+                }`}
+              >
+                <Clock className="h-4 w-4" />
+                Parciais
+              </button>
+              <button
+                type="button"
                 onClick={() => setShowRejected(!showRejected)}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition ${
                   showRejected
@@ -936,7 +1008,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                       <th className="px-6 py-3">Treinamento</th>
                       <th className="px-6 py-3">Recrutador</th>
                       <th className="px-6 py-3">Tempo</th>
-                      <th className="px-6 py-3">Dinâmica</th>
+                      <th className="px-6 py-3">Dias</th>
                       <th className="px-6 py-3">Status</th>
                       <th className="px-6 py-3">Validado</th>
                       <th className="px-6 py-3">Ações</th>
@@ -984,36 +1056,56 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                             <Clock className="h-4 w-4" />
                             {formatMinutes(p.tempoTotalMinutos)}
                           </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <div className="h-2 w-16 overflow-hidden rounded-full bg-neutral-200">
-                              <div
-                                className={`h-full rounded-full ${
-                                  p.percentualDinamica >= 100
-                                    ? "bg-emerald-500"
-                                    : p.percentualDinamica >= 50
-                                      ? "bg-amber-500"
-                                      : "bg-red-500"
-                                }`}
-                                style={{ width: `${Math.min(p.percentualDinamica, 100)}%` }}
-                              />
+                          {p.totalDias === 2 && (
+                            <div className="mt-1 text-xs text-neutral-400">
+                              {p.dia1Tempo != null && <span>D1: {formatMinutes(p.dia1Tempo)}</span>}
+                              {p.dia1Tempo != null && p.dia2Tempo != null && <span> · </span>}
+                              {p.dia2Tempo != null && <span>D2: {formatMinutes(p.dia2Tempo)}</span>}
                             </div>
-                            <span className="text-xs text-neutral-500">{p.percentualDinamica}%</span>
-                          </div>
+                          )}
                         </td>
                         <td className="px-6 py-4">
-                          {p.aprovado ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
-                              <CheckCircle className="h-3 w-3" />
-                              Aprovado
-                            </span>
+                          {p.totalDias === 2 ? (
+                            <div className="flex flex-col gap-1">
+                              <div className="flex items-center gap-1">
+                                <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  p.dia1Aprovado === true ? "bg-emerald-100 text-emerald-700" : p.dia1Aprovado === false ? "bg-red-100 text-red-700" : "bg-neutral-100 text-neutral-500"
+                                }`}>
+                                  D1 {p.dia1Aprovado === true ? "✓" : p.dia1Aprovado === false ? "✗" : "—"}
+                                </span>
+                                <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                                  p.dia2Aprovado === true ? "bg-emerald-100 text-emerald-700" : p.dia2Aprovado === false ? "bg-red-100 text-red-700" : "bg-neutral-100 text-neutral-500"
+                                }`}>
+                                  D2 {p.dia2Aprovado === true ? "✓" : p.dia2Aprovado === false ? "✗" : "—"}
+                                </span>
+                              </div>
+                            </div>
                           ) : (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
-                              <XCircle className="h-3 w-3" />
-                              Reprovado
-                            </span>
+                            <span className="text-xs text-neutral-400">1 dia</span>
                           )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {(() => {
+                            const status = getPresenceStatus(p);
+                            if (status === "approved") return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                                <CheckCircle className="h-3 w-3" />
+                                Aprovado
+                              </span>
+                            );
+                            if (status === "partial") return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2.5 py-1 text-xs font-medium text-sky-700">
+                                <Clock className="h-3 w-3" />
+                                Dia 1 ✓
+                              </span>
+                            );
+                            return (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                                <XCircle className="h-3 w-3" />
+                                Reprovado
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="px-6 py-4 text-xs text-neutral-500">
                           {formatDate(p.validadoEm)}
