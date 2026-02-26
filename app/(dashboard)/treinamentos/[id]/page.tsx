@@ -20,5 +20,8 @@ export default async function TrainingDetailsPage({ params, searchParams }: Prop
   const { id } = await params;
   const { tab } = await searchParams;
   const initialTab = tab === "detalhes" || tab === "nao-associados" ? tab : undefined;
-  return <TrainingDetailsClient treinamentoId={id} initialTab={initialTab} />;
+  // Garante que o id está decodificado (Next.js geralmente já decodifica, mas seguro é seguro)
+  let decodedId = id;
+  try { decodedId = decodeURIComponent(id); } catch { /* já decodificado */ }
+  return <TrainingDetailsClient treinamentoId={decodedId} initialTab={initialTab} />;
 }

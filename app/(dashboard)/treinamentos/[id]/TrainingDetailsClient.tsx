@@ -106,12 +106,24 @@ export default function TrainingDetailsClient({
   const [showResetConfirm, setShowResetConfirm] = useState<false | "all" | 1 | 2>(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Normaliza ID para comparação robusta (trim, lowercase, decode)
+  const normalizeId = (id: string) => {
+    let normalized = id.trim().toLowerCase();
+    try { normalized = decodeURIComponent(normalized); } catch { /* já decodificado */ }
+    return normalized;
+  };
+
+  // Verifica se dois IDs de treinamento são equivalentes
+  const idsMatch = (a: string, b: string) => normalizeId(a) === normalizeId(b);
+
   useEffect(() => {
     async function fetchData() {
       setLoading(true);
       setError(null);
 
       try {
+        // Buscar ranking E TODAS as presenças (sem filtro de treinamento)
+        // Mesma abordagem da página Presenças Confirmadas que funciona perfeitamente
         const [rankingRes, presencesRes] = await Promise.all([
           fetch(`/api/trainings/${encodeURIComponent(treinamentoId)}/recruiters`),
           fetch(`/api/presence/list?aprovados=false`),
@@ -126,19 +138,30 @@ export default function TrainingDetailsClient({
 
         setRanking(rankingData.ranking || []);
 
-        // Filtrar presenças e pendentes pelo treinamento no client-side
         const allPresences: PresenceRecord[] = presencesData.presences || [];
         const allPending: PendingRecord[] = presencesData.pending || [];
 
-        const filtered = allPresences.filter(
-          (p) => p.treinamentoId === treinamentoId
+        // Filtrar client-side pelo treinamento (mesmo approach do ConfirmedPresencesClient)
+        const matchedPresences = allPresences.filter(
+          (p) => idsMatch(p.treinamentoId, treinamentoId)
         );
-        const filteredPend = allPending.filter(
-          (p) => p.treinamentoId === treinamentoId
+        const matchedPending = allPending.filter(
+          (p) => idsMatch(p.treinamentoId, treinamentoId)
         );
 
-        setPresences(filtered);
-        setPending(filteredPend);
+        // Debug: se vazio mas há presenças globais, logar para diagnóstico
+        if (matchedPresences.length === 0 && allPresences.length > 0) {
+          const uniqueTrainings = [...new Set(allPresences.map(p => p.treinamentoId))];
+          console.warn("[TrainingDetails] Nenhuma presença encontrada para este treinamento.");
+          console.warn("[TrainingDetails] Target ID:", JSON.stringify(treinamentoId));
+          console.warn("[TrainingDetails] Target normalizado:", JSON.stringify(normalizeId(treinamentoId)));
+          console.warn("[TrainingDetails] IDs disponíveis:", uniqueTrainings.map(t => JSON.stringify(t)));
+          console.warn("[TrainingDetails] IDs normalizados:", uniqueTrainings.map(t => JSON.stringify(normalizeId(t))));
+          console.warn("[TrainingDetails] Total presenças globais:", allPresences.length);
+        }
+
+        setPresences(matchedPresences);
+        setPending(matchedPending);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erro desconhecido");
       } finally {
@@ -204,7 +227,7 @@ export default function TrainingDetailsClient({
         throw new Error(data.error || "Erro ao resetar");
       }
       setResetMessage({ type: "success", text: data.message });
-      // Recarregar dados
+      // Recarregar dados (fetch all + filter client-side)
       const [rankingRes, presencesRes] = await Promise.all([
         fetch(`/api/trainings/${encodeURIComponent(treinamentoId)}/recruiters`),
         fetch(`/api/presence/list?aprovados=false`),
@@ -212,11 +235,11 @@ export default function TrainingDetailsClient({
       if (rankingRes.ok && presencesRes.ok) {
         const rankingData = await rankingRes.json();
         const presencesData = await presencesRes.json();
-        setRanking(rankingData.ranking || []);
         const allPresences: PresenceRecord[] = presencesData.presences || [];
         const allPending: PendingRecord[] = presencesData.pending || [];
-        setPresences(allPresences.filter((p) => p.treinamentoId === treinamentoId));
-        setPending(allPending.filter((p) => p.treinamentoId === treinamentoId));
+        setRanking(rankingData.ranking || []);
+        setPresences(allPresences.filter(p => idsMatch(p.treinamentoId, treinamentoId)));
+        setPending(allPending.filter(p => idsMatch(p.treinamentoId, treinamentoId)));
       }
     } catch (err) {
       setResetMessage({ type: "error", text: err instanceof Error ? err.message : "Erro desconhecido" });
