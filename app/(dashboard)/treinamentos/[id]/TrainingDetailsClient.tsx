@@ -18,6 +18,9 @@ import {
   CheckCircle,
   XCircle,
   UserX,
+  Trash2,
+  RotateCcw,
+  Loader2,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -99,6 +102,9 @@ export default function TrainingDetailsClient({
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<PresenceTab>(initialTab || "ranking");
   const [searchQuery, setSearchQuery] = useState("");
+  const [resetting, setResetting] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState<false | "all" | 1 | 2>(false);
+  const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     async function fetchData() {
@@ -179,6 +185,46 @@ export default function TrainingDetailsClient({
         (p.inscricaoNome2 && p.inscricaoNome2.toLowerCase().includes(q))
     );
   }, [pending, searchQuery]);
+
+  // Handler de reset de presenças
+  const handleReset = async (target: "all" | 1 | 2) => {
+    setResetting(true);
+    setResetMessage(null);
+    try {
+      const body: { treinamentoId: string; day?: number } = { treinamentoId };
+      if (target !== "all") body.day = target;
+
+      const res = await fetch("/api/presence/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Erro ao resetar");
+      }
+      setResetMessage({ type: "success", text: data.message });
+      // Recarregar dados
+      const [rankingRes, presencesRes] = await Promise.all([
+        fetch(`/api/trainings/${encodeURIComponent(treinamentoId)}/recruiters`),
+        fetch(`/api/presence/list?aprovados=false`),
+      ]);
+      if (rankingRes.ok && presencesRes.ok) {
+        const rankingData = await rankingRes.json();
+        const presencesData = await presencesRes.json();
+        setRanking(rankingData.ranking || []);
+        const allPresences: PresenceRecord[] = presencesData.presences || [];
+        const allPending: PendingRecord[] = presencesData.pending || [];
+        setPresences(allPresences.filter((p) => p.treinamentoId === treinamentoId));
+        setPending(allPending.filter((p) => p.treinamentoId === treinamentoId));
+      }
+    } catch (err) {
+      setResetMessage({ type: "error", text: err instanceof Error ? err.message : "Erro desconhecido" });
+    } finally {
+      setResetting(false);
+      setShowResetConfirm(false);
+    }
+  };
 
   // Ranking de inscritos ordenado por aprovados, desempate por inscritos
   const sortedRanking = useMemo(() => {
@@ -290,13 +336,89 @@ export default function TrainingDetailsClient({
         >
           <ArrowLeft className="h-5 w-5 text-neutral-600" />
         </Link>
-        <div>
+        <div className="flex-1">
           <h1 className="text-2xl font-bold text-neutral-900">{treinamentoId}</h1>
           <p className="text-sm text-neutral-500">
             Ranking de recrutadores e presenças confirmadas
           </p>
         </div>
+        {/* Botão de Reset */}
+        {presences.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setShowResetConfirm(showResetConfirm ? false : "all")}
+              className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-sm font-medium text-red-600 transition hover:bg-red-100"
+            >
+              <RotateCcw className="h-4 w-4" />
+              Resetar Presenças
+            </button>
+            {showResetConfirm && (
+              <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-2xl border border-neutral-200 bg-white p-5 shadow-xl">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100">
+                    <Trash2 className="h-5 w-5 text-red-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-neutral-900">Resetar Presenças</h3>
+                    <p className="mt-1 text-xs text-neutral-500">
+                      Isso vai remover os dados de presença das inscrições deste treinamento. As inscrições em si não serão excluídas.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-col gap-2">
+                  <button
+                    onClick={() => handleReset("all")}
+                    disabled={resetting}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {resetting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                    Resetar Tudo (Dia 1 + Dia 2)
+                  </button>
+                  {hasMultiDay && (
+                    <>
+                      <button
+                        onClick={() => handleReset(1)}
+                        disabled={resetting}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        {resetting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        Resetar apenas Dia 1
+                      </button>
+                      <button
+                        onClick={() => handleReset(2)}
+                        disabled={resetting}
+                        className="flex w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-700 transition hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        {resetting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        Resetar apenas Dia 2
+                      </button>
+                    </>
+                  )}
+                  <button
+                    onClick={() => setShowResetConfirm(false)}
+                    className="flex w-full items-center justify-center rounded-xl border border-neutral-200 px-4 py-2 text-sm font-medium text-neutral-600 transition hover:bg-neutral-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </header>
+
+      {/* Reset feedback message */}
+      {resetMessage && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            resetMessage.type === "success"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {resetMessage.text}
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
