@@ -5,6 +5,7 @@ export const dynamic = "force-dynamic";
 
 interface Props {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string }>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -15,7 +16,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-export default async function TrainingDetailsPage({ params }: Props) {
+export default async function TrainingDetailsPage({ params, searchParams }: Props) {
   const { id } = await params;
-  return <TrainingDetailsClient treinamentoId={id} />;
+  const { tab } = await searchParams;
+  const initialTab = tab === "detalhes" || tab === "nao-associados" ? tab : undefined;
+  return <TrainingDetailsClient treinamentoId={id} initialTab={initialTab} />;
 }

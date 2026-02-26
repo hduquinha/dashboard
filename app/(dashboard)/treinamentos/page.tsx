@@ -169,11 +169,11 @@ export default async function TreinamentosPage() {
                 </div>
                 {training.presentes > 0 && (
                   <Link
-                    href={`/crm?treinamento=${encodeURIComponent(training.id)}&presenca=aprovada`}
+                    href={`/treinamentos/${encodeURIComponent(training.id)}?tab=detalhes`}
                     className="flex items-center justify-center gap-2 rounded-xl bg-cyan-50 px-4 py-2.5 text-sm font-medium text-cyan-700 transition hover:bg-cyan-100"
                   >
                     <UserCheck className="h-4 w-4" />
-                    Ver presentes ({training.presentes})
+                    Ver presenças ({training.presentes})
                   </Link>
                 )}
               </div>

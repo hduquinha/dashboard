@@ -11,6 +11,13 @@ import {
   Medal,
   ChevronRight,
   Calendar,
+  Search,
+  AlertTriangle,
+  HelpCircle,
+  Clock,
+  CheckCircle,
+  XCircle,
+  UserX,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -26,11 +33,38 @@ interface PresenceRecord {
   nome: string;
   telefone: string | null;
   cidade: string | null;
+  email: string | null;
   treinamentoId: string;
   recrutadorCodigo: string | null;
   recrutadorNome: string | null;
+  participanteNomeZoom: string | null;
+  tempoTotalMinutos: number;
+  tempoDinamicaMinutos: number;
+  percentualDinamica: number;
+  aprovado: boolean;
+  validadoEm: string | null;
+  totalDias: number;
+  diaProcessado: number;
+  dia1Aprovado: boolean | null;
+  dia2Aprovado: boolean | null;
+  dia1Tempo: number | null;
+  dia2Tempo: number | null;
+}
+
+interface PendingRecord {
+  id: number;
+  participanteNome: string;
+  treinamentoId: string;
   aprovado: boolean;
   tempoTotalMinutos: number;
+  tempoDinamicaMinutos: number;
+  percentualDinamica: number;
+  status: "not-found" | "doubt";
+  inscricaoId1: number | null;
+  inscricaoNome1: string | null;
+  inscricaoId2: number | null;
+  inscricaoNome2: string | null;
+  criadoEm: string;
 }
 
 interface PresenceRanking {
@@ -40,17 +74,31 @@ interface PresenceRanking {
   totalAprovados: number;
 }
 
+type PresenceTab = "ranking" | "detalhes" | "nao-associados";
+
+function formatMinutes(minutes: number): string {
+  if (minutes < 60) return `${minutes}min`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
+}
+
 interface TrainingDetailsClientProps {
   treinamentoId: string;
+  initialTab?: PresenceTab;
 }
 
 export default function TrainingDetailsClient({
   treinamentoId,
+  initialTab,
 }: TrainingDetailsClientProps) {
   const [ranking, setRanking] = useState<RecruiterRanking[]>([]);
   const [presences, setPresences] = useState<PresenceRecord[]>([]);
+  const [pending, setPending] = useState<PendingRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<PresenceTab>(initialTab || "ranking");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     async function fetchData() {
@@ -72,6 +120,7 @@ export default function TrainingDetailsClient({
 
         setRanking(rankingData.ranking || []);
         setPresences(presencesData.presences || []);
+        setPending(presencesData.pending || []);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erro desconhecido");
       } finally {
@@ -85,7 +134,39 @@ export default function TrainingDetailsClient({
   // Estatísticas
   const totalInscritos = ranking.reduce((acc, r) => acc + r.totalInscritos, 0);
   const totalAprovados = presences.filter((p) => p.aprovado).length;
-  const totalReprovados = presences.filter((p) => !p.aprovado).length;
+  const totalParciais = presences.filter(
+    (p) => p.totalDias === 2 && p.diaProcessado < 2 && !p.aprovado
+  ).length;
+  const totalReprovados = presences.filter(
+    (p) => !p.aprovado && !(p.totalDias === 2 && p.diaProcessado < 2)
+  ).length;
+  const hasMultiDay = presences.some((p) => p.totalDias > 1);
+  const totalNaoAssociados = pending.length;
+
+  // Filter presences by search query
+  const filteredPresences = useMemo(() => {
+    if (!searchQuery.trim()) return presences;
+    const q = searchQuery.toLowerCase();
+    return presences.filter(
+      (p) =>
+        p.nome.toLowerCase().includes(q) ||
+        (p.participanteNomeZoom && p.participanteNomeZoom.toLowerCase().includes(q)) ||
+        (p.recrutadorNome && p.recrutadorNome.toLowerCase().includes(q)) ||
+        (p.cidade && p.cidade.toLowerCase().includes(q))
+    );
+  }, [presences, searchQuery]);
+
+  // Filter pending by search query
+  const filteredPending = useMemo(() => {
+    if (!searchQuery.trim()) return pending;
+    const q = searchQuery.toLowerCase();
+    return pending.filter(
+      (p) =>
+        p.participanteNome.toLowerCase().includes(q) ||
+        (p.inscricaoNome1 && p.inscricaoNome1.toLowerCase().includes(q)) ||
+        (p.inscricaoNome2 && p.inscricaoNome2.toLowerCase().includes(q))
+    );
+  }, [pending, searchQuery]);
 
   // Ranking de inscritos ordenado por aprovados, desempate por inscritos
   const sortedRanking = useMemo(() => {
@@ -206,7 +287,7 @@ export default function TrainingDetailsClient({
       </header>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-50">
             <Users className="h-6 w-6 text-purple-500" />
@@ -238,6 +319,16 @@ export default function TrainingDetailsClient({
         </div>
 
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-50">
+            <Clock className="h-6 w-6 text-amber-500" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-neutral-500">Parciais</p>
+            <p className="text-2xl font-bold text-amber-600">{totalParciais}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-red-50">
             <Percent className="h-6 w-6 text-red-500" />
           </div>
@@ -248,7 +339,77 @@ export default function TrainingDetailsClient({
         </div>
       </div>
 
-      {/* Ranking de Recrutadores (por Inscritos) */}
+      {/* Tabs */}
+      <div className="flex gap-2 border-b border-neutral-200">
+        <button
+          onClick={() => setActiveTab("ranking")}
+          className={`px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px ${
+            activeTab === "ranking"
+              ? "border-[#2DBDC2] text-[#2DBDC2]"
+              : "border-transparent text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Trophy className="h-4 w-4" />
+            Rankings
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab("detalhes")}
+          className={`px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px ${
+            activeTab === "detalhes"
+              ? "border-[#2DBDC2] text-[#2DBDC2]"
+              : "border-transparent text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Calendar className="h-4 w-4" />
+            Presenças Detalhadas
+            {presences.length > 0 && (
+              <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-xs">
+                {presences.length}
+              </span>
+            )}
+          </div>
+        </button>
+        <button
+          onClick={() => setActiveTab("nao-associados")}
+          className={`px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px ${
+            activeTab === "nao-associados"
+              ? "border-[#2DBDC2] text-[#2DBDC2]"
+              : "border-transparent text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <UserX className="h-4 w-4" />
+            Não Associados
+            {totalNaoAssociados > 0 && (
+              <span className="rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-xs">
+                {totalNaoAssociados}
+              </span>
+            )}
+          </div>
+        </button>
+      </div>
+
+      {/* Search bar for detail/pending tabs */}
+      {(activeTab === "detalhes" || activeTab === "nao-associados") && (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+          <input
+            type="text"
+            placeholder="Buscar por nome, nome Zoom, recrutador, cidade..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full rounded-xl border border-neutral-200 bg-white py-2.5 pl-10 pr-4 text-sm text-neutral-900 placeholder:text-neutral-400 focus:border-cyan-300 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+          />
+        </div>
+      )}
+
+      {/* =================== TAB: Rankings =================== */}
+      {activeTab === "ranking" && (
+        <>
+          {/* Ranking de Recrutadores (por Inscritos) */}
       <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
         <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
           <Trophy className="h-5 w-5 text-yellow-500" />
@@ -439,6 +600,307 @@ export default function TrainingDetailsClient({
           <ChevronRight className="h-5 w-5 text-neutral-400" />
         </Link>
       </div>
+        </>
+      )}
+
+      {/* =================== TAB: Presenças Detalhadas =================== */}
+      {activeTab === "detalhes" && (
+        <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+            <Calendar className="h-5 w-5 text-[#2DBDC2]" />
+            <h2 className="text-lg font-semibold text-neutral-900">
+              Presenças Detalhadas
+            </h2>
+            <span className="text-sm text-neutral-500">
+              ({filteredPresences.length} de {presences.length}{presences.length === 1 ? " participante" : " participantes"})
+            </span>
+          </div>
+
+          {filteredPresences.length === 0 ? (
+            <div className="py-12 text-center">
+              <UserCheck className="mx-auto h-12 w-12 text-neutral-300" />
+              <h3 className="mt-4 text-lg font-medium text-neutral-900">
+                {presences.length === 0
+                  ? "Nenhuma presença confirmada"
+                  : "Nenhum resultado encontrado"}
+              </h3>
+              <p className="mt-2 text-sm text-neutral-500">
+                {presences.length === 0
+                  ? "Ainda não há presenças validadas neste treinamento."
+                  : "Tente buscar por outro termo."}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome</th>
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome Zoom</th>
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Recrutador</th>
+                    {hasMultiDay ? (
+                      <>
+                        <th className="px-4 py-3 text-center font-medium text-neutral-600">Dia 1</th>
+                        <th className="px-4 py-3 text-center font-medium text-neutral-600">Dia 2</th>
+                      </>
+                    ) : (
+                      <th className="px-4 py-3 text-center font-medium text-neutral-600">Tempo</th>
+                    )}
+                    <th className="px-4 py-3 text-center font-medium text-neutral-600">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100">
+                  {filteredPresences.map((p) => {
+                    const isPartial = p.totalDias === 2 && p.diaProcessado < 2;
+                    return (
+                      <tr
+                        key={p.inscricaoId}
+                        className="transition hover:bg-neutral-50"
+                      >
+                        <td className="px-4 py-3">
+                          <div>
+                            <p className="font-medium text-neutral-900">{p.nome}</p>
+                            {p.cidade && (
+                              <p className="text-xs text-neutral-500">{p.cidade}</p>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-neutral-700">
+                            {p.participanteNomeZoom || (
+                              <span className="text-neutral-400 italic">—</span>
+                            )}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3">
+                          {p.recrutadorNome ? (
+                            <div>
+                              <p className="text-neutral-700">{p.recrutadorNome}</p>
+                              <p className="text-xs text-neutral-400">{p.recrutadorCodigo}</p>
+                            </div>
+                          ) : (
+                            <span className="text-neutral-400 italic">—</span>
+                          )}
+                        </td>
+                        {hasMultiDay ? (
+                          <>
+                            {/* Dia 1 */}
+                            <td className="px-4 py-3 text-center">
+                              {p.dia1Aprovado === true ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <CheckCircle className="h-5 w-5 text-emerald-500" />
+                                  {p.dia1Tempo != null && (
+                                    <span className="text-xs text-neutral-500">{formatMinutes(p.dia1Tempo)}</span>
+                                  )}
+                                </div>
+                              ) : p.dia1Aprovado === false ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <XCircle className="h-5 w-5 text-red-500" />
+                                  {p.dia1Tempo != null && (
+                                    <span className="text-xs text-neutral-500">{formatMinutes(p.dia1Tempo)}</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
+                                  <Clock className="h-4 w-4" />
+                                  Pendente
+                                </span>
+                              )}
+                            </td>
+                            {/* Dia 2 */}
+                            <td className="px-4 py-3 text-center">
+                              {p.dia2Aprovado === true ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <CheckCircle className="h-5 w-5 text-emerald-500" />
+                                  {p.dia2Tempo != null && (
+                                    <span className="text-xs text-neutral-500">{formatMinutes(p.dia2Tempo)}</span>
+                                  )}
+                                </div>
+                              ) : p.dia2Aprovado === false ? (
+                                <div className="flex flex-col items-center gap-0.5">
+                                  <XCircle className="h-5 w-5 text-red-500" />
+                                  {p.dia2Tempo != null && (
+                                    <span className="text-xs text-neutral-500">{formatMinutes(p.dia2Tempo)}</span>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
+                                  <Clock className="h-4 w-4" />
+                                  Pendente
+                                </span>
+                              )}
+                            </td>
+                          </>
+                        ) : (
+                          <td className="px-4 py-3 text-center">
+                            <span className="text-neutral-700">{formatMinutes(p.tempoTotalMinutos)}</span>
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-center">
+                          {p.aprovado ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                              <CheckCircle className="h-3.5 w-3.5" />
+                              Aprovado
+                            </span>
+                          ) : isPartial ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                              <Clock className="h-3.5 w-3.5" />
+                              Parcial
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                              <XCircle className="h-3.5 w-3.5" />
+                              Reprovado
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =================== TAB: Não Associados =================== */}
+      {activeTab === "nao-associados" && (
+        <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+          <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+            <AlertTriangle className="h-5 w-5 text-amber-500" />
+            <h2 className="text-lg font-semibold text-neutral-900">
+              Participantes Não Associados
+            </h2>
+            <span className="text-sm text-neutral-500">
+              ({filteredPending.length} de {pending.length} {pending.length === 1 ? "participante" : "participantes"} do Zoom sem associação)
+            </span>
+          </div>
+
+          {filteredPending.length === 0 ? (
+            <div className="py-12 text-center">
+              {pending.length === 0 ? (
+                <>
+                  <UserCheck className="mx-auto h-12 w-12 text-emerald-300" />
+                  <h3 className="mt-4 text-lg font-medium text-neutral-900">
+                    Todos associados!
+                  </h3>
+                  <p className="mt-2 text-sm text-neutral-500">
+                    Todos os participantes do Zoom foram associados a inscrições.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <Search className="mx-auto h-12 w-12 text-neutral-300" />
+                  <h3 className="mt-4 text-lg font-medium text-neutral-900">
+                    Nenhum resultado encontrado
+                  </h3>
+                  <p className="mt-2 text-sm text-neutral-500">
+                    Tente buscar por outro termo.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome no Zoom</th>
+                    <th className="px-4 py-3 text-center font-medium text-neutral-600">Tempo Total</th>
+                    <th className="px-4 py-3 text-center font-medium text-neutral-600">Presença</th>
+                    <th className="px-4 py-3 text-center font-medium text-neutral-600">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Sugestões</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-100">
+                  {filteredPending.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="transition hover:bg-neutral-50"
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-neutral-900">{p.participanteNome}</p>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="text-neutral-700">{formatMinutes(p.tempoTotalMinutos)}</span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {p.aprovado ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-600">
+                            <CheckCircle className="h-4 w-4" />
+                            OK
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-red-500">
+                            <XCircle className="h-4 w-4" />
+                            Insuficiente
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {p.status === "not-found" ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                            <AlertTriangle className="h-3.5 w-3.5" />
+                            Não encontrado
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                            <HelpCircle className="h-3.5 w-3.5" />
+                            Dúvida
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.status === "doubt" ? (
+                          <div className="space-y-1">
+                            {p.inscricaoNome1 && (
+                              <p className="text-xs text-neutral-600">
+                                1. {p.inscricaoNome1}
+                                {p.inscricaoId1 && (
+                                  <span className="text-neutral-400"> (#{p.inscricaoId1})</span>
+                                )}
+                              </p>
+                            )}
+                            {p.inscricaoNome2 && (
+                              <p className="text-xs text-neutral-600">
+                                2. {p.inscricaoNome2}
+                                {p.inscricaoId2 && (
+                                  <span className="text-neutral-400"> (#{p.inscricaoId2})</span>
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-neutral-400 italic">
+                            Sem sugestões
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {pending.length > 0 && (
+            <div className="border-t border-neutral-100 px-6 py-3">
+              <p className="text-xs text-neutral-500">
+                Estes participantes do Zoom não puderam ser associados automaticamente a nenhuma inscrição.
+                Você pode resolvê-los na página de{" "}
+                <Link
+                  href={`/presenca/confirmados?treinamento=${encodeURIComponent(treinamentoId)}`}
+                  className="text-cyan-600 hover:underline"
+                >
+                  Presenças Confirmadas
+                </Link>
+                .
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </main>
   );
 }
