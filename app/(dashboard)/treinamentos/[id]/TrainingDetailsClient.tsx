@@ -108,7 +108,7 @@ export default function TrainingDetailsClient({
       try {
         const [rankingRes, presencesRes] = await Promise.all([
           fetch(`/api/trainings/${encodeURIComponent(treinamentoId)}/recruiters`),
-          fetch(`/api/presence/list?treinamento=${encodeURIComponent(treinamentoId)}&aprovados=false`),
+          fetch(`/api/presence/list?aprovados=false`),
         ]);
 
         if (!rankingRes.ok || !presencesRes.ok) {
@@ -119,8 +119,20 @@ export default function TrainingDetailsClient({
         const presencesData = await presencesRes.json();
 
         setRanking(rankingData.ranking || []);
-        setPresences(presencesData.presences || []);
-        setPending(presencesData.pending || []);
+
+        // Filtrar presenças e pendentes pelo treinamento no client-side
+        const allPresences: PresenceRecord[] = presencesData.presences || [];
+        const allPending: PendingRecord[] = presencesData.pending || [];
+
+        const filtered = allPresences.filter(
+          (p) => p.treinamentoId === treinamentoId
+        );
+        const filteredPend = allPending.filter(
+          (p) => p.treinamentoId === treinamentoId
+        );
+
+        setPresences(filtered);
+        setPending(filteredPend);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Erro desconhecido");
       } finally {
