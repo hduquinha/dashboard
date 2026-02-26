@@ -21,6 +21,8 @@ import {
   Trash2,
   RotateCcw,
   Loader2,
+  FileDown,
+  FileText,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -77,7 +79,7 @@ interface PresenceRanking {
   totalAprovados: number;
 }
 
-type PresenceTab = "ranking" | "detalhes" | "nao-associados";
+type PresenceTab = "ranking" | "detalhes" | "nao-associados" | "relatorio";
 
 function formatMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes}min`;
@@ -105,6 +107,12 @@ export default function TrainingDetailsClient({
   const [resetting, setResetting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState<false | "all" | 1 | 2>(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  // Handler para gerar PDF
+  const handlePrintPdf = (section: "detalhes" | "nao-associados" | "all") => {
+    const printUrl = `/api/presence/print?treinamento=${encodeURIComponent(treinamentoId)}&section=${section}`;
+    window.open(printUrl, "_blank");
+  };
 
   // Normaliza ID para comparação robusta (trim, lowercase, decode)
   const normalizeId = (id: string) => {
@@ -547,10 +555,23 @@ export default function TrainingDetailsClient({
             )}
           </div>
         </button>
+        <button
+          onClick={() => setActiveTab("relatorio")}
+          className={`px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px ${
+            activeTab === "relatorio"
+              ? "border-[#2DBDC2] text-[#2DBDC2]"
+              : "border-transparent text-neutral-500 hover:text-neutral-700"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Relatório Completo
+          </div>
+        </button>
       </div>
 
-      {/* Search bar for detail/pending tabs */}
-      {(activeTab === "detalhes" || activeTab === "nao-associados") && (
+      {/* Search bar for detail/pending/relatorio tabs */}
+      {(activeTab === "detalhes" || activeTab === "nao-associados" || activeTab === "relatorio") && (
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
           <input
@@ -771,6 +792,15 @@ export default function TrainingDetailsClient({
             <span className="text-sm text-neutral-500">
               ({filteredPresences.length} de {presences.length}{presences.length === 1 ? " participante" : " participantes"})
             </span>
+            <div className="ml-auto">
+              <button
+                onClick={() => handlePrintPdf("detalhes")}
+                className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 hover:border-[#2DBDC2] hover:text-[#2DBDC2]"
+              >
+                <FileDown className="h-4 w-4" />
+                Gerar PDF
+              </button>
+            </div>
           </div>
 
           {filteredPresences.length === 0 ? (
@@ -932,6 +962,17 @@ export default function TrainingDetailsClient({
             <span className="text-sm text-neutral-500">
               ({filteredPending.length} de {pending.length} {pending.length === 1 ? "participante" : "participantes"} do Zoom sem associação)
             </span>
+            {pending.length > 0 && (
+              <div className="ml-auto">
+                <button
+                  onClick={() => handlePrintPdf("nao-associados")}
+                  className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 hover:border-[#2DBDC2] hover:text-[#2DBDC2]"
+                >
+                  <FileDown className="h-4 w-4" />
+                  Gerar PDF
+                </button>
+              </div>
+            )}
           </div>
 
           {filteredPending.length === 0 ? (
@@ -1057,6 +1098,252 @@ export default function TrainingDetailsClient({
             </div>
           )}
         </div>
+      )}
+
+      {/* =================== TAB: Relatório Completo =================== */}
+      {activeTab === "relatorio" && (
+        <>
+          {/* Botão PDF para relatório completo */}
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-neutral-500">
+              Visão unificada de presenças detalhadas e participantes não associados.
+            </p>
+            <button
+              onClick={() => handlePrintPdf("all")}
+              className="flex items-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#1a9a9e]"
+            >
+              <FileDown className="h-4 w-4" />
+              Gerar PDF Completo
+            </button>
+          </div>
+
+          {/* Seção Presenças Detalhadas */}
+          <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+              <Calendar className="h-5 w-5 text-[#2DBDC2]" />
+              <h2 className="text-lg font-semibold text-neutral-900">
+                Presenças Detalhadas
+              </h2>
+              <span className="text-sm text-neutral-500">
+                ({filteredPresences.length} de {presences.length}{presences.length === 1 ? " participante" : " participantes"})
+              </span>
+            </div>
+
+            {filteredPresences.length === 0 ? (
+              <div className="py-12 text-center">
+                <UserCheck className="mx-auto h-12 w-12 text-neutral-300" />
+                <h3 className="mt-4 text-lg font-medium text-neutral-900">
+                  {presences.length === 0
+                    ? "Nenhuma presença confirmada"
+                    : "Nenhum resultado encontrado"}
+                </h3>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome</th>
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome Zoom</th>
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Recrutador</th>
+                      {hasMultiDay ? (
+                        <>
+                          <th className="px-4 py-3 text-center font-medium text-neutral-600">Dia 1</th>
+                          <th className="px-4 py-3 text-center font-medium text-neutral-600">Dia 2</th>
+                        </>
+                      ) : (
+                        <th className="px-4 py-3 text-center font-medium text-neutral-600">Tempo</th>
+                      )}
+                      <th className="px-4 py-3 text-center font-medium text-neutral-600">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {filteredPresences.map((p) => {
+                      const isPartial = p.totalDias === 2 && p.diaProcessado < 2;
+                      return (
+                        <tr key={p.inscricaoId} className="transition hover:bg-neutral-50">
+                          <td className="px-4 py-3">
+                            <div>
+                              <p className="font-medium text-neutral-900">{p.nome}</p>
+                              {p.cidade && <p className="text-xs text-neutral-500">{p.cidade}</p>}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="text-neutral-700">
+                              {p.participanteNomeZoom || <span className="text-neutral-400 italic">—</span>}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3">
+                            {p.recrutadorNome ? (
+                              <div>
+                                <p className="text-neutral-700">{p.recrutadorNome}</p>
+                                <p className="text-xs text-neutral-400">{p.recrutadorCodigo}</p>
+                              </div>
+                            ) : (
+                              <span className="text-neutral-400 italic">—</span>
+                            )}
+                          </td>
+                          {hasMultiDay ? (
+                            <>
+                              <td className="px-4 py-3 text-center">
+                                {p.dia1Aprovado === true ? (
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <CheckCircle className="h-5 w-5 text-emerald-500" />
+                                    {p.dia1Tempo != null && <span className="text-xs text-neutral-500">{formatMinutes(p.dia1Tempo)}</span>}
+                                  </div>
+                                ) : p.dia1Aprovado === false ? (
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <XCircle className="h-5 w-5 text-red-500" />
+                                    {p.dia1Tempo != null && <span className="text-xs text-neutral-500">{formatMinutes(p.dia1Tempo)}</span>}
+                                  </div>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
+                                    <Clock className="h-4 w-4" /> Pendente
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                {p.dia2Aprovado === true ? (
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <CheckCircle className="h-5 w-5 text-emerald-500" />
+                                    {p.dia2Tempo != null && <span className="text-xs text-neutral-500">{formatMinutes(p.dia2Tempo)}</span>}
+                                  </div>
+                                ) : p.dia2Aprovado === false ? (
+                                  <div className="flex flex-col items-center gap-0.5">
+                                    <XCircle className="h-5 w-5 text-red-500" />
+                                    {p.dia2Tempo != null && <span className="text-xs text-neutral-500">{formatMinutes(p.dia2Tempo)}</span>}
+                                  </div>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-xs text-neutral-400">
+                                    <Clock className="h-4 w-4" /> Pendente
+                                  </span>
+                                )}
+                              </td>
+                            </>
+                          ) : (
+                            <td className="px-4 py-3 text-center">
+                              <span className="text-neutral-700">{formatMinutes(p.tempoTotalMinutos)}</span>
+                            </td>
+                          )}
+                          <td className="px-4 py-3 text-center">
+                            {p.aprovado ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                                <CheckCircle className="h-3.5 w-3.5" /> Aprovado
+                              </span>
+                            ) : isPartial ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                                <Clock className="h-3.5 w-3.5" /> Parcial
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                                <XCircle className="h-3.5 w-3.5" /> Reprovado
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Seção Não Associados */}
+          <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              <h2 className="text-lg font-semibold text-neutral-900">
+                Participantes Não Associados
+              </h2>
+              <span className="text-sm text-neutral-500">
+                ({filteredPending.length} {filteredPending.length === 1 ? "participante" : "participantes"})
+              </span>
+            </div>
+
+            {filteredPending.length === 0 ? (
+              <div className="py-8 text-center">
+                <UserCheck className="mx-auto h-10 w-10 text-emerald-300" />
+                <h3 className="mt-3 text-base font-medium text-neutral-900">
+                  {pending.length === 0 ? "Todos associados!" : "Nenhum resultado encontrado"}
+                </h3>
+                {pending.length === 0 && (
+                  <p className="mt-1 text-sm text-neutral-500">
+                    Todos os participantes do Zoom foram associados a inscrições.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-100 bg-neutral-50/50">
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome no Zoom</th>
+                      <th className="px-4 py-3 text-center font-medium text-neutral-600">Tempo Total</th>
+                      <th className="px-4 py-3 text-center font-medium text-neutral-600">Presença</th>
+                      <th className="px-4 py-3 text-center font-medium text-neutral-600">Status</th>
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Sugestões</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {filteredPending.map((p) => (
+                      <tr key={p.id} className="transition hover:bg-neutral-50">
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-neutral-900">{p.participanteNome}</p>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-neutral-700">{formatMinutes(p.tempoTotalMinutos)}</span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {p.aprovado ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-600">
+                              <CheckCircle className="h-4 w-4" /> OK
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-red-500">
+                              <XCircle className="h-4 w-4" /> Insuficiente
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {p.status === "not-found" ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-xs font-medium text-red-700">
+                              <AlertTriangle className="h-3.5 w-3.5" /> Não encontrado
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700">
+                              <HelpCircle className="h-3.5 w-3.5" /> Dúvida
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {p.status === "doubt" ? (
+                            <div className="space-y-1">
+                              {p.inscricaoNome1 && (
+                                <p className="text-xs text-neutral-600">
+                                  1. {p.inscricaoNome1}
+                                  {p.inscricaoId1 && <span className="text-neutral-400"> (#{p.inscricaoId1})</span>}
+                                </p>
+                              )}
+                              {p.inscricaoNome2 && (
+                                <p className="text-xs text-neutral-600">
+                                  2. {p.inscricaoNome2}
+                                  {p.inscricaoId2 && <span className="text-neutral-400"> (#{p.inscricaoId2})</span>}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-neutral-400 italic">Sem sugestões</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </main>
   );

@@ -19,7 +19,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function TrainingDetailsPage({ params, searchParams }: Props) {
   const { id } = await params;
   const { tab } = await searchParams;
-  const initialTab = tab === "detalhes" || tab === "nao-associados" ? tab : undefined;
+  const initialTab = tab === "detalhes" || tab === "nao-associados" || tab === "relatorio" ? tab : undefined;
   // Garante que o id está decodificado (Next.js geralmente já decodifica, mas seguro é seguro)
   let decodedId = id;
   try { decodedId = decodeURIComponent(id); } catch { /* já decodificado */ }
