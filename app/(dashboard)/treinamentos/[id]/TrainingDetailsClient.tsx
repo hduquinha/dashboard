@@ -28,6 +28,7 @@ import {
   ArrowDown,
   X,
   SlidersHorizontal,
+  Printer,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -578,7 +579,7 @@ export default function TrainingDetailsClient({
       )}
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div data-print-hidden="true" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
           <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-50">
             <Users className="h-6 w-6 text-purple-500" />
@@ -631,7 +632,7 @@ export default function TrainingDetailsClient({
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 border-b border-neutral-200">
+      <div data-print-hidden="true" className="flex gap-2 border-b border-neutral-200">
         <button
           onClick={() => setActiveTab("ranking")}
           className={`px-4 py-2.5 text-sm font-medium transition border-b-2 -mb-px ${
@@ -713,8 +714,18 @@ export default function TrainingDetailsClient({
       {/* =================== TAB: Rankings =================== */}
       {activeTab === "ranking" && (
         <>
+          {/* Print-only header */}
+          <div className="hidden print:block print-only mb-4">
+            <h1 className="text-xl font-bold text-neutral-900">Ranking de Clusters — {treinamentoId}</h1>
+            <p className="text-sm text-neutral-500">
+              Prioridade: {criteriaOrder.map((c, i) => `${i + 1}. ${CRITERIA_LABELS[c]}`).join(' → ')}
+              {excludedClusters.size > 0 && ` | ${excludedClusters.size} cluster(s) excluído(s)`}
+              {' | '}Gerado em {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}
+            </p>
+          </div>
+
           {/* Toolbar: ordenação e exclusão */}
-          <div className="flex flex-wrap items-center gap-3">
+          <div data-print-hidden="true" className="flex flex-wrap items-center gap-3">
             <button
               onClick={() => { setShowCriteriaConfig(!showCriteriaConfig); setShowExcludeConfig(false); }}
               className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition ${
@@ -746,6 +757,14 @@ export default function TrainingDetailsClient({
               )}
             </button>
 
+            <button
+              onClick={() => window.print()}
+              className="ml-auto inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 transition print:hidden"
+            >
+              <Printer className="h-4 w-4" />
+              Baixar PDF
+            </button>
+
             {excludedClusters.size > 0 && (
               <button
                 onClick={() => setExcludedClusters(new Set())}
@@ -759,7 +778,7 @@ export default function TrainingDetailsClient({
 
           {/* Priority config panel */}
           {showCriteriaConfig && (
-            <div className="rounded-2xl border border-[#2DBDC2]/30 bg-[#2DBDC2]/5 p-4">
+            <div data-print-hidden="true" className="rounded-2xl border border-[#2DBDC2]/30 bg-[#2DBDC2]/5 p-4">
               <h4 className="mb-3 text-sm font-semibold text-neutral-700 flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-[#2DBDC2]" />
                 Ordem de Prioridade do Ranking
@@ -808,7 +827,7 @@ export default function TrainingDetailsClient({
 
           {/* Exclude clusters panel */}
           {showExcludeConfig && (
-            <div className="rounded-2xl border border-red-200 bg-red-50/50 p-4">
+            <div data-print-hidden="true" className="rounded-2xl border border-red-200 bg-red-50/50 p-4">
               <h4 className="mb-3 text-sm font-semibold text-red-700 flex items-center gap-2">
                 <EyeOff className="h-4 w-4" />
                 Selecione clusters para excluir do ranking
@@ -933,7 +952,7 @@ export default function TrainingDetailsClient({
           </div>
 
           {/* Links para visualização no CRM */}
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div data-print-hidden="true" className="flex flex-col gap-3 sm:flex-row">
             <Link
               href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}`}
               className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
