@@ -25,6 +25,19 @@ export function formatTrainingDateLabel(value: string | null | undefined): strin
   });
 }
 
+/**
+ * Build a user-facing label for a training ID that was not configured in TRAINING_CONFIG.
+ * - ISO date IDs (e.g. "2026-03-11T19:00:00-03:00") → "Encontro Online 11/03/2026"
+ * - Free-form IDs (e.g. "18 e 19/04")               → "Up Day Plus 18 e 19/04"
+ */
+export function buildAutoTrainingLabel(id: string): string {
+  const formatted = formatTrainingDateLabel(id);
+  if (formatted) {
+    return `Encontro Online ${formatted}`;
+  }
+  return `Up Day Plus ${id}`;
+}
+
 function parseEntry(value: unknown): TrainingOption | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -107,7 +120,7 @@ export function getTrainingById(id: string | null | undefined): TrainingOption |
     const formatted = formatTrainingDateLabel(normalized);
     return {
       id: normalized,
-      label: formatted ?? normalized,
+      label: buildAutoTrainingLabel(normalized),
       startsAt: formatted ? normalized : null,
     };
   }

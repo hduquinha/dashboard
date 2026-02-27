@@ -18,6 +18,7 @@ import {
   getTrainingById,
   listTrainingOptions as listConfiguredTrainingOptions,
   formatTrainingDateLabel,
+  buildAutoTrainingLabel,
 } from "@/lib/trainings";
 import type { TrainingOption } from "@/types/training";
 import type {
@@ -1559,7 +1560,7 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
 
       // Tentar formatar como data se parecer ser uma data ISO
       const formatted = formatTrainingDateLabel(treinamentoId);
-      const label = formatted ?? treinamentoId;
+      const label = buildAutoTrainingLabel(treinamentoId);
       const startsAt = formatted ? treinamentoId : null;
 
       extras.push({
@@ -2091,11 +2092,11 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       let label = trainingInfo?.label ?? treinamentoId;
       let startsAt = trainingInfo?.startsAt ?? null;
       
-      // Se o label ainda for igual ao ID e parece ser uma data ISO, formatar
+      // Se o label ainda for igual ao ID e parece ser uma data ISO, formatar com prefixo
       if (label === treinamentoId && treinamentoId !== "Sem Treinamento") {
+        label = buildAutoTrainingLabel(treinamentoId);
         const formatted = formatTrainingDateLabel(treinamentoId);
         if (formatted) {
-          label = formatted;
           startsAt = treinamentoId;
         }
       }
