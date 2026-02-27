@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { assertToken, UnauthorizedError } from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
+import { humanizeName } from "@/lib/utils";
 import type { InscricaoItem, OrderableField, OrderDirection } from "@/types/inscricao";
 
 const EXPORT_PAGE_SIZE = 500;
@@ -91,7 +92,7 @@ function buildCsvRow(item: InscricaoItem): string {
     item.treinamentoNome,
     item.treinamentoData,
     item.recrutadorCodigo,
-    item.recrutadorNome,
+    humanizeName(item.recrutadorNome) ?? item.recrutadorNome,
     item.tipo,
     item.codigoProprio,
     typeof item.nivel === "number" ? item.nivel : null,

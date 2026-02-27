@@ -1,4 +1,5 @@
 import { listAllInscricoes } from "@/lib/db";
+import { humanizeName } from "@/lib/utils";
 import {
   listRecruiters,
   normalizeRecruiterCode,
@@ -93,7 +94,7 @@ function createVirtualRecruiterInscricao(recruiter: Recruiter, normalizedCode: s
 
 function inferDisplayName(inscricao: InscricaoItem, fallback: string): string {
   if (inscricao.nome && inscricao.nome.trim().length > 0) {
-    return inscricao.nome.trim();
+    return humanizeName(inscricao.nome.trim()) ?? inscricao.nome.trim();
   }
   if (inscricao.codigoProprio) {
     return `Cluster ${inscricao.codigoProprio}`;
@@ -148,7 +149,7 @@ function toNetworkNode(inscricao: InscricaoItem): NetworkNode {
     parentNodeId: inscricao.parentInscricaoId ?? null,
     parentCode: inscricao.recrutadorCodigo,
     recrutadorCodigo: inscricao.recrutadorCodigo,
-    recrutadorNome: inscricao.recrutadorNome,
+    recrutadorNome: humanizeName(inscricao.recrutadorNome) ?? inscricao.recrutadorNome,
     telefone: inscricao.telefone,
     cidade: inscricao.cidade,
     nivel: inscricao.nivel ?? null,

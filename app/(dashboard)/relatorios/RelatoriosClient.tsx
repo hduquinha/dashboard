@@ -23,6 +23,7 @@ import {
   Calendar,
   Printer,
 } from "lucide-react";
+import { humanizeName } from "@/lib/utils";
 
 interface TrainingStats {
   id: string;
@@ -150,20 +151,26 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
   ];
 
   // Top 10 recrutadores para gráfico
-  const topRecruitersChart = recruitersRanking.slice(0, 10).map((r) => ({
-    name: r.recrutadorNome.length > 12 ? r.recrutadorNome.slice(0, 12) + "..." : r.recrutadorNome,
-    fullName: r.recrutadorNome,
-    inscritos: r.totalInscritos,
-    aprovados: r.totalAprovados,
-  }));
+  const topRecruitersChart = recruitersRanking.slice(0, 10).map((r) => {
+    const display = humanizeName(r.recrutadorNome) || r.recrutadorNome;
+    return {
+      name: display.length > 18 ? display.slice(0, 18) + "…" : display,
+      fullName: display,
+      inscritos: r.totalInscritos,
+      aprovados: r.totalAprovados,
+    };
+  });
 
   // Top 10 presenças para gráfico
-  const topPresenceChart = presenceRanking.slice(0, 10).map((r) => ({
-    name: r.recrutadorNome.length > 12 ? r.recrutadorNome.slice(0, 12) + "..." : r.recrutadorNome,
-    fullName: r.recrutadorNome,
-    presentes: r.totalPresentes,
-    aprovados: r.totalAprovados,
-  }));
+  const topPresenceChart = presenceRanking.slice(0, 10).map((r) => {
+    const display = humanizeName(r.recrutadorNome) || r.recrutadorNome;
+    return {
+      name: display.length > 18 ? display.slice(0, 18) + "…" : display,
+      fullName: display,
+      presentes: r.totalPresentes,
+      aprovados: r.totalAprovados,
+    };
+  });
 
   const selectedTrainingData = trainings.find((t) => t.id === selectedTraining);
 
@@ -472,7 +479,7 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <p className="font-medium text-neutral-900">{r.recrutadorNome}</p>
+                          <p className="font-medium text-neutral-900">{humanizeName(r.recrutadorNome) || r.recrutadorNome}</p>
                           <p className="text-xs text-neutral-500">{r.recrutadorCodigo}</p>
                         </td>
                         <td className="px-4 py-3 text-center">

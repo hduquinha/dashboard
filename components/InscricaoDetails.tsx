@@ -6,6 +6,7 @@ import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { AnamneseResposta } from "@/lib/anamnese";
 import { buildAutoTrainingLabel, formatTrainingDateLabel } from "@/lib/trainings";
+import { humanizeName } from "@/lib/utils";
 
 interface RecruiterOption {
   code: string;
@@ -867,7 +868,7 @@ export default function InscricaoDetails({
                   <dt className="text-xs font-semibold uppercase tracking-wide text-[#1A9A9E]">Indicador</dt>
                   <dd className="mt-2 flex flex-wrap items-center gap-2">
                     <span className="font-semibold text-neutral-900">
-                      {inscricao.recrutadorNome ?? "Sem indicador"}
+                      {humanizeName(inscricao.recrutadorNome) ?? "Sem indicador"}
                       {inscricao.recrutadorCodigo ? (
                         <span className="ml-1.5 rounded-full bg-[#2DBDC2]/20 px-2 py-0.5 text-xs font-semibold text-[#1A9A9E]">{inscricao.recrutadorCodigo}</span>
                       ) : null}

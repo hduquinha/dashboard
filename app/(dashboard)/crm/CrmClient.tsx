@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import { buildAutoTrainingLabel, formatTrainingDateLabel } from "@/lib/trainings";
+import { humanizeName } from "@/lib/utils";
 
 /* ───────── Types ───────── */
 
@@ -396,10 +397,10 @@ export default function CrmClient({
                         <div className="flex items-center gap-3">
                           {/* Avatar */}
                           <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-neutral-200 to-neutral-300 text-sm font-bold text-neutral-600">
-                            {(lead.nome ?? "?")[0].toUpperCase()}
+                          {(humanizeName(lead.nome) ?? "?")[0].toUpperCase()}
                           </div>
                           <div className="min-w-0">
-                            <p className="truncate text-sm font-semibold text-neutral-900">{lead.nome ?? "Sem nome"}</p>
+                            <p className="truncate text-sm font-semibold text-neutral-900">{humanizeName(lead.nome) ?? "Sem nome"}</p>
                             {lead.telefone && (
                               <p className="truncate text-xs text-neutral-500">{lead.telefone}</p>
                             )}
@@ -419,7 +420,7 @@ export default function CrmClient({
                         )}
                       </td>
                       {/* Indicador */}
-                      <td className="px-4 py-3 text-xs text-neutral-600">{lead.recrutadorNome ?? "—"}</td>
+                      <td className="px-4 py-3 text-xs text-neutral-600">{humanizeName(lead.recrutadorNome) || "—"}</td>
                       {/* Status */}
                       <td className="px-4 py-3 text-center">
                         <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold ${pipe.bg} ${pipe.color}`}>
@@ -469,10 +470,10 @@ export default function CrmClient({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-lg font-bold text-white">
-                    {(selected.nome ?? "?")[0].toUpperCase()}
+                    {(humanizeName(selected.nome) ?? "?")[0].toUpperCase()}
                   </div>
                   <div className="min-w-0">
-                    <h2 className="truncate text-base font-bold text-white">{selected.nome ?? "Sem nome"}</h2>
+                    <h2 className="truncate text-base font-bold text-white">{humanizeName(selected.nome) ?? "Sem nome"}</h2>
                     <p className="text-xs text-cyan-300">#{selected.id} • {fmtDate(selected.criadoEm)}</p>
                   </div>
                 </div>
@@ -512,7 +513,7 @@ export default function CrmClient({
                 <button
                   type="button"
                   onClick={() => {
-                    const text = `Nome: ${selected.nome}\nTelefone: ${selected.telefone}\nCidade: ${selected.cidade ?? "-"}\nTreinamento: ${getTrainingDisplay(selected) ?? "-"}`;
+                    const text = `Nome: ${humanizeName(selected.nome) ?? selected.nome}\nTelefone: ${selected.telefone}\nCidade: ${selected.cidade ?? "-"}\nTreinamento: ${getTrainingDisplay(selected) ?? "-"}`;
                     navigator.clipboard.writeText(text);
                   }}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-100 px-3 py-2 text-xs font-semibold text-neutral-700 transition hover:bg-neutral-200"
@@ -526,7 +527,7 @@ export default function CrmClient({
                 <InfoCard label="Telefone" value={selected.telefone ?? "-"} />
                 <InfoCard label="Cidade" value={selected.cidade ?? "-"} />
                 <InfoCard label="Treinamento" value={getTrainingDisplay(selected) ?? "-"} />
-                <InfoCard label="Indicador" value={selected.recrutadorNome ?? "-"} sub={selected.recrutadorCodigo ?? undefined} />
+                <InfoCard label="Indicador" value={humanizeName(selected.recrutadorNome) || "-"} sub={selected.recrutadorCodigo ?? undefined} />
               </div>
 
               {/* Pipeline with click-to-change */}

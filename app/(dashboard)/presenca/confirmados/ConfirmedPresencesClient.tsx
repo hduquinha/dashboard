@@ -22,6 +22,7 @@ import {
   ArrowLeft,
 } from "lucide-react";
 import Link from "next/link";
+import { humanizeName } from "@/lib/utils";
 
 interface PresenceRecord {
   inscricaoId: number;
@@ -696,7 +697,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
       p.email ?? "",
       p.cidade ?? "",
       p.treinamentoId,
-      p.recrutadorNome ?? p.recrutadorCodigo ?? "",
+      humanizeName(p.recrutadorNome) ?? p.recrutadorCodigo ?? "",
       p.participanteNomeZoom ?? "",
       p.tempoTotalMinutos.toString(),
       p.dia1Tempo != null ? p.dia1Tempo.toString() : "",
@@ -1063,7 +1064,7 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-sm text-neutral-600">
-                            {p.recrutadorNome ?? p.recrutadorCodigo ?? "-"}
+                            {humanizeName(p.recrutadorNome) ?? p.recrutadorCodigo ?? "-"}
                           </span>
                         </td>
                         <td className="px-6 py-4">

@@ -16,6 +16,7 @@ import {
   XCircle,
   Info,
 } from "lucide-react";
+import { humanizeName } from "@/lib/utils";
 import {
   BarChart,
   Bar,
@@ -502,7 +503,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                             {r.recrutadorNome ? (
                               <>
                                 <p className="text-sm text-neutral-700">
-                                  {r.recrutadorNome}
+                                  {humanizeName(r.recrutadorNome)}
                                 </p>
                                 <p className="text-xs text-neutral-400">
                                   {r.recrutadorCodigo}

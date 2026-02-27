@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { assertToken, UnauthorizedError } from "@/lib/auth";
 import { listInscricoes, listRecruitersWithDbNames } from "@/lib/db";
+import { humanizeName } from "@/lib/utils";
 import type { InscricaoItem, OrderableField, OrderDirection } from "@/types/inscricao";
 
 const EXPORT_PAGE_SIZE = 500;
@@ -301,7 +302,7 @@ export async function GET(request: NextRequest) {
           <td>${inscricao.telefone ?? ""}</td>
           <td>${inscricao.cidade ?? ""}</td>
           <td>${inscricao.treinamentoNome ?? formatDate(inscricao.treinamentoData) ?? inscricao.treinamentoId ?? ""}</td>
-          <td>${inscricao.recrutadorNome ?? inscricao.recrutadorCodigo ?? ""}</td>
+          <td>${humanizeName(inscricao.recrutadorNome) ?? inscricao.recrutadorCodigo ?? ""}</td>
           <td class="text-center">
             <span class="badge ${inscricao.tipo === "lead" ? "badge-lead" : "badge-recruiter"}">
               ${inscricao.tipo === "lead" ? "Lead" : "Recrutador"}

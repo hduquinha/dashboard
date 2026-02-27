@@ -7,6 +7,7 @@ import type { NetworkNode, NetworkTreeFocus, NetworkTreeStats } from "@/lib/netw
 import type { TrainingOption } from "@/types/training";
 import type { Recruiter } from "@/lib/recruiters";
 import type { InscricaoItem } from "@/types/inscricao";
+import { humanizeName } from "@/lib/utils";
 
 interface NetworkTreeProps {
   roots: NetworkNode[];
@@ -151,7 +152,7 @@ function NetworkTreeInner({
           </span>
           <span className="text-sm font-semibold text-neutral-900">{node.displayName}</span>
           <div className="mt-2 text-[11px] text-neutral-600">
-            {node.recrutadorNome ? <p>Indicador: {node.recrutadorNome}</p> : null}
+            {node.recrutadorNome ? <p>Indicador: {humanizeName(node.recrutadorNome)}</p> : null}
             {node.telefone ? <p>Telefone: {node.telefone}</p> : null}
             {node.cidade ? <p>Cidade: {node.cidade}</p> : null}
             <p>

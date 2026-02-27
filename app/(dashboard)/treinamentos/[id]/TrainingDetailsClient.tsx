@@ -30,6 +30,7 @@ import {
   SlidersHorizontal,
   Printer,
 } from "lucide-react";
+import { humanizeName } from "@/lib/utils";
 
 interface RecruiterRanking {
   recrutadorCodigo: string;
@@ -993,7 +994,7 @@ export default function TrainingDetailsClient({
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <p className="font-medium text-neutral-900">{cluster.recrutadorNome}</p>
+                          <p className="font-medium text-neutral-900">{humanizeName(cluster.recrutadorNome)}</p>
                           <p className="text-xs text-neutral-500">Código: {cluster.recrutadorCodigo}</p>
                         </td>
                         {criteriaOrder.map((criterion, cIdx) => (
@@ -1154,7 +1155,7 @@ export default function TrainingDetailsClient({
                         <td className="px-4 py-3">
                           {p.recrutadorNome ? (
                             <div>
-                              <p className="text-neutral-700">{p.recrutadorNome}</p>
+                              <p className="text-neutral-700">{humanizeName(p.recrutadorNome)}</p>
                               <p className="text-xs text-neutral-400">{p.recrutadorCodigo}</p>
                             </div>
                           ) : (
@@ -1485,7 +1486,7 @@ export default function TrainingDetailsClient({
                           <td className="px-4 py-3">
                             {p.recrutadorNome ? (
                               <div>
-                                <p className="text-neutral-700">{p.recrutadorNome}</p>
+                                <p className="text-neutral-700">{humanizeName(p.recrutadorNome)}</p>
                                 <p className="text-xs text-neutral-400">{p.recrutadorCodigo}</p>
                               </div>
                             ) : (

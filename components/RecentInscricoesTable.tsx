@@ -1,4 +1,5 @@
 import type { InscricaoItem } from '@/types/inscricao';
+import { humanizeName } from '@/lib/utils';
 
 interface RecentInscricoesTableProps {
   inscricoes: InscricaoItem[];
@@ -52,7 +53,7 @@ export default function RecentInscricoesTable({ inscricoes }: RecentInscricoesTa
               <td className="px-3 py-3">
                 <div className="flex flex-col">
                   <span className="font-medium text-neutral-900">
-                    {inscricao.nome ?? 'Indisponível'}
+                    {humanizeName(inscricao.nome) ?? 'Indisponível'}
                   </span>
                   {inscricao.tipo === 'recrutador' && inscricao.codigoProprio ? (
                     <span className="text-xs text-neutral-500">Código {inscricao.codigoProprio}</span>
@@ -72,7 +73,7 @@ export default function RecentInscricoesTable({ inscricoes }: RecentInscricoesTa
               <td className="px-3 py-3 text-neutral-700">
                 <div className="flex flex-col gap-0.5">
                   <span className="text-xs font-medium sm:text-sm">
-                    {inscricao.recrutadorNome ?? (
+                    {humanizeName(inscricao.recrutadorNome) ?? (
                       <span className="text-neutral-400">Sem indicador</span>
                     )}
                   </span>

@@ -8,6 +8,7 @@ import type { InscricaoItem } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import { RECRUITERS_BASE_URL, type Recruiter } from "@/lib/recruiters";
 import type { AnamneseResposta } from "@/lib/anamnese";
+import { humanizeName } from "@/lib/utils";
 
 interface RecruitersDirectoryProps {
   recruiters: RecruiterDirectoryEntry[];
@@ -73,7 +74,7 @@ function mapInscricaoToEntry(inscricao: InscricaoLike): RecruiterDirectoryEntry 
   return {
     id: inscricao.id,
     inscricaoId: inscricao.id > 0 ? inscricao.id : null,
-    name: inscricao.nome ?? `Cluster ${code || inscricao.id}`,
+    name: humanizeName(inscricao.nome) ?? `Cluster ${code || inscricao.id}`,
     code: code || String(inscricao.id),
     url,
     isVirtual: Boolean(inscricao.isVirtual),

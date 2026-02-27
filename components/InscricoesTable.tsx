@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import InscricaoDetails from '@/components/InscricaoDetails';
 import type { InscricaoItem, OrderDirection, OrderableField } from '@/types/inscricao';
 import type { TrainingOption } from '@/types/training';
+import { humanizeName } from '@/lib/utils';
 
 interface RecruiterOption {
   code: string;
@@ -202,7 +203,7 @@ export default function InscricoesTable({
                   <td className="px-3 py-3 text-sm text-neutral-700">
                     <div className="flex flex-col">
                       <span className="font-medium text-neutral-900">
-                        {inscricao.nome ?? 'Indisponível'}
+                        {humanizeName(inscricao.nome) ?? 'Indisponível'}
                       </span>
                       {inscricao.tipo === 'recrutador' && inscricao.codigoProprio ? (
                         <span className="text-xs text-neutral-500">Código {inscricao.codigoProprio}</span>
@@ -300,7 +301,7 @@ export default function InscricoesTable({
                   <td className="px-3 py-3 text-sm text-neutral-700">
                     <div className="flex flex-col gap-0.5">
                       <span className="text-xs font-medium text-neutral-800 sm:text-sm">
-                        {inscricao.recrutadorNome ?? 'Sem indicador'}
+                        {humanizeName(inscricao.recrutadorNome) ?? 'Sem indicador'}
                       </span>
                       {inscricao.recrutadorCodigo ? (
                         <span className="inline-flex w-max items-center rounded-full bg-neutral-900/5 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
