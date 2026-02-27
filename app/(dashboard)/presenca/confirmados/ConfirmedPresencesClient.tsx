@@ -770,6 +770,21 @@ export default function ConfirmedPresencesClient({ initialTraining }: ConfirmedP
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {selectedTraining !== "all" && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(
+                    `/api/presence/print?treinamento=${encodeURIComponent(selectedTraining)}&groupBy=recrutador`,
+                    "_blank"
+                  );
+                }}
+                disabled={filteredPresences.length === 0}
+                className="inline-flex items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                👥 Pré-PDF (por Recrutador)
+              </button>
+            )}
             <button
               type="button"
               onClick={handleGenerateReport}

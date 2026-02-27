@@ -154,7 +154,7 @@ export async function POST(request: NextRequest) {
         doc.fillColor("#1e293b");
         doc.text(`${idx + 1}. ${p.nome}`, { continued: true });
         doc.fillColor("#64748b");
-        doc.text(` - ${formatMinutes(p.tempoTotalMinutos)}`);
+        doc.text(` - ${formatMinutes(p.tempoTotalMinutos)}${p.telefone ? ` | Tel: ${p.telefone}` : ""}`);
       });
 
       doc.moveDown(0.8);

@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
     const url = new URL(request.url);
     const treinamentoId = url.searchParams.get("treinamento");
     const section = url.searchParams.get("section") || "all"; // "detalhes", "nao-associados", "all"
+    const groupBy = url.searchParams.get("groupBy") || ""; // "recrutador" for grouped view
 
     if (!treinamentoId) {
       return NextResponse.json({ error: "Treinamento não informado." }, { status: 400 });
@@ -185,8 +186,9 @@ export async function GET(request: NextRequest) {
     const dateStr = `${now.toLocaleDateString("pt-BR")} às ${now.toLocaleTimeString("pt-BR")}`;
     const safeTitle = escapeHtml(treinamentoId);
 
-    const showDetalhes = section === "detalhes" || section === "all";
-    const showPending = section === "nao-associados" || section === "all";
+    const showDetalhes = (section === "detalhes" || section === "all") && groupBy !== "recrutador";
+    const showPending = (section === "nao-associados" || section === "all") && groupBy !== "recrutador";
+    const showGroupedByRecruiter = groupBy === "recrutador";
 
     // Gerar status badge (texto)
     function statusLabel(aprovado: boolean, totalDias: number, diaProcessado: number): string {
@@ -354,7 +356,7 @@ export async function GET(request: NextRequest) {
     @media screen {
       body {
         padding: 20px;
-        max-width: 1200px;
+        max-width: 1600px;
         margin: 0 auto;
       }
 
@@ -417,6 +419,7 @@ export async function GET(request: NextRequest) {
       <tr>
         <th>#</th>
         <th>Nome</th>
+        <th>Telefone</th>
         <th>Nome Zoom</th>
         <th>Cidade</th>
         <th>Recrutador</th>
@@ -432,6 +435,7 @@ export async function GET(request: NextRequest) {
       <tr>
         <td>${i + 1}</td>
         <td>${escapeHtml(p.nome)}</td>
+        <td>${p.telefone ? escapeHtml(p.telefone) : "—"}</td>
         <td>${p.participante_nome_zoom ? escapeHtml(p.participante_nome_zoom) : "—"}</td>
         <td>${p.cidade ? escapeHtml(p.cidade) : "—"}</td>
         <td>${p.recrutador_nome ? escapeHtml(p.recrutador_nome) : (p.recrutador_codigo ? escapeHtml(p.recrutador_codigo) : "—")}</td>
@@ -481,6 +485,74 @@ export async function GET(request: NextRequest) {
   <h2 class="section-title">⚠️ Participantes Não Associados</h2>
   <p style="padding: 12px 0; color: #6b7280;">Todos os participantes do Zoom foram associados a inscrições. ✅</p>
   ` : ""}
+
+  ${showGroupedByRecruiter ? (() => {
+    // Group presences by recruiter, sorted alphabetically
+    const recruiterMap = new Map<string, { nome: string; code: string; presentes: typeof presences }>();
+    presences.forEach((p: PresenceEntry) => {
+      const code = p.recrutador_codigo ?? "00";
+      const nome = p.recrutador_nome ?? (p.recrutador_codigo ? p.recrutador_codigo : "Sem Recrutador");
+      if (!recruiterMap.has(code)) {
+        recruiterMap.set(code, { nome, code, presentes: [] });
+      }
+      recruiterMap.get(code)!.presentes.push(p);
+    });
+
+    // Sort groups alphabetically by recruiter name
+    const sortedGroups = Array.from(recruiterMap.values()).sort((a, b) =>
+      a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" })
+    );
+
+    // Sort participants alphabetically within each group
+    sortedGroups.forEach(group => {
+      group.presentes.sort((a: PresenceEntry, b: PresenceEntry) =>
+        a.nome.localeCompare(b.nome, "pt-BR", { sensitivity: "base" })
+      );
+    });
+
+    let globalIndex = 0;
+    return `
+  <h2 class="section-title">👥 Presenças Agrupadas por Recrutador</h2>
+  ${sortedGroups.map(group => {
+    const groupAprovados = group.presentes.filter((p: PresenceEntry) => p.aprovado).length;
+    const groupTotal = group.presentes.length;
+    return `
+    <div class="recruiter-group" style="margin-bottom: 20px; page-break-inside: avoid;">
+      <div style="background: #e0f2fe; border-left: 4px solid #2DBDC2; padding: 8px 12px; margin-bottom: 6px; border-radius: 0 6px 6px 0;">
+        <strong style="font-size: 12px; color: #0c4a6e;">📌 ${escapeHtml(group.nome)}</strong>
+        <span style="font-size: 10px; color: #0369a1; margin-left: 12px;">${groupTotal} participante(s) — ${groupAprovados} aprovado(s)</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th style="width:30px">#</th>
+            <th>Nome</th>
+            <th>Telefone</th>
+            <th>Cidade</th>
+            ${hasMultiDay ? '<th class="text-center">Dia 1</th><th class="text-center">Dia 2</th>' : '<th class="text-center">Tempo</th>'}
+            <th class="text-center">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${group.presentes.map((p: PresenceEntry) => {
+            globalIndex++;
+            const isPartial = p.total_dias === 2 && p.dia_processado < 2;
+            const badgeClass = p.aprovado ? "badge-approved" : isPartial ? "badge-partial" : "badge-rejected";
+            return `
+          <tr>
+            <td>${globalIndex}</td>
+            <td>${escapeHtml(p.nome)}</td>
+            <td>${p.telefone ? escapeHtml(p.telefone) : "—"}</td>
+            <td>${p.cidade ? escapeHtml(p.cidade) : "—"}</td>
+            ${hasMultiDay ? '<td class="text-center">' + dia1Label(p) + '</td><td class="text-center">' + dia2Label(p) + '</td>' : '<td class="text-center">' + formatMinutes(p.tempo_total_minutos) + '</td>'}
+            <td class="text-center"><span class="badge ${badgeClass}">${statusLabel(p.aprovado, p.total_dias, p.dia_processado)}</span></td>
+          </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>`;
+  }).join("")}`;
+  })() : ""}
 
   <div class="footer">
     Dashboard de Treinamentos — Relatório gerado automaticamente em ${dateStr}
