@@ -201,7 +201,8 @@ export default function TrainingDetailsClient({
         p.nome.toLowerCase().includes(q) ||
         (p.participanteNomeZoom && p.participanteNomeZoom.toLowerCase().includes(q)) ||
         (p.recrutadorNome && p.recrutadorNome.toLowerCase().includes(q)) ||
-        (p.cidade && p.cidade.toLowerCase().includes(q))
+        (p.cidade && p.cidade.toLowerCase().includes(q)) ||
+        (p.telefone && p.telefone.includes(q))
     );
   }, [presences, searchQuery]);
 
@@ -792,7 +793,16 @@ export default function TrainingDetailsClient({
             <span className="text-sm text-neutral-500">
               ({filteredPresences.length} de {presences.length}{presences.length === 1 ? " participante" : " participantes"})
             </span>
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const printUrl = `/api/presence/print?treinamento=${encodeURIComponent(treinamentoId)}&groupBy=recrutador`;
+                  window.open(printUrl, "_blank");
+                }}
+                className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition hover:bg-violet-100 hover:border-violet-300"
+              >
+                👥 Pré-PDF (por Recrutador)
+              </button>
               <button
                 onClick={() => handlePrintPdf("detalhes")}
                 className="flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm font-medium text-neutral-700 transition hover:bg-neutral-50 hover:border-[#2DBDC2] hover:text-[#2DBDC2]"
@@ -823,6 +833,7 @@ export default function TrainingDetailsClient({
                 <thead>
                   <tr className="border-b border-neutral-100 bg-neutral-50/50">
                     <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome</th>
+                    <th className="px-4 py-3 text-left font-medium text-neutral-600">Telefone</th>
                     <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome Zoom</th>
                     <th className="px-4 py-3 text-left font-medium text-neutral-600">Recrutador</th>
                     {hasMultiDay ? (
@@ -851,6 +862,13 @@ export default function TrainingDetailsClient({
                               <p className="text-xs text-neutral-500">{p.cidade}</p>
                             )}
                           </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-neutral-700 text-xs">
+                            {p.telefone || (
+                              <span className="text-neutral-400 italic">—</span>
+                            )}
+                          </p>
                         </td>
                         <td className="px-4 py-3">
                           <p className="text-neutral-700">
@@ -1108,13 +1126,24 @@ export default function TrainingDetailsClient({
             <p className="text-sm text-neutral-500">
               Visão unificada de presenças detalhadas e participantes não associados.
             </p>
-            <button
-              onClick={() => handlePrintPdf("all")}
-              className="flex items-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#1a9a9e]"
-            >
-              <FileDown className="h-4 w-4" />
-              Gerar PDF Completo
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  const printUrl = `/api/presence/print?treinamento=${encodeURIComponent(treinamentoId)}&groupBy=recrutador`;
+                  window.open(printUrl, "_blank");
+                }}
+                className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 shadow-sm transition hover:bg-violet-100 hover:border-violet-300"
+              >
+                👥 Pré-PDF (por Recrutador)
+              </button>
+              <button
+                onClick={() => handlePrintPdf("all")}
+                className="flex items-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#1a9a9e]"
+              >
+                <FileDown className="h-4 w-4" />
+                Gerar PDF Completo
+              </button>
+            </div>
           </div>
 
           {/* Seção Presenças Detalhadas */}
@@ -1144,6 +1173,7 @@ export default function TrainingDetailsClient({
                   <thead>
                     <tr className="border-b border-neutral-100 bg-neutral-50/50">
                       <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome</th>
+                      <th className="px-4 py-3 text-left font-medium text-neutral-600">Telefone</th>
                       <th className="px-4 py-3 text-left font-medium text-neutral-600">Nome Zoom</th>
                       <th className="px-4 py-3 text-left font-medium text-neutral-600">Recrutador</th>
                       {hasMultiDay ? (
@@ -1167,6 +1197,11 @@ export default function TrainingDetailsClient({
                               <p className="font-medium text-neutral-900">{p.nome}</p>
                               {p.cidade && <p className="text-xs text-neutral-500">{p.cidade}</p>}
                             </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="text-neutral-700 text-xs">
+                              {p.telefone || <span className="text-neutral-400 italic">—</span>}
+                            </p>
                           </td>
                           <td className="px-4 py-3">
                             <p className="text-neutral-700">
