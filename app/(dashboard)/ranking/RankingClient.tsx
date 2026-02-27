@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Trophy,
   Users,
-  Clock,
   Calendar,
   Search,
   Eye,
@@ -12,8 +11,10 @@ import {
   X,
   Printer,
   BarChart3,
-  Medal,
   Timer,
+  CheckCircle,
+  XCircle,
+  Info,
 } from "lucide-react";
 import {
   BarChart,
@@ -47,14 +48,19 @@ interface RankingRecord {
   recrutadorCodigo: string | null;
   recrutadorNome: string | null;
   participanteNomeZoom: string | null;
-  tempoTotalMinutos: number;
-  tempoDinamicaMinutos: number;
-  percentualDinamica: number;
+  // Dia da dinâmica
+  presenteNaDinamica: boolean;
+  tempoDinamicaDiaMinutos: number;
+  tempoTotalDiaMinutos: number;
+  percentualDinamicaDia: number;
+  // Geral
+  tempoTotalGeralMinutos: number;
+  tempoDinamicaGeralMinutos: number;
   aprovado: boolean;
   validadoEm: string | null;
+  totalDias: number;
+  dinamicaDay: string;
 }
-
-type SortMode = "dinamica" | "total";
 
 interface RankingClientProps {
   trainings: TrainingStats[];
@@ -79,13 +85,16 @@ export default function RankingClient({ trainings }: RankingClientProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [excludedIds, setExcludedIds] = useState<Set<number>>(new Set());
   const [showExcluded, setShowExcluded] = useState(false);
-  const [sortMode, setSortMode] = useState<SortMode>("dinamica");
+  const [dinamicaDayLabel, setDinamicaDayLabel] = useState("");
+  const [totalPresentesDinamica, setTotalPresentesDinamica] = useState(0);
 
   // ── Fetch ranking data ─────────────────────────────
 
   useEffect(() => {
     if (!selectedTraining) {
       setAllRecords([]);
+      setDinamicaDayLabel("");
+      setTotalPresentesDinamica(0);
       return;
     }
 
@@ -100,6 +109,8 @@ export default function RankingClient({ trainings }: RankingClientProps) {
         if (!cancelled && res.ok) {
           const data = await res.json();
           setAllRecords(data.ranking ?? []);
+          setDinamicaDayLabel(data.dinamicaDayLabel ?? "");
+          setTotalPresentesDinamica(data.totalPresentesDinamica ?? 0);
         }
       } catch (err) {
         console.error("Erro ao carregar ranking:", err);
@@ -122,7 +133,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
   // ── Derived data ───────────────────────────────────
 
   const toggleExclude = useCallback((id: number) => {
-    setExcludedIds((prev) => {
+    setExcludedIds((prev: Set<number>) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -130,22 +141,9 @@ export default function RankingClient({ trainings }: RankingClientProps) {
     });
   }, []);
 
-  const sortedRecords = useMemo(() => {
-    const sorted = [...allRecords].sort((a, b) => {
-      if (sortMode === "dinamica") {
-        if (b.tempoDinamicaMinutos !== a.tempoDinamicaMinutos)
-          return b.tempoDinamicaMinutos - a.tempoDinamicaMinutos;
-        return b.tempoTotalMinutos - a.tempoTotalMinutos;
-      }
-      if (b.tempoTotalMinutos !== a.tempoTotalMinutos)
-        return b.tempoTotalMinutos - a.tempoTotalMinutos;
-      return b.tempoDinamicaMinutos - a.tempoDinamicaMinutos;
-    });
-    return sorted;
-  }, [allRecords, sortMode]);
-
+  // Records already come sorted from API (present on dinâmica day first, by time)
   const visibleRecords = useMemo(() => {
-    return sortedRecords.filter((r) => {
+    return allRecords.filter((r: RankingRecord) => {
       if (excludedIds.has(r.inscricaoId)) return false;
       if (searchTerm) {
         const q = searchTerm.toLowerCase();
@@ -158,25 +156,24 @@ export default function RankingClient({ trainings }: RankingClientProps) {
       }
       return true;
     });
-  }, [sortedRecords, excludedIds, searchTerm]);
+  }, [allRecords, excludedIds, searchTerm]);
 
   const excludedRecords = useMemo(
-    () => sortedRecords.filter((r) => excludedIds.has(r.inscricaoId)),
-    [sortedRecords, excludedIds]
+    () => allRecords.filter((r: RankingRecord) => excludedIds.has(r.inscricaoId)),
+    [allRecords, excludedIds]
   );
 
-  // Chart data – top 15
+  // Only show people who were present on dinâmica day in chart
   const chartData = useMemo(() => {
-    return visibleRecords.slice(0, 15).map((r, i) => ({
-      name:
-        r.nome.length > 14
-          ? r.nome.slice(0, 14) + "…"
-          : r.nome,
-      fullName: r.nome,
-      dinamica: r.tempoDinamicaMinutos,
-      total: r.tempoTotalMinutos,
-      rank: i + 1,
-    }));
+    return visibleRecords
+      .filter((r: RankingRecord) => r.presenteNaDinamica)
+      .slice(0, 15)
+      .map((r: RankingRecord) => ({
+        name: r.nome.length > 14 ? r.nome.slice(0, 14) + "…" : r.nome,
+        fullName: r.nome,
+        tempoDia: r.tempoTotalDiaMinutos,
+        dinamica: r.tempoDinamicaDiaMinutos,
+      }));
   }, [visibleRecords]);
 
   const selectedLabel =
@@ -191,10 +188,16 @@ export default function RankingClient({ trainings }: RankingClientProps) {
         <div>
           <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
             <Trophy className="h-6 w-6 text-amber-500" />
-            Ranking de Presença
+            Ranking de Presença na Dinâmica
           </h1>
           <p className="text-sm text-neutral-500">
-            Classificação principal por tempo na <strong>dinâmica</strong> do encontro.
+            Classificação por <strong>quem esteve presente no dia da dinâmica</strong>.
+            {dinamicaDayLabel && (
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
+                <Info className="h-3 w-3" />
+                Dinâmica: {dinamicaDayLabel}
+              </span>
+            )}
           </p>
         </div>
         <button
@@ -212,7 +215,8 @@ export default function RankingClient({ trainings }: RankingClientProps) {
           Ranking de Presença na Dinâmica
         </h1>
         <p className="text-sm text-neutral-500">
-          {selectedLabel} — Gerado em{" "}
+          {selectedLabel}
+          {dinamicaDayLabel ? ` — Dinâmica: ${dinamicaDayLabel}` : ""} — Gerado em{" "}
           {new Date().toLocaleDateString("pt-BR")} às{" "}
           {new Date().toLocaleTimeString("pt-BR")}
         </p>
@@ -220,7 +224,6 @@ export default function RankingClient({ trainings }: RankingClientProps) {
 
       {/* Filters row */}
       <div className="flex flex-wrap items-center gap-4 print:hidden">
-        {/* Training picker */}
         <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
           <Calendar className="h-4 w-4" />
           Treinamento:
@@ -239,37 +242,6 @@ export default function RankingClient({ trainings }: RankingClientProps) {
               </option>
             ))}
         </select>
-
-        {/* Sort mode */}
-        {selectedTraining && (
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-xs font-medium text-neutral-500 uppercase tracking-wide">
-              Ordenar por:
-            </span>
-            <button
-              onClick={() => setSortMode("dinamica")}
-              className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                sortMode === "dinamica"
-                  ? "bg-amber-100 text-amber-800 ring-1 ring-amber-300"
-                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-              }`}
-            >
-              <Timer className="h-3.5 w-3.5" />
-              Dinâmica
-            </button>
-            <button
-              onClick={() => setSortMode("total")}
-              className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
-                sortMode === "total"
-                  ? "bg-cyan-100 text-cyan-800 ring-1 ring-cyan-300"
-                  : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
-              }`}
-            >
-              <Clock className="h-3.5 w-3.5" />
-              Tempo Total
-            </button>
-          </div>
-        )}
       </div>
 
       {/* No training selected */}
@@ -295,14 +267,14 @@ export default function RankingClient({ trainings }: RankingClientProps) {
             <Card
               icon={<Users className="h-5 w-5 text-cyan-600" />}
               bg="bg-cyan-100"
-              label="Total Participantes"
+              label="Total c/ Presença"
               value={allRecords.length}
             />
             <Card
-              icon={<Medal className="h-5 w-5 text-amber-600" />}
-              bg="bg-amber-100"
-              label="No Ranking"
-              value={visibleRecords.length}
+              icon={<CheckCircle className="h-5 w-5 text-emerald-600" />}
+              bg="bg-emerald-100"
+              label="Presentes Dinâmica"
+              value={totalPresentesDinamica - excludedRecords.filter((r: RankingRecord) => r.presenteNaDinamica).length}
             />
             <Card
               icon={<EyeOff className="h-5 w-5 text-red-500" />}
@@ -311,28 +283,32 @@ export default function RankingClient({ trainings }: RankingClientProps) {
               value={excludedIds.size}
             />
             <Card
-              icon={<Timer className="h-5 w-5 text-emerald-600" />}
-              bg="bg-emerald-100"
-              label="Média Dinâmica"
+              icon={<Timer className="h-5 w-5 text-amber-600" />}
+              bg="bg-amber-100"
+              label={dinamicaDayLabel || "Dia da Dinâmica"}
               value={
-                visibleRecords.length > 0
-                  ? formatMinutes(
-                      Math.round(
-                        visibleRecords.reduce((s, r) => s + r.tempoDinamicaMinutos, 0) /
-                          visibleRecords.length
-                      )
-                    )
-                  : "—"
+                (() => {
+                  const presentesDinamica = visibleRecords.filter((r: RankingRecord) => r.presenteNaDinamica);
+                  if (presentesDinamica.length === 0) return "—";
+                  const avg = Math.round(
+                    presentesDinamica.reduce((s: number, r: RankingRecord) => s + r.tempoTotalDiaMinutos, 0) /
+                      presentesDinamica.length
+                  );
+                  return `${formatMinutes(avg)} média`;
+                })()
               }
             />
           </div>
 
-          {/* Chart */}
+          {/* Chart – Top 15 presentes no dia da dinâmica */}
           {chartData.length > 0 && (
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
               <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-neutral-900">
                 <BarChart3 className="h-5 w-5 text-amber-500" />
-                Top 15 – {sortMode === "dinamica" ? "Presença na Dinâmica" : "Tempo Total"}
+                Top 15 – Presença no Dia da Dinâmica
+                {dinamicaDayLabel && (
+                  <span className="text-xs font-normal text-neutral-400">({dinamicaDayLabel})</span>
+                )}
               </h3>
               <div className="h-[420px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -340,7 +316,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis
                       type="number"
-                      tickFormatter={(v) => formatMinutes(v)}
+                      tickFormatter={(v: number) => formatMinutes(v)}
                     />
                     <YAxis
                       dataKey="name"
@@ -351,22 +327,22 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                     <Tooltip
                       formatter={(value: number, name: string) => [
                         formatMinutes(value),
-                        name === "dinamica" ? "Dinâmica" : "Tempo Total",
+                        name === "tempoDia" ? "Tempo no Dia" : "Tempo na Dinâmica",
                       ]}
-                      labelFormatter={(_label, payload) =>
+                      labelFormatter={(_label: string, payload: Array<{ payload?: { fullName?: string } }>) =>
                         payload?.[0]?.payload?.fullName || _label
                       }
                     />
                     <Bar
-                      dataKey="dinamica"
-                      fill="#F59E0B"
-                      name="Dinâmica"
+                      dataKey="tempoDia"
+                      fill="#2DBDC2"
+                      name="Tempo no Dia"
                       radius={[0, 4, 4, 0]}
                     />
                     <Bar
-                      dataKey="total"
-                      fill="#2DBDC2"
-                      name="Tempo Total"
+                      dataKey="dinamica"
+                      fill="#F59E0B"
+                      name="Tempo na Dinâmica"
                       radius={[0, 4, 4, 0]}
                     />
                   </BarChart>
@@ -443,7 +419,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
               <div className="border-b border-neutral-200 px-6 py-4 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-neutral-900 flex items-center gap-2">
                   <Trophy className="h-5 w-5 text-amber-500" />
-                  Ranking {sortMode === "dinamica" ? "por Dinâmica" : "por Tempo Total"} – {selectedLabel}
+                  Ranking por Presença na Dinâmica – {selectedLabel}
                 </h3>
                 <span className="text-xs text-neutral-500">
                   {visibleRecords.length} participante{visibleRecords.length !== 1 ? "s" : ""}
@@ -463,13 +439,16 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                         Recrutador
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-amber-600">
-                        Dinâmica
+                        Presente Dinâmica
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                        Tempo Total
+                        Tempo no Dia
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500 hidden md:table-cell">
-                        % Dinâmica
+                        Tempo Dinâmica
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500 hidden lg:table-cell">
+                        Tempo Total Geral
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500 print:hidden">
                         Ações
@@ -479,18 +458,22 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                   <tbody className="divide-y divide-neutral-100">
                     {visibleRecords.map((r, idx) => {
                       const medal =
-                        idx === 0
+                        r.presenteNaDinamica && idx === 0
                           ? "🥇"
-                          : idx === 1
+                          : r.presenteNaDinamica && idx === 1
                           ? "🥈"
-                          : idx === 2
+                          : r.presenteNaDinamica && idx === 2
                           ? "🥉"
                           : null;
                       return (
                         <tr
                           key={r.inscricaoId}
                           className={`hover:bg-neutral-50 transition ${
-                            idx < 3 ? "bg-amber-50/40" : ""
+                            !r.presenteNaDinamica
+                              ? "opacity-50"
+                              : idx < 3
+                              ? "bg-amber-50/40"
+                              : ""
                           }`}
                         >
                           <td className="px-4 py-3 text-sm">
@@ -529,31 +512,42 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                             )}
                           </td>
                           <td className="px-4 py-3 text-center">
+                            {r.presenteNaDinamica ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-700">
+                                <CheckCircle className="h-3.5 w-3.5" />
+                                Sim
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-0.5 text-xs font-medium text-neutral-500">
+                                <XCircle className="h-3.5 w-3.5" />
+                                Não
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-center">
                             <span
                               className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                                r.tempoDinamicaMinutos > 0
+                                r.tempoTotalDiaMinutos > 0
+                                  ? "bg-cyan-100 text-cyan-800"
+                                  : "bg-neutral-100 text-neutral-500"
+                              }`}
+                            >
+                              {formatMinutes(r.tempoTotalDiaMinutos)}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center hidden md:table-cell">
+                            <span
+                              className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                                r.tempoDinamicaDiaMinutos > 0
                                   ? "bg-amber-100 text-amber-800"
                                   : "bg-neutral-100 text-neutral-500"
                               }`}
                             >
-                              {formatMinutes(r.tempoDinamicaMinutos)}
+                              {formatMinutes(r.tempoDinamicaDiaMinutos)}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-center text-sm text-neutral-700">
-                            {formatMinutes(r.tempoTotalMinutos)}
-                          </td>
-                          <td className="px-4 py-3 text-center hidden md:table-cell">
-                            <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                                r.percentualDinamica >= 80
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : r.percentualDinamica >= 50
-                                  ? "bg-amber-100 text-amber-700"
-                                  : "bg-neutral-100 text-neutral-600"
-                              }`}
-                            >
-                              {r.percentualDinamica}%
-                            </span>
+                          <td className="px-4 py-3 text-center text-sm text-neutral-700 hidden lg:table-cell">
+                            {formatMinutes(r.tempoTotalGeralMinutos)}
                           </td>
                           <td className="px-4 py-3 text-center print:hidden">
                             <button
