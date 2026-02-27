@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { AnamneseResposta } from "@/lib/anamnese";
+import { buildAutoTrainingLabel, formatTrainingDateLabel } from "@/lib/trainings";
 
 interface RecruiterOption {
   code: string;
@@ -79,6 +80,79 @@ function formatPresenceTime(minutes: number): string {
   return mins > 0 ? `${hours}h ${mins}min` : `${hours}h`;
 }
 
+/** Returns true when the training ID is an ISO date (Encontro Online). */
+function isEncontroOnline(treinamentoId: string | null | undefined): boolean {
+  if (!treinamentoId) return false;
+  return formatTrainingDateLabel(treinamentoId) !== null;
+}
+
+interface AutoTag {
+  emoji: string;
+  label: string;
+  color: string; // tailwind bg / text classes
+}
+
+/** Build the list of auto-generated tags for a lead. */
+function buildAutoTags(inscricao: InscricaoItem): AutoTag[] {
+  const tags: AutoTag[] = [];
+  const tid = inscricao.treinamentoId;
+
+  // Training enrollment tag
+  if (tid) {
+    const trainingLabel = buildAutoTrainingLabel(tid);
+    tags.push({
+      emoji: "📝",
+      label: `Inscrito ${trainingLabel}`,
+      color: "bg-blue-100 text-blue-800",
+    });
+  }
+
+  // Presence tags (only relevant for Encontro Online)
+  if (tid && isEncontroOnline(tid)) {
+    const dateFormatted = formatTrainingDateLabel(tid);
+    if (inscricao.presencaValidada) {
+      if (inscricao.presencaAprovada) {
+        tags.push({
+          emoji: "✅",
+          label: `Participou Encontro ${dateFormatted}`,
+          color: "bg-emerald-100 text-emerald-800",
+        });
+      } else {
+        tags.push({
+          emoji: "❌",
+          label: `Não participou Encontro ${dateFormatted}`,
+          color: "bg-red-100 text-red-800",
+        });
+      }
+    }
+  }
+
+  // Status tags
+  switch (inscricao.status) {
+    case "aprovado":
+      tags.push({ emoji: "🟢", label: "Aprovado", color: "bg-emerald-100 text-emerald-800" });
+      break;
+    case "rejeitado":
+      tags.push({ emoji: "🔴", label: "Rejeitado", color: "bg-rose-100 text-rose-700" });
+      break;
+    case "aguardando":
+      tags.push({ emoji: "🟡", label: "Aguardando", color: "bg-amber-100 text-amber-700" });
+      break;
+  }
+
+  // Cluster tag
+  if (inscricao.tipo === "recrutador") {
+    tags.push({ emoji: "👥", label: "Cluster", color: "bg-purple-100 text-purple-800" });
+  }
+
+  // WhatsApp contacted tag
+  if (inscricao.statusWhatsappContacted) {
+    tags.push({ emoji: "📱", label: "WhatsApp enviado", color: "bg-green-100 text-green-800" });
+  }
+
+  return tags;
+}
+
 export default function InscricaoDetails({
   inscricao,
   onClose,
@@ -100,6 +174,8 @@ export default function InscricaoDetails({
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [anamneses, setAnamneses] = useState<AnamneseResposta[]>([]);
   const [isLoadingAnamnese, setIsLoadingAnamnese] = useState(false);
+  const [starsHover, setStarsHover] = useState(0);
+  const [starsSaving, setStarsSaving] = useState(false);
   const recruiterFieldId = useId();
 
   useEffect(() => {
@@ -218,6 +294,16 @@ export default function InscricaoDetails({
         return { label: "Aguardando", className: "bg-amber-100 text-amber-700" };
     }
   }, [inscricao]);
+
+  const autoTags = useMemo(() => {
+    if (!inscricao) return [];
+    return buildAutoTags(inscricao);
+  }, [inscricao]);
+
+  const isEncontro = useMemo(
+    () => isEncontroOnline(inscricao?.treinamentoId),
+    [inscricao?.treinamentoId],
+  );
 
   if (!inscricao) {
     return null;
@@ -446,6 +532,34 @@ export default function InscricaoDetails({
       setErrorMessage("Erro inesperado ao salvar a anotação.");
     } finally {
       setIsSavingNote(false);
+    }
+  }
+
+  async function handleStarClick(value: number) {
+    if (!inscricao || starsSaving) return;
+    // If clicking the same star, toggle it off
+    const nextValue = inscricao.stars === value ? null : value;
+    setStarsSaving(true);
+    try {
+      const response = await fetch(`/api/inscricoes/${inscricao.id}/stars`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stars: nextValue ?? 0 }),
+      });
+      if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        setErrorMessage(data?.error ?? "Erro ao salvar avaliação.");
+        return;
+      }
+      const data = (await response.json()) as { inscricao?: InscricaoItem };
+      if (data.inscricao) {
+        onUpdate?.(data.inscricao);
+      }
+    } catch (error) {
+      console.error("Failed to save stars", error);
+      setErrorMessage("Erro inesperado ao salvar avaliação.");
+    } finally {
+      setStarsSaving(false);
     }
   }
 
@@ -763,8 +877,66 @@ export default function InscricaoDetails({
             </div>
           )}
 
-          {/* Seção de Presença - aparece quando a presença foi validada */}
-          {inscricao.presencaValidada && (
+          {/* Etiquetas automáticas */}
+          {autoTags.length > 0 && (
+            <section className="space-y-2 rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+              <header className="flex items-center gap-2">
+                <span className="text-lg">🏷️</span>
+                <h3 className="text-sm font-bold text-neutral-700">Etiquetas</h3>
+              </header>
+              <div className="flex flex-wrap gap-2">
+                {autoTags.map((tag) => (
+                  <span
+                    key={tag.label}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${tag.color}`}
+                  >
+                    <span>{tag.emoji}</span>
+                    {tag.label}
+                  </span>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Avaliação por estrelas (temperatura do lead) */}
+          <section className="flex items-center gap-3 rounded-xl border border-neutral-200 bg-white p-4 shadow-sm">
+            <span className="text-lg">⭐</span>
+            <h3 className="text-sm font-bold text-neutral-700">Temperatura</h3>
+            <div
+              className="ml-auto flex gap-1"
+              onMouseLeave={() => setStarsHover(0)}
+            >
+              {[1, 2, 3, 4, 5].map((star) => {
+                const currentStars = inscricao.stars ?? 0;
+                const filled = starsHover > 0 ? star <= starsHover : star <= currentStars;
+                return (
+                  <button
+                    key={star}
+                    type="button"
+                    disabled={starsSaving}
+                    onMouseEnter={() => setStarsHover(star)}
+                    onClick={() => handleStarClick(star)}
+                    className={`text-2xl transition-transform hover:scale-110 disabled:opacity-50 ${
+                      filled ? "text-amber-400 drop-shadow-sm" : "text-neutral-300"
+                    }`}
+                    title={`${star} estrela${star > 1 ? "s" : ""}`}
+                  >
+                    ★
+                  </button>
+                );
+              })}
+            </div>
+            {inscricao.stars ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                {inscricao.stars}/5
+              </span>
+            ) : (
+              <span className="text-xs text-neutral-400 italic">Sem avaliação</span>
+            )}
+          </section>
+
+          {/* Seção de Presença - aparece quando a presença foi validada (apenas Encontro Online) */}
+          {inscricao.presencaValidada && isEncontro && (
             <section className="space-y-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-cyan-100/50 p-4 shadow-sm">
               <header className="flex items-center justify-between">
                 <div className="flex items-center gap-2">

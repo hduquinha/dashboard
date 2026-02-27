@@ -64,6 +64,8 @@ export interface InscricaoItem {
   presencaTempoDinamicaMinutos?: number | null;
   presencaPercentualDinamica?: number | null;
   presencaValidadaEm?: string | null;
+  // Star rating (1-5 lead temperature)
+  stars?: number | null;
 }
 
 export interface ListInscricoesResult {

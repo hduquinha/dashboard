@@ -440,6 +440,11 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
         ? parseInt(payload.presenca_percentual_dinamica, 10) || null 
         : null,
     presencaValidadaEm: typeof payload.presenca_validada_em === "string" ? payload.presenca_validada_em : null,
+    stars: typeof payload.dashboard_stars === "number"
+      ? payload.dashboard_stars
+      : typeof payload.dashboard_stars === "string"
+        ? parseInt(payload.dashboard_stars as string, 10) || null
+        : null,
   };
 }
 
@@ -1098,6 +1103,56 @@ export async function setInscricaoStatus(
     throw new Error("Inscrição não encontrada após atualização");
   }
 
+  return updated;
+}
+
+/**
+ * Set the star rating (1-5) for a lead.
+ * Pass `null` to clear the rating.
+ */
+export async function setInscricaoStars(
+  id: number,
+  stars: number | null,
+): Promise<InscricaoItem> {
+  if (stars !== null && (!Number.isInteger(stars) || stars < 1 || stars > 5)) {
+    throw new Error("A avaliação deve ser um número inteiro entre 1 e 5");
+  }
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
+      `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (rows.length === 0) {
+      throw new Error("Inscrição não encontrada");
+    }
+
+    const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+    const nextPayload: Record<string, unknown> = { ...payload };
+    if (stars === null) {
+      delete nextPayload["dashboard_stars"];
+    } else {
+      nextPayload["dashboard_stars"] = stars;
+    }
+
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [id, JSON.stringify(nextPayload)],
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const updated = await getInscricaoById(id);
+  if (!updated) {
+    throw new Error("Inscrição não encontrada após atualização");
+  }
   return updated;
 }
 

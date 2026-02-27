@@ -40,6 +40,7 @@ const COLUMNS: ColumnConfig[] = [
   { key: CADASTRO_COLUMN_KEY, label: 'Cadastro', sortable: false, align: 'center' },
   { key: 'treinamento', label: 'Treinamento', sortable: true },
   { key: 'recrutador', label: 'Indicador', sortable: true },
+  { key: 'stars' as ColumnKey, label: 'Temp', sortable: false, align: 'center' },
   { key: 'presenca' as ColumnKey, label: 'Presença', sortable: false, align: 'center' },
 ];
 
@@ -307,6 +308,17 @@ export default function InscricoesTable({
                         </span>
                       ) : null}
                     </div>
+                  </td>
+                  <td className="hidden px-3 py-3 text-center text-sm md:table-cell">
+                    {inscricao.stars ? (
+                      <span className="inline-flex items-center gap-0.5 text-amber-400" title={`${inscricao.stars}/5 estrelas`}>
+                        {Array.from({ length: 5 }, (_, i) => (
+                          <span key={i} className={i < (inscricao.stars ?? 0) ? 'text-amber-400' : 'text-neutral-200'}>★</span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-neutral-400">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-3 text-center text-sm">
                     {inscricao.presencaValidada ? (
