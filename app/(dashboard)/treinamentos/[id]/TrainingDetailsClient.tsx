@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -23,6 +23,11 @@ import {
   Loader2,
   FileDown,
   FileText,
+  EyeOff,
+  ArrowUp,
+  ArrowDown,
+  X,
+  SlidersHorizontal,
 } from "lucide-react";
 
 interface RecruiterRanking {
@@ -79,6 +84,31 @@ interface PresenceRanking {
   totalAprovados: number;
 }
 
+type RankingCriterionId = 'presencaDia1' | 'presencaGeral' | 'presencaDia2' | 'inscritos';
+
+interface ClusterRankingEntry {
+  recrutadorCodigo: string;
+  recrutadorNome: string;
+  presencaDia1: number;
+  presencaGeral: number;
+  presencaDia2: number;
+  inscritos: number;
+}
+
+const CRITERIA_LABELS: Record<RankingCriterionId, string> = {
+  presencaDia1: 'Presença Dia 1',
+  presencaGeral: 'Presença Geral',
+  presencaDia2: 'Presença Dia 2',
+  inscritos: 'Inscritos',
+};
+
+const CRITERIA_COLORS: Record<RankingCriterionId, string> = {
+  presencaDia1: 'bg-blue-50 text-blue-700',
+  presencaGeral: 'bg-emerald-50 text-emerald-700',
+  presencaDia2: 'bg-violet-50 text-violet-700',
+  inscritos: 'bg-cyan-50 text-cyan-700',
+};
+
 type PresenceTab = "ranking" | "detalhes" | "nao-associados" | "relatorio";
 
 function formatMinutes(minutes: number): string {
@@ -107,6 +137,12 @@ export default function TrainingDetailsClient({
   const [resetting, setResetting] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState<false | "all" | 1 | 2>(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [criteriaOrder, setCriteriaOrder] = useState<RankingCriterionId[]>([
+    'presencaDia1', 'presencaGeral', 'presencaDia2', 'inscritos'
+  ]);
+  const [excludedClusters, setExcludedClusters] = useState<Set<string>>(new Set());
+  const [showCriteriaConfig, setShowCriteriaConfig] = useState(false);
+  const [showExcludeConfig, setShowExcludeConfig] = useState(false);
 
   // Handler para gerar PDF
   const handlePrintPdf = (section: "detalhes" | "nao-associados" | "all") => {
@@ -300,6 +336,95 @@ export default function TrainingDetailsClient({
       return b.totalPresentes - a.totalPresentes;
     });
   }, [presences]);
+
+  // All clusters for exclude selector
+  const allClusters = useMemo(() => {
+    const map = new Map<string, string>();
+    ranking.forEach(r => map.set(r.recrutadorCodigo, r.recrutadorNome));
+    presences.forEach(p => {
+      const code = p.recrutadorCodigo ?? "00";
+      if (!map.has(code)) map.set(code, p.recrutadorNome ?? "Sem Recrutador");
+    });
+    return Array.from(map.entries())
+      .map(([code, name]) => ({ code, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [ranking, presences]);
+
+  // Cluster ranking with 4 criteria
+  const clusterRanking = useMemo(() => {
+    const map = new Map<string, ClusterRankingEntry>();
+
+    // From ranking data (inscritos)
+    ranking.forEach(r => {
+      map.set(r.recrutadorCodigo, {
+        recrutadorCodigo: r.recrutadorCodigo,
+        recrutadorNome: r.recrutadorNome,
+        presencaDia1: 0,
+        presencaGeral: 0,
+        presencaDia2: 0,
+        inscritos: r.totalInscritos,
+      });
+    });
+
+    // From presences
+    presences.forEach(p => {
+      const code = p.recrutadorCodigo ?? "00";
+      const name = p.recrutadorNome ?? "Sem Recrutador";
+
+      if (!map.has(code)) {
+        map.set(code, {
+          recrutadorCodigo: code,
+          recrutadorNome: name,
+          presencaDia1: 0,
+          presencaGeral: 0,
+          presencaDia2: 0,
+          inscritos: 0,
+        });
+      }
+
+      const entry = map.get(code)!;
+      if (p.dia1Aprovado === true) entry.presencaDia1++;
+      if (p.dia2Aprovado === true) entry.presencaDia2++;
+      if (p.aprovado) entry.presencaGeral++;
+    });
+
+    // Filter excluded
+    const entries = Array.from(map.values()).filter(
+      e => !excludedClusters.has(e.recrutadorCodigo)
+    );
+
+    // Sort by criteria order
+    entries.sort((a, b) => {
+      for (const criterion of criteriaOrder) {
+        const diff = b[criterion] - a[criterion];
+        if (diff !== 0) return diff;
+      }
+      return 0;
+    });
+
+    return entries;
+  }, [ranking, presences, excludedClusters, criteriaOrder]);
+
+  // Move criterion up/down
+  const moveCriterion = useCallback((index: number, direction: -1 | 1) => {
+    setCriteriaOrder(prev => {
+      const next = [...prev];
+      const newIndex = index + direction;
+      if (newIndex < 0 || newIndex >= next.length) return prev;
+      [next[index], next[newIndex]] = [next[newIndex], next[index]];
+      return next;
+    });
+  }, []);
+
+  // Toggle exclude cluster
+  const toggleExcludeCluster = useCallback((code: string) => {
+    setExcludedClusters(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  }, []);
 
   // Medalha para os 3 primeiros
   const getMedalColor = (index: number): string => {
@@ -588,197 +713,252 @@ export default function TrainingDetailsClient({
       {/* =================== TAB: Rankings =================== */}
       {activeTab === "ranking" && (
         <>
-          {/* Ranking de Recrutadores (por Inscritos) */}
-      <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
-          <Trophy className="h-5 w-5 text-yellow-500" />
-          <h2 className="text-lg font-semibold text-neutral-900">
-            Ranking de Inscritos
-          </h2>
-          <span className="text-sm text-neutral-500">(ordenado por aprovados)</span>
-        </div>
+          {/* Toolbar: ordenação e exclusão */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => { setShowCriteriaConfig(!showCriteriaConfig); setShowExcludeConfig(false); }}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition ${
+                showCriteriaConfig
+                  ? "border-[#2DBDC2] bg-[#2DBDC2]/10 text-[#2DBDC2]"
+                  : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
+              }`}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Ordem de Prioridade
+            </button>
 
-        {sortedRanking.length === 0 ? (
-          <div className="py-12 text-center">
-            <Users className="mx-auto h-12 w-12 text-neutral-300" />
-            <h3 className="mt-4 text-lg font-medium text-neutral-900">
-              Nenhum recrutador encontrado
-            </h3>
-            <p className="mt-2 text-sm text-neutral-500">
-              Ainda não há inscritos neste treinamento.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-neutral-100">
-            {sortedRanking.map((r, index) => (
-              <div
-                key={r.recrutadorCodigo}
-                className="flex items-center gap-4 px-6 py-4 transition hover:bg-neutral-50"
+            <button
+              onClick={() => { setShowExcludeConfig(!showExcludeConfig); setShowCriteriaConfig(false); }}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition ${
+                showExcludeConfig
+                  ? "border-red-300 bg-red-50 text-red-600"
+                  : excludedClusters.size > 0
+                    ? "border-red-200 bg-red-50 text-red-600"
+                    : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
+              }`}
+            >
+              <EyeOff className="h-4 w-4" />
+              Excluir Clusters
+              {excludedClusters.size > 0 && (
+                <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-bold text-red-700">
+                  {excludedClusters.size}
+                </span>
+              )}
+            </button>
+
+            {excludedClusters.size > 0 && (
+              <button
+                onClick={() => setExcludedClusters(new Set())}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-neutral-200 px-3 py-2 text-xs font-medium text-neutral-600 hover:bg-neutral-50 transition"
               >
-                {/* Posição */}
-                <div className="flex h-10 w-10 items-center justify-center">
-                  {index < 3 ? (
-                    <Medal className={`h-6 w-6 ${getMedalColor(index)}`} />
-                  ) : (
-                    <span className="text-lg font-bold text-neutral-400">
-                      {index + 1}º
+                <X className="h-3.5 w-3.5" />
+                Limpar exclusões
+              </button>
+            )}
+          </div>
+
+          {/* Priority config panel */}
+          {showCriteriaConfig && (
+            <div className="rounded-2xl border border-[#2DBDC2]/30 bg-[#2DBDC2]/5 p-4">
+              <h4 className="mb-3 text-sm font-semibold text-neutral-700 flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-[#2DBDC2]" />
+                Ordem de Prioridade do Ranking
+              </h4>
+              <div className="space-y-2">
+                {criteriaOrder.map((criterion, idx) => (
+                  <div
+                    key={criterion}
+                    className="flex items-center gap-3 rounded-xl bg-white px-4 py-2.5 border border-neutral-200 shadow-sm"
+                  >
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#2DBDC2]/10 text-xs font-bold text-[#2DBDC2]">
+                      {idx + 1}
                     </span>
-                  )}
-                </div>
-
-                {/* Nome */}
-                <div className="flex-1">
-                  <p className="font-medium text-neutral-900">{r.recrutadorNome}</p>
-                  <p className="text-xs text-neutral-500">
-                    Código: {r.recrutadorCodigo}
-                  </p>
-                </div>
-
-                {/* Estatísticas */}
-                <div className="flex items-center gap-6 text-sm">
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-emerald-600">
-                      {r.totalAprovados}
-                    </p>
-                    <p className="text-xs text-neutral-500">Aprovados</p>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-neutral-900">
-                      {r.totalInscritos}
-                    </p>
-                    <p className="text-xs text-neutral-500">Inscritos</p>
-                  </div>
-                  <div className="text-center">
-                    <p
-                      className={`text-lg font-bold ${
-                        r.percentualAprovacao >= 70
-                          ? "text-emerald-600"
-                          : r.percentualAprovacao >= 40
-                            ? "text-amber-500"
-                            : "text-red-500"
-                      }`}
-                    >
-                      {r.percentualAprovacao}%
-                    </p>
-                    <p className="text-xs text-neutral-500">Taxa</p>
-                  </div>
-                </div>
-
-                {/* Link para detalhes */}
-                <Link
-                  href={`/recrutadores/${r.recrutadorCodigo}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-200 transition hover:bg-neutral-100"
-                >
-                  <ChevronRight className="h-4 w-4 text-neutral-500" />
-                </Link>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Ranking de Presenças (participantes do encontro) */}
-      <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
-        <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
-          <Calendar className="h-5 w-5 text-emerald-500" />
-          <h2 className="text-lg font-semibold text-neutral-900">
-            Ranking de Presenças
-          </h2>
-          <span className="text-sm text-neutral-500">(quem participou do encontro)</span>
-        </div>
-
-        {presenceRanking.length === 0 ? (
-          <div className="py-12 text-center">
-            <UserCheck className="mx-auto h-12 w-12 text-neutral-300" />
-            <h3 className="mt-4 text-lg font-medium text-neutral-900">
-              Nenhuma presença confirmada
-            </h3>
-            <p className="mt-2 text-sm text-neutral-500">
-              Ainda não há presenças validadas neste treinamento.
-            </p>
-          </div>
-        ) : (
-          <div className="divide-y divide-neutral-100">
-            {presenceRanking.map((r, index) => (
-              <div
-                key={r.recrutadorCodigo}
-                className="flex items-center gap-4 px-6 py-4 transition hover:bg-neutral-50"
-              >
-                {/* Posição */}
-                <div className="flex h-10 w-10 items-center justify-center">
-                  {index < 3 ? (
-                    <Medal className={`h-6 w-6 ${getMedalColor(index)}`} />
-                  ) : (
-                    <span className="text-lg font-bold text-neutral-400">
-                      {index + 1}º
+                    <span className="flex-1 text-sm font-medium text-neutral-800">
+                      {CRITERIA_LABELS[criterion]}
                     </span>
-                  )}
-                </div>
-
-                {/* Nome */}
-                <div className="flex-1">
-                  <p className="font-medium text-neutral-900">{r.recrutadorNome}</p>
-                  <p className="text-xs text-neutral-500">
-                    Código: {r.recrutadorCodigo}
-                  </p>
-                </div>
-
-                {/* Estatísticas */}
-                <div className="flex items-center gap-6 text-sm">
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-emerald-600">
-                      {r.totalAprovados}
-                    </p>
-                    <p className="text-xs text-neutral-500">Aprovados</p>
+                    {idx === 0 && (
+                      <span className="rounded-full bg-[#2DBDC2]/10 px-2 py-0.5 text-[10px] font-bold text-[#2DBDC2] uppercase tracking-wider">
+                        Principal
+                      </span>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => moveCriterion(idx, -1)}
+                        disabled={idx === 0}
+                        className="rounded-lg p-1.5 hover:bg-neutral-100 disabled:opacity-30 transition"
+                      >
+                        <ArrowUp className="h-4 w-4 text-neutral-500" />
+                      </button>
+                      <button
+                        onClick={() => moveCriterion(idx, 1)}
+                        disabled={idx === criteriaOrder.length - 1}
+                        className="rounded-lg p-1.5 hover:bg-neutral-100 disabled:opacity-30 transition"
+                      >
+                        <ArrowDown className="h-4 w-4 text-neutral-500" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-neutral-900">
-                      {r.totalPresentes}
-                    </p>
-                    <p className="text-xs text-neutral-500">Presentes</p>
-                  </div>
-                </div>
-
-                {/* Link para detalhes */}
-                <Link
-                  href={`/recrutadores/${r.recrutadorCodigo}`}
-                  className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-200 transition hover:bg-neutral-100"
-                >
-                  <ChevronRight className="h-4 w-4 text-neutral-500" />
-                </Link>
+                ))}
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              <p className="mt-3 text-xs text-neutral-500">
+                O desempate segue do 2º ao 4º critério na ordem definida acima.
+              </p>
+            </div>
+          )}
 
-      {/* Links para visualização no CRM */}
-      <div className="flex flex-col gap-3 sm:flex-row">
-        <Link
-          href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}`}
-          className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
-        >
-          <div className="flex items-center gap-3">
-            <Users className="h-5 w-5 text-cyan-500" />
-            <span className="font-medium text-neutral-900">
-              Ver todos os inscritos
-            </span>
+          {/* Exclude clusters panel */}
+          {showExcludeConfig && (
+            <div className="rounded-2xl border border-red-200 bg-red-50/50 p-4">
+              <h4 className="mb-3 text-sm font-semibold text-red-700 flex items-center gap-2">
+                <EyeOff className="h-4 w-4" />
+                Selecione clusters para excluir do ranking
+              </h4>
+              <div className="flex flex-wrap gap-2">
+                {allClusters.map(c => (
+                  <button
+                    key={c.code}
+                    onClick={() => toggleExcludeCluster(c.code)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+                      excludedClusters.has(c.code)
+                        ? "bg-red-200 text-red-800 ring-1 ring-red-300"
+                        : "bg-white text-neutral-700 ring-1 ring-neutral-200 hover:bg-neutral-50"
+                    }`}
+                  >
+                    {excludedClusters.has(c.code) && <X className="h-3 w-3" />}
+                    {c.name}
+                    <span className="text-neutral-400">({c.code})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Cluster Ranking Table */}
+          <div className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+            <div className="flex items-center gap-3 border-b border-neutral-100 px-6 py-4">
+              <Trophy className="h-5 w-5 text-yellow-500" />
+              <h2 className="text-lg font-semibold text-neutral-900">
+                Ranking de Clusters
+              </h2>
+              <span className="text-sm text-neutral-500">
+                ({clusterRanking.length} cluster{clusterRanking.length !== 1 ? "s" : ""})
+              </span>
+            </div>
+
+            {clusterRanking.length === 0 ? (
+              <div className="py-12 text-center">
+                <Users className="mx-auto h-12 w-12 text-neutral-300" />
+                <h3 className="mt-4 text-lg font-medium text-neutral-900">
+                  Nenhum cluster encontrado
+                </h3>
+                <p className="mt-2 text-sm text-neutral-500">
+                  Ainda não há dados para este treinamento.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-neutral-50/80">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500 w-14">
+                        #
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                        Cluster
+                      </th>
+                      {criteriaOrder.map((criterion, idx) => (
+                        <th
+                          key={criterion}
+                          className={`px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider ${
+                            idx === 0 ? "text-[#2DBDC2]" : "text-neutral-500"
+                          }`}
+                        >
+                          <div className="flex flex-col items-center gap-0.5">
+                            {idx === 0 && <span className="text-[8px] font-bold text-[#2DBDC2]">★ PRINCIPAL</span>}
+                            {CRITERIA_LABELS[criterion]}
+                          </div>
+                        </th>
+                      ))}
+                      <th className="px-4 py-3 w-12"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100">
+                    {clusterRanking.map((cluster, idx) => (
+                      <tr
+                        key={cluster.recrutadorCodigo}
+                        className={`transition hover:bg-neutral-50 ${
+                          idx < 3 ? "bg-amber-50/30" : ""
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          {idx < 3 ? (
+                            <Medal className={`h-6 w-6 ${getMedalColor(idx)}`} />
+                          ) : (
+                            <span className="text-lg font-bold text-neutral-400">
+                              {idx + 1}º
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-neutral-900">{cluster.recrutadorNome}</p>
+                          <p className="text-xs text-neutral-500">Código: {cluster.recrutadorCodigo}</p>
+                        </td>
+                        {criteriaOrder.map((criterion, cIdx) => (
+                          <td key={criterion} className="px-4 py-3 text-center">
+                            <span
+                              className={`inline-flex rounded-full px-3 py-1 text-sm font-bold ${
+                                cIdx === 0
+                                  ? "bg-[#2DBDC2]/10 text-[#2DBDC2]"
+                                  : CRITERIA_COLORS[criterion]
+                              }`}
+                            >
+                              {cluster[criterion]}
+                            </span>
+                          </td>
+                        ))}
+                        <td className="px-4 py-3 text-center">
+                          <Link
+                            href={`/recrutadores/${cluster.recrutadorCodigo}`}
+                            className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-200 transition hover:bg-neutral-100"
+                          >
+                            <ChevronRight className="h-4 w-4 text-neutral-500" />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-          <ChevronRight className="h-5 w-5 text-neutral-400" />
-        </Link>
-        <Link
-          href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}&presenca=aprovada`}
-          className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
-        >
-          <div className="flex items-center gap-3">
-            <UserCheck className="h-5 w-5 text-emerald-500" />
-            <span className="font-medium text-neutral-900">
-              Ver inscritos presentes
-            </span>
+
+          {/* Links para visualização no CRM */}
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <Link
+              href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}`}
+              className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
+            >
+              <div className="flex items-center gap-3">
+                <Users className="h-5 w-5 text-cyan-500" />
+                <span className="font-medium text-neutral-900">
+                  Ver todos os inscritos
+                </span>
+              </div>
+              <ChevronRight className="h-5 w-5 text-neutral-400" />
+            </Link>
+            <Link
+              href={`/crm?treinamento=${encodeURIComponent(treinamentoId)}&presenca=aprovada`}
+              className="flex flex-1 items-center justify-between rounded-2xl border border-neutral-200 bg-white px-6 py-4 shadow-sm transition hover:border-emerald-300 hover:shadow-md"
+            >
+              <div className="flex items-center gap-3">
+                <UserCheck className="h-5 w-5 text-emerald-500" />
+                <span className="font-medium text-neutral-900">
+                  Ver inscritos presentes
+                </span>
+              </div>
+              <ChevronRight className="h-5 w-5 text-neutral-400" />
+            </Link>
           </div>
-          <ChevronRight className="h-5 w-5 text-neutral-400" />
-        </Link>
-      </div>
         </>
       )}
 
