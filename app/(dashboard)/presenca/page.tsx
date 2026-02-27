@@ -8,7 +8,17 @@ export const metadata: Metadata = {
   description: "Importe o CSV do Zoom, revise participantes, associe a inscrições e confirme.",
 };
 
-export default function PresencaPage() {
+interface PresencaPageProps {
+  searchParams: Promise<{ treinamento?: string }>;
+}
+
+export default async function PresencaPage({ searchParams }: PresencaPageProps) {
+  const params = await searchParams;
+  const treinamento = params.treinamento ?? "";
+  const confirmadosHref = treinamento
+    ? `/presenca/confirmados?treinamento=${encodeURIComponent(treinamento)}`
+    : "/presenca/confirmados";
+
   return (
     <main className="px-4 py-8 sm:px-6 lg:px-10">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
@@ -25,7 +35,7 @@ export default function PresencaPage() {
               </p>
             </div>
             <Link
-              href="/presenca/confirmados"
+              href={confirmadosHref}
               className="flex items-center gap-2 rounded-xl bg-emerald-100 px-4 py-2.5 text-sm font-medium text-emerald-700 transition hover:bg-emerald-200"
             >
               <CheckCircle className="h-4 w-4" />
@@ -35,7 +45,7 @@ export default function PresencaPage() {
           </div>
         </header>
 
-        <PresenceValidationForm />
+        <PresenceValidationForm initialTrainingId={treinamento} />
       </div>
     </main>
   );

@@ -57,7 +57,7 @@ interface ParsedCSVState {
 // COMPONENTE PRINCIPAL
 // ============================================================================
 
-export default function PresenceValidationForm() {
+export default function PresenceValidationForm({ initialTrainingId }: { initialTrainingId?: string }) {
   // Estado de navegação
   const [currentStep, setCurrentStep] = useState<Step>("upload");
   
@@ -752,6 +752,7 @@ export default function PresenceValidationForm() {
           trainings={trainings}
           isLoading={isLoading}
           onSubmit={handleUpload}
+          initialTrainingId={initialTrainingId}
         />
       )}
 
@@ -908,13 +909,15 @@ function UploadStep({
   isLoading, 
   onSubmit,
   forceDay2,
+  initialTrainingId,
 }: { 
   trainings: TrainingOption[];
   isLoading: boolean;
   onSubmit: (formData: FormData) => void;
   forceDay2?: boolean;
+  initialTrainingId?: string;
 }) {
-  const [selectedTrainingId, setSelectedTrainingId] = React.useState("");
+  const [selectedTrainingId, setSelectedTrainingId] = React.useState(initialTrainingId || "");
   const [isTwoDays, setIsTwoDays] = React.useState(forceDay2 ?? false);
   const [currentDay, setCurrentDay] = React.useState<1 | 2>(forceDay2 ? 2 : 1);
   const [dinamicaDays, setDinamicaDays] = React.useState<DinamicaDays>("none");

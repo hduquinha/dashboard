@@ -176,13 +176,15 @@ export default async function TreinamentosPage() {
                     Ver presenças ({training.presentes})
                   </Link>
                 )}
-                <Link
-                  href="/presenca"
-                  className="flex items-center justify-center gap-2 rounded-xl bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 transition hover:bg-violet-100"
-                >
-                  <Upload className="h-4 w-4" />
-                  Validar Presença
-                </Link>
+                {formatTrainingDateLabel(training.id) && (
+                  <Link
+                    href={`/presenca?treinamento=${encodeURIComponent(training.id)}`}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-700 transition hover:bg-violet-100"
+                  >
+                    <Upload className="h-4 w-4" />
+                    Validar Presença
+                  </Link>
+                )}
               </div>
             </div>
           ))
