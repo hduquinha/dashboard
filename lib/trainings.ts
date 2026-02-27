@@ -26,16 +26,59 @@ export function formatTrainingDateLabel(value: string | null | undefined): strin
 }
 
 /**
+ * Try to normalize a free-form Up Day Plus date string into a cleaner format.
+ * Examples:
+ *   "18 e 19/04"     → "18 e 19/04/2026"
+ *   "18 e 19/04/26"  → "18 e 19/04/2026"
+ *   "05/05"          → "05/05/2026"
+ *   "05/05/2026"     → "05/05/2026" (unchanged)
+ */
+function normalizeUpDayDate(id: string): string {
+  const currentYear = new Date().getFullYear();
+
+  // Pattern: "DD e DD/MM" or "DD e DD/MM/YY" or "DD e DD/MM/YYYY"
+  const multiDayMatch = id.match(/^(\d{1,2}\s*e\s*\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+  if (multiDayMatch) {
+    const days = multiDayMatch[1]; // e.g. "18 e 19"
+    const month = multiDayMatch[2].padStart(2, '0');
+    const yearPart = multiDayMatch[3];
+    const year = yearPart
+      ? (yearPart.length <= 2 ? `20${yearPart.padStart(2, '0')}` : yearPart)
+      : String(currentYear);
+    return `${days}/${month}/${year}`;
+  }
+
+  // Pattern: "DD/MM" (single day, no year)
+  const singleNoYear = id.match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (singleNoYear) {
+    const day = singleNoYear[1].padStart(2, '0');
+    const month = singleNoYear[2].padStart(2, '0');
+    return `${day}/${month}/${currentYear}`;
+  }
+
+  // Pattern: "DD/MM/YY" (short year)
+  const shortYear = id.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+  if (shortYear) {
+    const day = shortYear[1].padStart(2, '0');
+    const month = shortYear[2].padStart(2, '0');
+    const year = `20${shortYear[3]}`;
+    return `${day}/${month}/${year}`;
+  }
+
+  return id;
+}
+
+/**
  * Build a user-facing label for a training ID that was not configured in TRAINING_CONFIG.
  * - ISO date IDs (e.g. "2026-03-11T19:00:00-03:00") → "Encontro Online 11/03/2026"
- * - Free-form IDs (e.g. "18 e 19/04")               → "Up Day Plus 18 e 19/04"
+ * - Free-form IDs (e.g. "18 e 19/04")               → "Up Day Plus 18 e 19/04/2026"
  */
 export function buildAutoTrainingLabel(id: string): string {
   const formatted = formatTrainingDateLabel(id);
   if (formatted) {
     return `Encontro Online ${formatted}`;
   }
-  return `Up Day Plus ${id}`;
+  return `Up Day Plus ${normalizeUpDayDate(id)}`;
 }
 
 function parseEntry(value: unknown): TrainingOption | null {

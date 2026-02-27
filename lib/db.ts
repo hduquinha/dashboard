@@ -2084,7 +2084,12 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       last_inscrito: Date | string | null;
     }>(query);
 
-    return rows.map((row) => {
+    return rows
+      .filter((row) => {
+        const id = (row.treinamento_id || "").trim();
+        return id !== "" && id !== "Sem Treinamento";
+      })
+      .map((row) => {
       const treinamentoId = row.treinamento_id || "Sem Treinamento";
       const trainingInfo = getTrainingById(treinamentoId);
       
