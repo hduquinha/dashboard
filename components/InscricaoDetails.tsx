@@ -107,36 +107,55 @@ function buildAutoTags(inscricao: InscricaoItem): AutoTag[] {
     });
   }
 
-  // Presence tags (only relevant for Encontro Online)
-  if (tid && isEncontroOnline(tid)) {
-    const dateFormatted = formatTrainingDateLabel(tid);
-    if (inscricao.presencaValidada) {
+  // Per-day presence tags (only for Encontro Online)
+  if (tid && isEncontroOnline(tid) && inscricao.presencaValidada) {
+    const totalDias = inscricao.presencaTotalDias ?? 1;
+    if (totalDias >= 2) {
+      // Multi-day: tag per day
+      if (inscricao.presencaDia1) {
+        const d = inscricao.presencaDia1;
+        if (d.aprovado) {
+          tags.push({ emoji: "✅", label: "Presente Dia 1", color: "bg-emerald-100 text-emerald-800" });
+        } else {
+          tags.push({ emoji: "⚠️", label: "Insuficiente Dia 1", color: "bg-amber-100 text-amber-700" });
+        }
+        if (d.temDinamica) {
+          tags.push({ emoji: "🎯", label: "Dinâmica Dia 1", color: "bg-cyan-100 text-cyan-800" });
+        }
+      }
+      if (inscricao.presencaDia2) {
+        const d = inscricao.presencaDia2;
+        if (d.aprovado) {
+          tags.push({ emoji: "✅", label: "Presente Dia 2", color: "bg-emerald-100 text-emerald-800" });
+        } else {
+          tags.push({ emoji: "⚠️", label: "Insuficiente Dia 2", color: "bg-amber-100 text-amber-700" });
+        }
+        if (d.temDinamica) {
+          tags.push({ emoji: "🎯", label: "Dinâmica Dia 2", color: "bg-cyan-100 text-cyan-800" });
+        }
+      }
+    } else {
+      // Single-day
       if (inscricao.presencaAprovada) {
-        tags.push({
-          emoji: "✅",
-          label: `Participou Encontro ${dateFormatted}`,
-          color: "bg-emerald-100 text-emerald-800",
-        });
+        tags.push({ emoji: "✅", label: "Presente", color: "bg-emerald-100 text-emerald-800" });
       } else {
-        tags.push({
-          emoji: "❌",
-          label: `Não participou Encontro ${dateFormatted}`,
-          color: "bg-red-100 text-red-800",
-        });
+        tags.push({ emoji: "⚠️", label: "Presença insuficiente", color: "bg-amber-100 text-amber-700" });
+      }
+      const dia = inscricao.presencaDia1 ?? null;
+      const temDinamica = dia?.temDinamica ?? (inscricao.presencaTempoDinamicaMinutos != null && inscricao.presencaTempoDinamicaMinutos > 0);
+      if (temDinamica) {
+        tags.push({ emoji: "🎯", label: "Participou Dinâmica", color: "bg-cyan-100 text-cyan-800" });
       }
     }
   }
 
-  // Status tags
+  // Status tags (without "aguardando")
   switch (inscricao.status) {
     case "aprovado":
       tags.push({ emoji: "🟢", label: "Aprovado", color: "bg-emerald-100 text-emerald-800" });
       break;
     case "rejeitado":
       tags.push({ emoji: "🔴", label: "Rejeitado", color: "bg-rose-100 text-rose-700" });
-      break;
-    case "aguardando":
-      tags.push({ emoji: "🟡", label: "Aguardando", color: "bg-amber-100 text-amber-700" });
       break;
   }
 
@@ -938,56 +957,87 @@ export default function InscricaoDetails({
           {/* Seção de Presença - aparece quando a presença foi validada (apenas Encontro Online) */}
           {inscricao.presencaValidada && isEncontro && (
             <section className="space-y-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-cyan-100/50 p-4 shadow-sm">
-              <header className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">✅</span>
-                  <h3 className="text-sm font-bold text-cyan-900">Presença no Encontro</h3>
-                </div>
-                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${
-                  inscricao.presencaAprovada 
-                    ? "bg-emerald-100 text-emerald-800" 
-                    : "bg-red-100 text-red-800"
-                }`}>
-                  {inscricao.presencaAprovada ? "✓ Aprovado" : "✗ Reprovado"}
-                </span>
+              <header className="flex items-center gap-2">
+                <span className="text-xl">📊</span>
+                <h3 className="text-sm font-bold text-cyan-900">Presença no Encontro</h3>
               </header>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-lg bg-white p-3 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Nome no Zoom</p>
-                  <p className="mt-1 text-sm font-medium text-cyan-900">
-                    {inscricao.presencaParticipanteNome ?? "-"}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-white p-3 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Tempo Total</p>
-                  <p className="mt-1 text-sm font-medium text-cyan-900">
-                    {inscricao.presencaTempoTotalMinutos != null 
-                      ? formatPresenceTime(inscricao.presencaTempoTotalMinutos) 
-                      : "-"}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-white p-3 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Tempo na Dinâmica</p>
-                  <p className="mt-1 text-sm font-medium text-cyan-900">
-                    {inscricao.presencaTempoDinamicaMinutos != null 
-                      ? formatPresenceTime(inscricao.presencaTempoDinamicaMinutos) 
-                      : "-"}
-                    {inscricao.presencaPercentualDinamica != null && (
-                      <span className="ml-1 text-xs text-cyan-600">
-                        ({inscricao.presencaPercentualDinamica}%)
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <div className="rounded-lg bg-white p-3 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-cyan-700">Validado em</p>
-                  <p className="mt-1 text-sm font-medium text-cyan-900">
-                    {inscricao.presencaValidadaEm 
-                      ? formatDateTime(inscricao.presencaValidadaEm) 
-                      : "-"}
-                  </p>
-                </div>
-              </div>
+
+              {(() => {
+                const totalDias = inscricao.presencaTotalDias ?? 1;
+                const days: { label: string; data: typeof inscricao.presencaDia1 }[] = [];
+
+                if (totalDias >= 2) {
+                  if (inscricao.presencaDia1) days.push({ label: "Dia 1", data: inscricao.presencaDia1 });
+                  if (inscricao.presencaDia2) days.push({ label: "Dia 2", data: inscricao.presencaDia2 });
+                }
+
+                // Fallback: single-day or no per-day data → show aggregate
+                if (days.length === 0) {
+                  days.push({
+                    label: totalDias >= 2 ? "Dia 1" : "Geral",
+                    data: {
+                      participanteNome: inscricao.presencaParticipanteNome,
+                      aprovado: inscricao.presencaAprovada,
+                      tempoTotal: inscricao.presencaTempoTotalMinutos,
+                      tempoDinamica: inscricao.presencaTempoDinamicaMinutos,
+                      percentualDinamica: inscricao.presencaPercentualDinamica,
+                      temDinamica: (inscricao.presencaTempoDinamicaMinutos ?? 0) > 0,
+                    },
+                  });
+                }
+
+                return (
+                  <div className="space-y-3">
+                    {days.map((day) => {
+                      const d = day.data;
+                      if (!d) return null;
+                      return (
+                        <div key={day.label} className="rounded-lg border border-cyan-100 bg-white p-3 shadow-sm">
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs font-bold uppercase tracking-wide text-cyan-700">{day.label}</span>
+                            <div className="flex gap-1.5">
+                              {d.aprovado && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">✓ Presente</span>
+                              )}
+                              {!d.aprovado && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">⚠ Insuficiente</span>
+                              )}
+                              {d.temDinamica && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-cyan-100 px-2 py-0.5 text-[10px] font-semibold text-cyan-700">🎯 Dinâmica</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase text-cyan-600">Nome Zoom</p>
+                              <p className="text-sm font-medium text-cyan-900">{d.participanteNome ?? "-"}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase text-cyan-600">Tempo Total</p>
+                              <p className="text-sm font-medium text-cyan-900">{d.tempoTotal != null ? formatPresenceTime(d.tempoTotal) : "-"}</p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase text-cyan-600">Tempo Dinâmica</p>
+                              <p className="text-sm font-medium text-cyan-900">
+                                {d.tempoDinamica != null ? formatPresenceTime(d.tempoDinamica) : "-"}
+                                {d.percentualDinamica != null && (
+                                  <span className="ml-1 text-xs text-cyan-600">({d.percentualDinamica}%)</span>
+                                )}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-[10px] font-semibold uppercase text-cyan-600">Validado em</p>
+                              <p className="text-sm font-medium text-cyan-900">
+                                {inscricao.presencaValidadaEm ? formatDateTime(inscricao.presencaValidadaEm) : "-"}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </section>
           )}
 

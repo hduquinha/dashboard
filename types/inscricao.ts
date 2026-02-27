@@ -20,6 +20,15 @@ export interface InscricaoPayload {
   [key: string]: unknown;
 }
 
+export interface PresencaDia {
+  participanteNome?: string | null;
+  aprovado?: boolean;
+  tempoTotal?: number | null;
+  tempoDinamica?: number | null;
+  percentualDinamica?: number | null;
+  temDinamica?: boolean;
+}
+
 export type InscricaoTipo = "lead" | "recrutador";
 
 export type InscricaoStatus = "aguardando" | "aprovado" | "rejeitado";
@@ -56,7 +65,7 @@ export interface InscricaoItem {
   statusUpdatedAt?: string | null;
   statusWhatsappContacted?: boolean | null;
   notes?: InscricaoNote[];
-  // Campos de presença
+  // Campos de presença (agregado)
   presencaValidada?: boolean;
   presencaAprovada?: boolean;
   presencaParticipanteNome?: string | null;
@@ -64,6 +73,12 @@ export interface InscricaoItem {
   presencaTempoDinamicaMinutos?: number | null;
   presencaPercentualDinamica?: number | null;
   presencaValidadaEm?: string | null;
+  presencaTotalDias?: number | null;
+  presencaDiaProcessado?: number | null;
+  presencaDinamicaDias?: string | null;
+  // Campos de presença por dia
+  presencaDia1?: PresencaDia | null;
+  presencaDia2?: PresencaDia | null;
   // Star rating (1-5 lead temperature)
   stars?: number | null;
 }

@@ -241,6 +241,28 @@ function parseNotes(value: unknown): InscricaoNote[] {
   return normalizedNotes.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 }
 
+function parseIntField(value: unknown): number | null {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return parseInt(value, 10) || null;
+  return null;
+}
+
+function buildPresencaDia(payload: Record<string, unknown>, dia: number): import("@/types/inscricao").PresencaDia | null {
+  const prefix = `presenca_dia${dia}`;
+  const nome = payload[`${prefix}_participante_nome`];
+  const aprovado = payload[`${prefix}_aprovado`];
+  // Only return a day object if at least the nome or aprovado field exists
+  if (nome === undefined && aprovado === undefined) return null;
+  return {
+    participanteNome: typeof nome === "string" ? nome : null,
+    aprovado: aprovado === true || aprovado === "true",
+    tempoTotal: parseIntField(payload[`${prefix}_tempo_total`]),
+    tempoDinamica: parseIntField(payload[`${prefix}_tempo_dinamica`]),
+    percentualDinamica: parseIntField(payload[`${prefix}_percentual_dinamica`]),
+    temDinamica: payload[`${prefix}_tem_dinamica`] === true || payload[`${prefix}_tem_dinamica`] === "true",
+  };
+}
+
 function appendNoteToPayload(
   target: Record<string, unknown>,
   note: { content: string; viaWhatsapp?: boolean | null; author?: string | null }
@@ -440,6 +462,11 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
         ? parseInt(payload.presenca_percentual_dinamica, 10) || null 
         : null,
     presencaValidadaEm: typeof payload.presenca_validada_em === "string" ? payload.presenca_validada_em : null,
+    presencaTotalDias: parseIntField(payload.presenca_total_dias),
+    presencaDiaProcessado: parseIntField(payload.presenca_dia_processado),
+    presencaDinamicaDias: typeof payload.presenca_dinamica_dias === "string" ? payload.presenca_dinamica_dias : null,
+    presencaDia1: buildPresencaDia(payload, 1),
+    presencaDia2: buildPresencaDia(payload, 2),
     stars: typeof payload.dashboard_stars === "number"
       ? payload.dashboard_stars
       : typeof payload.dashboard_stars === "string"
