@@ -329,8 +329,9 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                         formatMinutes(value),
                         name === "tempoDia" ? "Tempo no Dia" : "Tempo na Dinâmica",
                       ]}
-                      labelFormatter={(_label: string, payload: Array<{ payload?: { fullName?: string } }>) =>
-                        payload?.[0]?.payload?.fullName || _label
+                      labelFormatter={(_label, payload) =>
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        (payload as any)?.[0]?.payload?.fullName || _label
                       }
                     />
                     <Bar
