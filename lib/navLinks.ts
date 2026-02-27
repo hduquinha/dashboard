@@ -7,16 +7,11 @@ export interface NavLink {
 }
 
 export const NAV_LINKS: NavLink[] = [
-  { key: "home", href: "/", label: "Início", description: "Treinamento atual", icon: "🏠" },
-  { key: "leads", href: "/leads", label: "Leads", description: "Gestão de leads", icon: "🎯" },
+  { key: "home", href: "/", label: "Início", description: "Visão geral", icon: "🏠" },
+  { key: "crm", href: "/crm", label: "CRM", description: "Gestão de leads", icon: "🎯" },
   { key: "treinamentos", href: "/treinamentos", label: "Treinamentos", description: "Por data", icon: "📅" },
-  { key: "crm", href: "/crm", label: "CRM", description: "Base completa", icon: "📋" },
-  { key: "duplicados", href: "/duplicados", label: "Duplicados", description: "Higienização", icon: "⚠️" },
   { key: "recrutadores", href: "/recrutadores", label: "Clusters", description: "Gerencie clusters", icon: "🧭" },
   { key: "anamnese", href: "/anamnese", label: "Anamnese", description: "Vincular respostas", icon: "📝" },
-  { key: "presenca", href: "/presenca", label: "Presença", description: "Validar encontros", icon: "✅" },
-  { key: "ranking", href: "/ranking", label: "Ranking", description: "Presença na dinâmica", icon: "🏆" },
   { key: "relatorios", href: "/relatorios", label: "Relatórios", description: "Rankings e gráficos", icon: "📊" },
   { key: "rede", href: "/rede", label: "Rede", description: "Visualização da árvore", icon: "🌱" },
-  { key: "importar", href: "/importar", label: "Importar", description: "Planilhas e lotes", icon: "📥" },
 ];

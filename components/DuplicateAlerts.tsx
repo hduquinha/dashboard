@@ -67,8 +67,27 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
     );
   };
 
-  const handleDismiss = (groupId: string) => {
-    setAlerts((previous) => previous.filter((group) => group.id !== groupId));
+  const handleDismiss = async (groupId: string) => {
+    const group = alerts.find((item) => item.id === groupId);
+    if (!group) return;
+
+    // Persist dismissal to DB so it doesn't reappear on refresh
+    const ids = group.entries.map((e) => e.id);
+    try {
+      const res = await fetch("/api/inscricoes/dismiss-duplicates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        console.error("Failed to persist dismissal");
+      }
+    } catch (e) {
+      console.error("Failed to persist dismissal", e);
+    }
+
+    // Remove from UI regardless
+    setAlerts((previous) => previous.filter((item) => item.id !== groupId));
   };
 
   const handleDelete = async (groupId: string) => {

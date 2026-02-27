@@ -1,8 +1,9 @@
-import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot, getDuplicateSummaryCount } from "@/lib/db";
+import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot, getDuplicateSummaryCount, listDuplicateSuspects } from "@/lib/db";
 import DashboardMetrics from "@/components/DashboardMetrics";
 import DashboardCharts from "@/components/DashboardCharts";
 import TrainingSwitcher from "@/components/TrainingSwitcher";
 import DuplicateNotification from "@/components/DuplicateNotification";
+import DuplicateAlerts from "@/components/DuplicateAlerts";
 import Link from "next/link";
 import { CalendarDays } from "lucide-react";
 
@@ -35,8 +36,12 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   // Busca duplicados por último com tratamento de erro
   let duplicateSummary = { totalGroups: 0, topReasons: [] as Array<{ reason: "telefone" | "email" | "nome-dia" | "payload"; count: number }> };
+  let duplicateGroups: Awaited<ReturnType<typeof listDuplicateSuspects>> = { groups: [], totalGroups: 0 };
   try {
     duplicateSummary = await getDuplicateSummaryCount({ windowDays: 30 });
+    if (duplicateSummary.totalGroups > 0) {
+      duplicateGroups = await listDuplicateSuspects({ maxGroups: 20, windowDays: 30 });
+    }
   } catch (error) {
     console.error("Erro ao buscar duplicados:", error);
   }
@@ -117,6 +122,14 @@ export default async function DashboardPage(props: DashboardPageProps) {
         distributionData={stats.distributionData}
         topRecruiters={stats.topRecruiters}
       />
+
+      {/* Duplicate Alerts (embedded from Duplicados page) */}
+      {duplicateGroups.groups.length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-lg font-bold text-neutral-900">Possíveis Duplicados</h2>
+          <DuplicateAlerts groups={duplicateGroups.groups} />
+        </section>
+      )}
     </main>
   );
 }

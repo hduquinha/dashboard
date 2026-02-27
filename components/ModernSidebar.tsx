@@ -7,20 +7,15 @@ import { usePathname } from "next/navigation";
 import { 
   LayoutDashboard, 
   Users, 
-  AlertTriangle, 
   Network, 
-  Upload, 
-  ChevronLeft, 
-  ChevronRight,
   Menu,
-  Database,
+  Target,
   LogOut,
   Sun,
   Moon,
   FileText,
   X,
   CalendarDays,
-  ClipboardCheck,
   BarChart3
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,13 +24,10 @@ import { NAV_LINKS } from "@/lib/navLinks";
 const ICON_MAP: Record<string, any> = {
   home: LayoutDashboard,
   treinamentos: CalendarDays,
-  crm: Database,
-  duplicados: AlertTriangle,
+  crm: Target,
   recrutadores: Users,
   rede: Network,
-  importar: Upload,
   anamnese: FileText,
-  presenca: ClipboardCheck,
   relatorios: BarChart3,
 };
 
@@ -124,7 +116,7 @@ export default function ModernSidebar({
           {NAV_LINKS.map((link) => {
             const Icon = ICON_MAP[link.key] || LayoutDashboard;
             const isActive = pathname === link.href || (link.href !== "/" && pathname.startsWith(link.href));
-            const showBadge = link.key === "duplicados" && duplicateCount > 0;
+            const showBadge = link.key === "home" && duplicateCount > 0;
 
             return (
               <Link

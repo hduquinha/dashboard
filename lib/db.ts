@@ -1912,6 +1912,27 @@ export async function listDuplicateSuspects(
     };
   });
 
+  // Build a set of dismissed pairs from payload
+  const dismissedPairs = new Set<string>();
+  for (const entry of entries) {
+    const raw = entry.item.payload as Record<string, unknown> | undefined;
+    const dismissed = raw?.["dashboard_not_duplicate"];
+    if (Array.isArray(dismissed)) {
+      for (const otherId of dismissed) {
+        // Store as "min-max" key for symmetric lookup
+        const a = Math.min(entry.item.id, Number(otherId));
+        const b = Math.max(entry.item.id, Number(otherId));
+        dismissedPairs.add(`${a}-${b}`);
+      }
+    }
+  }
+
+  function isDismissedPair(idA: number, idB: number): boolean {
+    const a = Math.min(idA, idB);
+    const b = Math.max(idA, idB);
+    return dismissedPairs.has(`${a}-${b}`);
+  }
+
   const parent = new Map<number, number>();
   const rank = new Map<number, number>();
 
@@ -1993,7 +2014,16 @@ export async function listDuplicateSuspects(
       if (bucket.length < 2) {
         continue;
       }
-      const sortedBucket = bucket
+      // Filter out entries that are mutually dismissed with ALL others in bucket
+      const filteredBucket = bucket.filter((entry) => {
+        const others = bucket.filter((o) => o.item.id !== entry.item.id);
+        // Keep entry if at least one pair is NOT dismissed
+        return others.some((o) => !isDismissedPair(entry.item.id, o.item.id));
+      });
+      if (filteredBucket.length < 2) {
+        continue;
+      }
+      const sortedBucket = filteredBucket
         .slice()
         .sort((a, b) => b.item.criadoEm.localeCompare(a.item.criadoEm));
       const { matchValue, hint } = formatter(key, sortedBucket);
@@ -2006,7 +2036,9 @@ export async function listDuplicateSuspects(
 
       const [first, ...rest] = sortedBucket;
       for (const other of rest) {
-        union(first.item.id, other.item.id);
+        if (!isDismissedPair(first.item.id, other.item.id)) {
+          union(first.item.id, other.item.id);
+        }
       }
     }
   };
@@ -2346,5 +2378,47 @@ export async function getInscricaoByRecruiterCode(code: string): Promise<Inscric
   } catch (error) {
     console.error("Failed to get inscricao by recruiter code:", error);
     return null;
+  }
+}
+
+/**
+ * Marca um grupo de inscrições como "não duplicadas" entre si.
+ * Cada inscrição recebe no payload um array `dashboard_not_duplicate`
+ * contendo os IDs de todas as outras do grupo.
+ */
+export async function dismissDuplicateGroup(ids: number[]): Promise<void> {
+  if (!ids || ids.length < 2) return;
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    for (const id of ids) {
+      const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
+        `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
+        [id],
+      );
+      if (rows.length === 0) continue;
+
+      const payload = (rows[0].payload ?? {}) as Record<string, unknown>;
+      const existing = Array.isArray(payload["dashboard_not_duplicate"])
+        ? (payload["dashboard_not_duplicate"] as number[])
+        : [];
+
+      // Merge other IDs in the group
+      const otherIds = ids.filter((oid) => oid !== id);
+      const merged = Array.from(new Set([...existing, ...otherIds]));
+
+      const nextPayload = { ...payload, dashboard_not_duplicate: merged };
+      await client.query(
+        `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+        [id, JSON.stringify(nextPayload)],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 }
