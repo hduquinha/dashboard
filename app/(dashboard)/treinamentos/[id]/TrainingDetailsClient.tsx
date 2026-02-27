@@ -144,6 +144,8 @@ export default function TrainingDetailsClient({
   const [excludedClusters, setExcludedClusters] = useState<Set<string>>(new Set());
   const [showCriteriaConfig, setShowCriteriaConfig] = useState(false);
   const [showExcludeConfig, setShowExcludeConfig] = useState(false);
+  const [tieOnFirst, setTieOnFirst] = useState(false);
+  const [maxPosition, setMaxPosition] = useState(0); // 0 = show all
 
   // Handler para gerar PDF
   const handlePrintPdf = (section: "detalhes" | "nao-associados" | "all") => {
@@ -405,6 +407,48 @@ export default function TrainingDetailsClient({
 
     return entries;
   }, [ranking, presences, excludedClusters, criteriaOrder]);
+
+  // Compute display positions (with tie support) and filter by maxPosition
+  const displayRanking = useMemo(() => {
+    if (!tieOnFirst) {
+      if (maxPosition > 0) return clusterRanking.slice(0, maxPosition);
+      return clusterRanking;
+    }
+
+    // Assign positions with ties on the primary criterion
+    const primaryCriterion = criteriaOrder[0];
+    const withPos: { cluster: ClusterRankingEntry; position: number }[] = [];
+    let pos = 1;
+    for (let i = 0; i < clusterRanking.length; i++) {
+      if (i > 0 && clusterRanking[i][primaryCriterion] !== clusterRanking[i - 1][primaryCriterion]) {
+        pos = i + 1;
+      }
+      withPos.push({ cluster: clusterRanking[i], position: pos });
+    }
+
+    if (maxPosition > 0) {
+      return withPos.filter(w => w.position <= maxPosition).map(w => w);
+    }
+    return withPos;
+  }, [clusterRanking, tieOnFirst, maxPosition, criteriaOrder]);
+
+  // Helper to get position for display
+  const getDisplayPosition = (idx: number): number => {
+    if (!tieOnFirst) return idx + 1;
+    const item = displayRanking[idx];
+    if (item && typeof item === 'object' && 'position' in item) {
+      return (item as { position: number }).position;
+    }
+    return idx + 1;
+  };
+
+  const getDisplayCluster = (idx: number): ClusterRankingEntry => {
+    const item = displayRanking[idx];
+    if (item && typeof item === 'object' && 'cluster' in item) {
+      return (item as { cluster: ClusterRankingEntry }).cluster;
+    }
+    return item as ClusterRankingEntry;
+  };
 
   // Move criterion up/down
   const moveCriterion = useCallback((index: number, direction: -1 | 1) => {
@@ -720,6 +764,8 @@ export default function TrainingDetailsClient({
             <p className="text-sm text-neutral-500">
               Prioridade: {criteriaOrder.map((c, i) => `${i + 1}. ${CRITERIA_LABELS[c]}`).join(' → ')}
               {excludedClusters.size > 0 && ` | ${excludedClusters.size} cluster(s) excluído(s)`}
+              {tieOnFirst && ' | Empate ativado'}
+              {maxPosition > 0 && ` | Até ${maxPosition}ª colocação`}
               {' | '}Gerado em {new Date().toLocaleDateString('pt-BR')} às {new Date().toLocaleTimeString('pt-BR')}
             </p>
           </div>
@@ -764,6 +810,31 @@ export default function TrainingDetailsClient({
               <Printer className="h-4 w-4" />
               Baixar PDF
             </button>
+
+            <button
+              onClick={() => setTieOnFirst(!tieOnFirst)}
+              className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-medium transition ${
+                tieOnFirst
+                  ? "border-amber-300 bg-amber-50 text-amber-700"
+                  : "border-neutral-200 bg-white text-neutral-700 hover:bg-neutral-50"
+              }`}
+            >
+              <Medal className="h-4 w-4" />
+              Empate
+            </button>
+
+            <div className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-3 py-1.5">
+              <label className="text-xs font-medium text-neutral-500 whitespace-nowrap">Até posição:</label>
+              <input
+                type="number"
+                min={0}
+                max={clusterRanking.length}
+                value={maxPosition || ''}
+                placeholder="Todas"
+                onChange={(e) => setMaxPosition(Math.max(0, parseInt(e.target.value) || 0))}
+                className="w-16 rounded-lg border border-neutral-200 px-2 py-1 text-sm text-center focus:border-[#2DBDC2] focus:outline-none focus:ring-1 focus:ring-[#2DBDC2]/30"
+              />
+            </div>
 
             {excludedClusters.size > 0 && (
               <button
@@ -860,7 +931,7 @@ export default function TrainingDetailsClient({
                 Ranking de Clusters
               </h2>
               <span className="text-sm text-neutral-500">
-                ({clusterRanking.length} cluster{clusterRanking.length !== 1 ? "s" : ""})
+                ({displayRanking.length} cluster{displayRanking.length !== 1 ? "s" : ""})
               </span>
             </div>
 
@@ -902,19 +973,22 @@ export default function TrainingDetailsClient({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
-                    {clusterRanking.map((cluster, idx) => (
+                    {displayRanking.map((_, idx) => {
+                      const cluster = getDisplayCluster(idx);
+                      const pos = getDisplayPosition(idx);
+                      return (
                       <tr
                         key={cluster.recrutadorCodigo}
                         className={`transition hover:bg-neutral-50 ${
-                          idx < 3 ? "bg-amber-50/30" : ""
+                          pos <= 3 ? "bg-amber-50/30" : ""
                         }`}
                       >
                         <td className="px-4 py-3">
-                          {idx < 3 ? (
-                            <Medal className={`h-6 w-6 ${getMedalColor(idx)}`} />
+                          {pos <= 3 ? (
+                            <Medal className={`h-6 w-6 ${getMedalColor(pos - 1)}`} />
                           ) : (
                             <span className="text-lg font-bold text-neutral-400">
-                              {idx + 1}º
+                              {pos}º
                             </span>
                           )}
                         </td>
@@ -944,7 +1018,8 @@ export default function TrainingDetailsClient({
                           </Link>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
