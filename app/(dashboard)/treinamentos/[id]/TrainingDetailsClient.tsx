@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
+import * as XLSX from "xlsx";
 import {
   ArrowLeft,
   Trophy,
@@ -147,6 +148,49 @@ export default function TrainingDetailsClient({
   const [showExcludeConfig, setShowExcludeConfig] = useState(false);
   const [tieOnFirst, setTieOnFirst] = useState(false);
   const [maxPosition, setMaxPosition] = useState(0); // 0 = show all
+
+  // Handler para exportar Excel (.xlsx)
+  const handleExportExcel = useCallback(() => {
+    const rows = filteredPresences.map((p) => {
+      const isPartial = p.totalDias === 2 && p.diaProcessado < 2;
+      const status = p.aprovado ? "Aprovado" : isPartial ? "Parcial" : "Reprovado";
+      const base: Record<string, string | number | null> = {
+        Nome: p.nome,
+        Telefone: p.telefone ?? "",
+        Cidade: p.cidade ?? "",
+        Email: p.email ?? "",
+        "Nome Zoom": p.participanteNomeZoom ?? "",
+        Recrutador: p.recrutadorNome ? humanizeName(p.recrutadorNome) : "",
+        "Código Recrutador": p.recrutadorCodigo ?? "",
+      };
+      if (hasMultiDay) {
+        base["Dia 1 Aprovado"] = p.dia1Aprovado === true ? "Sim" : p.dia1Aprovado === false ? "Não" : "Pendente";
+        base["Dia 1 Tempo (min)"] = p.dia1Tempo ?? "";
+        base["Dia 2 Aprovado"] = p.dia2Aprovado === true ? "Sim" : p.dia2Aprovado === false ? "Não" : "Pendente";
+        base["Dia 2 Tempo (min)"] = p.dia2Tempo ?? "";
+      } else {
+        base["Tempo Total (min)"] = p.tempoTotalMinutos;
+      }
+      base["% Dinâmica"] = p.percentualDinamica;
+      base["Status"] = status;
+      return base;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Auto-ajustar largura das colunas
+    const colWidths = Object.keys(rows[0] || {}).map((key) => {
+      const maxLen = Math.max(
+        key.length,
+        ...rows.map((r) => String(r[key] ?? "").length)
+      );
+      return { wch: Math.min(maxLen + 2, 40) };
+    });
+    ws["!cols"] = colWidths;
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Presenças");
+    XLSX.writeFile(wb, `presencas-${treinamentoId}.xlsx`);
+  }, [filteredPresences, hasMultiDay, treinamentoId]);
 
   // Handler para gerar PDF
   const handlePrintPdf = (section: "detalhes" | "nao-associados" | "all") => {
@@ -1077,6 +1121,14 @@ export default function TrainingDetailsClient({
                 className="flex items-center gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition hover:bg-violet-100 hover:border-violet-300"
               >
                 👥 Pré-PDF (por Recrutador)
+              </button>
+              <button
+                onClick={handleExportExcel}
+                disabled={filteredPresences.length === 0}
+                className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-100 hover:border-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileDown className="h-4 w-4" />
+                Exportar Excel
               </button>
               <button
                 onClick={() => handlePrintPdf("detalhes")}
