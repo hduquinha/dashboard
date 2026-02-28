@@ -1464,6 +1464,14 @@ export default function TrainingDetailsClient({
                 👥 Pré-PDF (por Recrutador)
               </button>
               <button
+                onClick={handleExportExcel}
+                disabled={filteredPresences.length === 0}
+                className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-700 shadow-sm transition hover:bg-emerald-100 hover:border-emerald-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <FileDown className="h-4 w-4" />
+                Exportar Excel
+              </button>
+              <button
                 onClick={() => handlePrintPdf("all")}
                 className="flex items-center gap-2 rounded-xl bg-[#2DBDC2] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#1a9a9e]"
               >
