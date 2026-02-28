@@ -149,49 +149,6 @@ export default function TrainingDetailsClient({
   const [tieOnFirst, setTieOnFirst] = useState(false);
   const [maxPosition, setMaxPosition] = useState(0); // 0 = show all
 
-  // Handler para exportar Excel (.xlsx)
-  const handleExportExcel = useCallback(() => {
-    const rows = filteredPresences.map((p) => {
-      const isPartial = p.totalDias === 2 && p.diaProcessado < 2;
-      const status = p.aprovado ? "Aprovado" : isPartial ? "Parcial" : "Reprovado";
-      const base: Record<string, string | number | null> = {
-        Nome: p.nome,
-        Telefone: p.telefone ?? "",
-        Cidade: p.cidade ?? "",
-        Email: p.email ?? "",
-        "Nome Zoom": p.participanteNomeZoom ?? "",
-        Recrutador: p.recrutadorNome ? humanizeName(p.recrutadorNome) : "",
-        "Código Recrutador": p.recrutadorCodigo ?? "",
-      };
-      if (hasMultiDay) {
-        base["Dia 1 Aprovado"] = p.dia1Aprovado === true ? "Sim" : p.dia1Aprovado === false ? "Não" : "Pendente";
-        base["Dia 1 Tempo (min)"] = p.dia1Tempo ?? "";
-        base["Dia 2 Aprovado"] = p.dia2Aprovado === true ? "Sim" : p.dia2Aprovado === false ? "Não" : "Pendente";
-        base["Dia 2 Tempo (min)"] = p.dia2Tempo ?? "";
-      } else {
-        base["Tempo Total (min)"] = p.tempoTotalMinutos;
-      }
-      base["% Dinâmica"] = p.percentualDinamica;
-      base["Status"] = status;
-      return base;
-    });
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    // Auto-ajustar largura das colunas
-    const colWidths = Object.keys(rows[0] || {}).map((key) => {
-      const maxLen = Math.max(
-        key.length,
-        ...rows.map((r) => String(r[key] ?? "").length)
-      );
-      return { wch: Math.min(maxLen + 2, 40) };
-    });
-    ws["!cols"] = colWidths;
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Presenças");
-    XLSX.writeFile(wb, `presencas-${treinamentoId}.xlsx`);
-  }, [filteredPresences, hasMultiDay, treinamentoId]);
-
   // Handler para gerar PDF
   const handlePrintPdf = (section: "detalhes" | "nao-associados" | "all") => {
     const printUrl = `/api/presence/print?treinamento=${encodeURIComponent(treinamentoId)}&section=${section}`;
@@ -301,6 +258,49 @@ export default function TrainingDetailsClient({
         (p.inscricaoNome2 && p.inscricaoNome2.toLowerCase().includes(q))
     );
   }, [pending, searchQuery]);
+
+  // Handler para exportar Excel (.xlsx)
+  const handleExportExcel = useCallback(() => {
+    const rows = filteredPresences.map((p) => {
+      const isPartial = p.totalDias === 2 && p.diaProcessado < 2;
+      const status = p.aprovado ? "Aprovado" : isPartial ? "Parcial" : "Reprovado";
+      const base: Record<string, string | number | null> = {
+        Nome: p.nome,
+        Telefone: p.telefone ?? "",
+        Cidade: p.cidade ?? "",
+        Email: p.email ?? "",
+        "Nome Zoom": p.participanteNomeZoom ?? "",
+        Recrutador: p.recrutadorNome ? humanizeName(p.recrutadorNome) : "",
+        "Código Recrutador": p.recrutadorCodigo ?? "",
+      };
+      if (hasMultiDay) {
+        base["Dia 1 Aprovado"] = p.dia1Aprovado === true ? "Sim" : p.dia1Aprovado === false ? "Não" : "Pendente";
+        base["Dia 1 Tempo (min)"] = p.dia1Tempo ?? "";
+        base["Dia 2 Aprovado"] = p.dia2Aprovado === true ? "Sim" : p.dia2Aprovado === false ? "Não" : "Pendente";
+        base["Dia 2 Tempo (min)"] = p.dia2Tempo ?? "";
+      } else {
+        base["Tempo Total (min)"] = p.tempoTotalMinutos;
+      }
+      base["% Dinâmica"] = p.percentualDinamica;
+      base["Status"] = status;
+      return base;
+    });
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Auto-ajustar largura das colunas
+    const colWidths = Object.keys(rows[0] || {}).map((key) => {
+      const maxLen = Math.max(
+        key.length,
+        ...rows.map((r) => String(r[key] ?? "").length)
+      );
+      return { wch: Math.min(maxLen + 2, 40) };
+    });
+    ws["!cols"] = colWidths;
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Presenças");
+    XLSX.writeFile(wb, `presencas-${treinamentoId}.xlsx`);
+  }, [filteredPresences, hasMultiDay, treinamentoId]);
 
   // Handler de reset de presenças
   const handleReset = async (target: "all" | 1 | 2) => {
