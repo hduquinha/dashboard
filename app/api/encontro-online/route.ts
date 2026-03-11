@@ -1,88 +1,87 @@
 import { NextResponse } from "next/server";
 import { getPool } from "@/lib/db";
-import type {
-  EOParticipant,
-  EOAttendance,
-  EOEngagement,
-  EOSummary,
-  EOAttendanceReport,
-} from "@/types/encontroOnline";
+import type { EOParticipantRow, EOSummary, EOReport } from "@/types/encontroOnline";
 
 export const dynamic = "force-dynamic";
+
+function deriveStatus(row: { percent_watched: number | null; total_watched_seconds: number | null; completed: boolean | null }) {
+  if (row.completed) return "concluido" as const;
+  const pct = row.percent_watched ?? 0;
+  const secs = row.total_watched_seconds ?? 0;
+  if (pct >= 90) return "concluido" as const;
+  if (pct > 0 || secs > 60) return "assistindo" as const;
+  if (secs > 0) return "iniciou" as const;
+  return "nao_assistiu" as const;
+}
 
 export async function GET() {
   const pool = getPool();
 
   try {
-    // Run all three queries in parallel
-    const [participantsRes, attendanceRes, engagementRes] = await Promise.all([
-      pool.query(
-        `SELECT id, name, phone, registered_at AS "registeredAt"
-         FROM encontro_online.participants
-         ORDER BY registered_at DESC`
-      ),
-      pool.query(
-        `SELECT oder_id AS "oderId", phone, status,
-                percent_watched AS "percentWatched",
-                total_watched_seconds AS "totalWatchedSeconds",
-                completed,
-                first_access_at AS "firstAccessAt",
-                last_access_at AS "lastAccessAt"
-         FROM encontro_online.attendance`
-      ),
-      pool.query(
-        `SELECT oder_id AS "oderId", phone, sessions,
-                farthest_point AS "farthestPoint",
-                duration,
-                forward_skips AS "forwardSkips",
-                rewatch_count AS "rewatchCount",
-                playback_speed AS "playbackSpeed",
-                focus_percent AS "focusPercent",
-                segment_data AS "segmentData"
-         FROM encontro_online.engagement`
-      ),
-    ]);
+    const result = await pool.query(
+      `SELECT
+         u.id,
+         u.name,
+         u.phone,
+         u.registered_at,
+         w.total_watched_seconds,
+         w.percent_watched,
+         w.completed,
+         w.last_watched_at,
+         w.sessions,
+         w.focus_percent,
+         w.forward_skips,
+         w.playback_speed,
+         w.rewatch_count,
+         w.duration,
+         w.farthest_point
+       FROM online_users u
+       LEFT JOIN online_watch_data w ON w.user_id = u.id
+       ORDER BY COALESCE(w.percent_watched, 0) DESC`
+    );
 
-    const participants: EOParticipant[] = participantsRes.rows;
-    const attendance: EOAttendance[] = attendanceRes.rows;
-    const engagement: EOEngagement[] = engagementRes.rows;
+    const participants: EOParticipantRow[] = result.rows.map((r: Record<string, unknown>) => ({
+      id: r.id as string,
+      name: r.name as string,
+      phone: r.phone as string,
+      registeredAt: r.registered_at ? String(r.registered_at) : null,
+      status: r.total_watched_seconds != null
+        ? deriveStatus(r as { percent_watched: number | null; total_watched_seconds: number | null; completed: boolean | null })
+        : "nao_assistiu",
+      percentWatched: Number(r.percent_watched ?? 0),
+      totalWatchedSeconds: Number(r.total_watched_seconds ?? 0),
+      completed: Boolean(r.completed),
+      lastWatchedAt: r.last_watched_at ? String(r.last_watched_at) : null,
+      sessions: r.sessions != null ? Number(r.sessions) : null,
+      focusPercent: r.focus_percent != null ? Number(r.focus_percent) : null,
+      forwardSkips: r.forward_skips != null ? Number(r.forward_skips) : null,
+      playbackSpeed: r.playback_speed != null ? Number(r.playback_speed) : null,
+      rewatchCount: r.rewatch_count != null ? Number(r.rewatch_count) : null,
+      duration: r.duration != null ? Number(r.duration) : null,
+      farthestPoint: r.farthest_point != null ? Number(r.farthest_point) : null,
+    }));
 
-    // Build summary from actual data
+    // Build summary
     const totalRegistered = participants.length;
-    const totalCompleted = attendance.filter((a) => a.completed).length;
-    const totalWatching = attendance.filter(
-      (a) => a.status === "assistindo"
-    ).length;
-    const totalStarted = attendance.filter(
-      (a) => a.status === "iniciou"
-    ).length;
-    const totalNotWatched = attendance.filter(
-      (a) => a.status === "nao_assistiu"
-    ).length;
-    const totalWatched = attendance.filter(
-      (a) => a.totalWatchedSeconds > 0
-    ).length;
+    const totalCompleted = participants.filter((p) => p.status === "concluido").length;
+    const totalWatching = participants.filter((p) => p.status === "assistindo").length;
+    const totalStarted = participants.filter((p) => p.status === "iniciou").length;
+    const totalNotWatched = participants.filter((p) => p.status === "nao_assistiu").length;
+    const totalWatched = participants.filter((p) => p.totalWatchedSeconds > 0).length;
 
+    const withData = participants.filter((p) => p.totalWatchedSeconds > 0);
     const avgPercentWatched =
-      attendance.length > 0
-        ? Math.round(
-            attendance.reduce((s, a) => s + a.percentWatched, 0) /
-              attendance.length
-          )
+      withData.length > 0
+        ? Math.round(withData.reduce((s, p) => s + p.percentWatched, 0) / withData.length)
         : 0;
     const avgWatchTimeSeconds =
-      attendance.length > 0
-        ? Math.round(
-            attendance.reduce((s, a) => s + a.totalWatchedSeconds, 0) /
-              attendance.length
-          )
+      withData.length > 0
+        ? Math.round(withData.reduce((s, p) => s + p.totalWatchedSeconds, 0) / withData.length)
         : 0;
+    const withFocus = participants.filter((p) => p.focusPercent != null);
     const avgFocusPercent =
-      engagement.length > 0
-        ? Math.round(
-            engagement.reduce((s, e) => s + e.focusPercent, 0) /
-              engagement.length
-          )
+      withFocus.length > 0
+        ? Math.round(withFocus.reduce((s, p) => s + (p.focusPercent ?? 0), 0) / withFocus.length)
         : 0;
 
     const summary: EOSummary = {
@@ -98,17 +97,7 @@ export async function GET() {
       generatedAt: new Date().toISOString(),
     };
 
-    const report: EOAttendanceReport = {
-      _meta: {
-        description: "Relatório de presença do Encontro Online",
-        linkField: "phone",
-        tables: ["participants", "attendance", "engagement", "summary"],
-      },
-      participants,
-      attendance,
-      engagement,
-      summary,
-    };
+    const report: EOReport = { participants, summary };
 
     return NextResponse.json({ success: true, report });
   } catch (err: unknown) {

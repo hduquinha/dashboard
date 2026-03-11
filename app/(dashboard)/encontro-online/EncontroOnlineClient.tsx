@@ -19,7 +19,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type {
-  EOAttendanceReport,
+  EOReport,
   EOParticipantRow,
   EOStatusDisplay,
   EOSummary,
@@ -70,56 +70,6 @@ function formatSeconds(s: number): string {
   const h = Math.floor(m / 60);
   const remM = m % 60;
   return remM > 0 ? `${h}h ${remM}min` : `${h}h`;
-}
-
-function buildRows(report: EOAttendanceReport): EOParticipantRow[] {
-  const rows: EOParticipantRow[] = [];
-
-  // Build a map of all phones from participants
-  const phoneSet = new Set<string>();
-  const participantByPhone = new Map(
-    report.participants.map((p) => {
-      phoneSet.add(p.phone);
-      return [p.phone, p];
-    })
-  );
-  const attendanceByPhone = new Map(
-    report.attendance.map((a) => {
-      phoneSet.add(a.phone);
-      return [a.phone, a];
-    })
-  );
-  const engagementByPhone = new Map(
-    report.engagement.map((e) => {
-      phoneSet.add(e.phone);
-      return [e.phone, e];
-    })
-  );
-
-  for (const phone of phoneSet) {
-    const participant = participantByPhone.get(phone);
-    const attendance = attendanceByPhone.get(phone);
-    const engagement = engagementByPhone.get(phone);
-
-    rows.push({
-      name: participant?.name ?? phone,
-      phone,
-      registeredAt: participant?.registeredAt ?? null,
-      status: attendance?.status ?? "nao_cadastrado",
-      percentWatched: attendance?.percentWatched ?? 0,
-      totalWatchedSeconds: attendance?.totalWatchedSeconds ?? 0,
-      completed: attendance?.completed ?? false,
-      firstAccessAt: attendance?.firstAccessAt ?? null,
-      lastAccessAt: attendance?.lastAccessAt ?? null,
-      sessions: engagement?.sessions ?? null,
-      focusPercent: engagement?.focusPercent ?? null,
-      forwardSkips: engagement?.forwardSkips ?? null,
-      playbackSpeed: engagement?.playbackSpeed ?? null,
-      rewatchCount: engagement?.rewatchCount ?? null,
-    });
-  }
-
-  return rows.sort((a, b) => b.percentWatched - a.percentWatched);
 }
 
 function formatDate(dateStr: string | null): string {
@@ -248,7 +198,7 @@ function PercentBar({ value }: { value: number }) {
 /* ─────────────── Main Component ─────────────── */
 
 export default function EncontroOnlineClient() {
-  const [report, setReport] = useState<EOAttendanceReport | null>(null);
+  const [report, setReport] = useState<EOReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -277,7 +227,7 @@ export default function EncontroOnlineClient() {
   }
 
   const rows = useMemo(
-    () => (report ? buildRows(report) : []),
+    () => (report ? report.participants : []),
     [report]
   );
 
@@ -508,7 +458,7 @@ export default function EncontroOnlineClient() {
                     {row.sessions ?? "-"}
                   </td>
                   <td className="px-4 py-3 text-neutral-500 text-xs">
-                    {formatDate(row.lastAccessAt)}
+                    {formatDate(row.lastWatchedAt)}
                   </td>
                 </tr>
               ))

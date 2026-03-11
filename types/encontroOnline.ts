@@ -1,34 +1,30 @@
-// Types for the "Encontro Online" external attendance system
+// Types for the "Encontro Online" attendance system
+// Real DB tables: online_users + online_watch_data (joined by user_id)
 
-export interface EOParticipant {
+export type EOStatusDisplay =
+  | "concluido"
+  | "assistindo"
+  | "iniciou"
+  | "nao_assistiu"
+  | "nao_cadastrado";
+
+export interface EOParticipantRow {
   id: string;
   name: string;
   phone: string;
-  registeredAt: string;
-}
-
-export interface EOAttendance {
-  oderId: string;
-  phone: string;
-  status: "concluido" | "assistindo" | "iniciou" | "nao_assistiu";
+  registeredAt: string | null;
+  status: EOStatusDisplay;
   percentWatched: number;
   totalWatchedSeconds: number;
   completed: boolean;
-  firstAccessAt: string;
-  lastAccessAt: string;
-}
-
-export interface EOEngagement {
-  oderId: string;
-  phone: string;
-  sessions: number;
-  farthestPoint: number;
-  duration: number;
-  forwardSkips: number;
-  rewatchCount: number;
-  playbackSpeed: number;
-  focusPercent: number;
-  segmentData: number[];
+  lastWatchedAt: string | null;
+  sessions: number | null;
+  focusPercent: number | null;
+  forwardSkips: number | null;
+  playbackSpeed: number | null;
+  rewatchCount: number | null;
+  duration: number | null;
+  farthestPoint: number | null;
 }
 
 export interface EOSummary {
@@ -44,38 +40,7 @@ export interface EOSummary {
   generatedAt: string;
 }
 
-export interface EOAttendanceReport {
-  _meta: {
-    description: string;
-    linkField: string;
-    tables: string[];
-  };
-  participants: EOParticipant[];
-  attendance: EOAttendance[];
-  engagement: EOEngagement[];
+export interface EOReport {
+  participants: EOParticipantRow[];
   summary: EOSummary;
-}
-
-export type EOStatusDisplay =
-  | "concluido"
-  | "assistindo"
-  | "iniciou"
-  | "nao_assistiu"
-  | "nao_cadastrado";
-
-export interface EOParticipantRow {
-  name: string;
-  phone: string;
-  registeredAt: string | null;
-  status: EOStatusDisplay;
-  percentWatched: number;
-  totalWatchedSeconds: number;
-  completed: boolean;
-  firstAccessAt: string | null;
-  lastAccessAt: string | null;
-  sessions: number | null;
-  focusPercent: number | null;
-  forwardSkips: number | null;
-  playbackSpeed: number | null;
-  rewatchCount: number | null;
 }
