@@ -16,7 +16,8 @@ import {
   FileText,
   X,
   CalendarDays,
-  BarChart3
+  BarChart3,
+  Video
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NAV_LINKS } from "@/lib/navLinks";
@@ -29,6 +30,7 @@ const ICON_MAP: Record<string, any> = {
   rede: Network,
   anamnese: FileText,
   relatorios: BarChart3,
+  "encontro-online": Video,
 };
 
 interface ModernSidebarProps {
