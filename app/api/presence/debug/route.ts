@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 
 const SCHEMA_NAME = "inscricoes";
+
+function isDebugEnabled(): boolean {
+  return process.env.NODE_ENV !== "production" || process.env.ENABLE_PRESENCE_DEBUG === "true";
+}
 
 /**
  * GET /api/presence/debug?target=<treinamentoId>
@@ -15,6 +20,18 @@ const SCHEMA_NAME = "inscricoes";
  * - Exemplos de payload para ajudar no diagnóstico
  */
 export async function GET(request: NextRequest) {
+  if (!isDebugEnabled()) {
+    return NextResponse.json({ error: "Not Found" }, { status: 404 });
+  }
+
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const targetId = request.nextUrl.searchParams.get("target") || null;
 

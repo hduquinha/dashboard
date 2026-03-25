@@ -2,7 +2,7 @@ import { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import DashboardLayoutClient from "@/components/DashboardLayoutClient";
-import { assertToken } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
 
 interface DashboardLayoutProps {
@@ -31,7 +31,7 @@ async function loadDuplicateCount(): Promise<number> {
 
 export default async function DashboardLayout({ children }: DashboardLayoutProps) {
   const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
+  const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
 
   try {
     assertToken(token);

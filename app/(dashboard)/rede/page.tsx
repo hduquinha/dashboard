@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import NetworkCanvas from "@/components/NetworkCanvas";
-import { assertToken } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
 import { buildNetworkTree } from "@/lib/network";
 import { listTrainingFilterOptions } from "@/lib/db";
 import { listRecruiters } from "@/lib/recruiters";
@@ -30,7 +30,7 @@ export default async function RedePage(props: RedePageProps) {
   const focusParam = pickStringParam(searchParams?.focus) ?? null;
 
   const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
+  const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
 
   try {
     assertToken(token);

@@ -1,11 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { assertAuthorizationHeader, UnauthorizedError } from "@/lib/auth";
+import {
+  assertAuthenticatedRequest,
+  assertAuthorizationHeader,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 
 interface RequestContext {
   authorization?: string | null;
+  isAlreadyAuthorized?: boolean;
   searchParams: URLSearchParams;
 }
 
@@ -40,10 +45,13 @@ function parseDirection(value: string | null): OrderDirection {
 
 export async function handleInscricoesRequest({
   authorization,
+  isAlreadyAuthorized,
   searchParams,
 }: RequestContext) {
   try {
-    assertAuthorizationHeader(authorization);
+    if (!isAlreadyAuthorized) {
+      assertAuthorizationHeader(authorization);
+    }
 
     const page = parseNumber(searchParams.get("page"), 1);
     const pageSize = Math.min(parseNumber(searchParams.get("pageSize"), 10), 50);
@@ -88,8 +96,17 @@ export async function handleInscricoesRequest({
 }
 
 export async function GET(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const context = {
     authorization: request.headers.get("authorization"),
+    isAlreadyAuthorized: true,
     searchParams: new URL(request.url).searchParams,
   } satisfies RequestContext;
 

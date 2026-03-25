@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { assertToken } from "@/lib/auth";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import {
   createRecruiterInscricao,
   findInscricaoIdByOwnCode,
@@ -20,6 +19,7 @@ function parseOptionalString(value: unknown): string | null | undefined {
   if (typeof value !== "string") {
     throw new Error("O valor precisa ser uma string");
   }
+
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -40,31 +40,26 @@ function parseOptionalNumber(value: unknown): number | null | undefined {
       return parsed;
     }
   }
-  throw new Error("Valor numérico inválido");
-}
 
-async function ensureAuthorizedToken(): Promise<void> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
-  assertToken(token);
+  throw new Error("Valor numerico invalido");
 }
 
 export async function POST(request: Request) {
   try {
-    await ensureAuthorizedToken();
+    assertAuthenticatedRequest(request);
   } catch {
-    return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
   }
 
   let payload: unknown;
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    return NextResponse.json({ error: "JSON invalido" }, { status: 400 });
   }
 
   if (!payload || typeof payload !== "object") {
-    return NextResponse.json({ error: "Dados inválidos" }, { status: 400 });
+    return NextResponse.json({ error: "Dados invalidos" }, { status: 400 });
   }
 
   const record = payload as Record<string, unknown>;
@@ -73,11 +68,12 @@ export async function POST(request: Request) {
 
   let code = parseOptionalString(record.code);
   if (!code) {
-    return NextResponse.json({ error: "O código do recrutador é obrigatório" }, { status: 400 });
+    return NextResponse.json({ error: "O codigo do recrutador e obrigatorio" }, { status: 400 });
   }
+
   const normalizedCode = normalizeRecruiterCode(code);
   if (!normalizedCode) {
-    return NextResponse.json({ error: "Código inválido" }, { status: 400 });
+    return NextResponse.json({ error: "Codigo invalido" }, { status: 400 });
   }
   code = normalizedCode;
 
@@ -90,12 +86,18 @@ export async function POST(request: Request) {
     if (mode === "link") {
       const inscricaoIdRaw = parseOptionalNumber(record.existingInscricaoId);
       if (inscricaoIdRaw === undefined || inscricaoIdRaw === null) {
-        return NextResponse.json({ error: "Informe o ID da inscrição a ser promovida" }, { status: 400 });
+        return NextResponse.json(
+          { error: "Informe o ID da inscricao a ser promovida" },
+          { status: 400 }
+        );
       }
 
       const conflictId = await findInscricaoIdByOwnCode(code);
       if (conflictId && conflictId !== inscricaoIdRaw) {
-        return NextResponse.json({ error: "Código já está associado a outro recrutador" }, { status: 409 });
+        return NextResponse.json(
+          { error: "Codigo ja esta associado a outro recrutador" },
+          { status: 409 }
+        );
       }
 
       const updates: UpdateInscricaoInput = {
@@ -150,6 +152,7 @@ export async function POST(request: Request) {
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
+
     return NextResponse.json({ error: "Erro inesperado" }, { status: 500 });
   }
 }

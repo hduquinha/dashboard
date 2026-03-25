@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 
 const SCHEMA_NAME = "inscricoes";
@@ -14,6 +15,12 @@ const SCHEMA_NAME = "inscricoes";
  *   day?: number           — Dia específico para resetar (1 ou 2). Se omitido, reseta tudo.
  */
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { treinamentoId, day } = body as { treinamentoId: string; day?: number };

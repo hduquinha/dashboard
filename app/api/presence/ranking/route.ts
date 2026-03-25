@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool, loadRecruiterCache, getRecruiterFromCache } from "@/lib/db";
 import { getRecruiterByCodeIfNamed } from "@/lib/recruiters";
 
@@ -14,6 +15,14 @@ const SCHEMA_NAME = "inscricoes";
  * come first, ordered by time on that day.
  */
 export async function GET(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const treinamentoId = searchParams.get("treinamento");

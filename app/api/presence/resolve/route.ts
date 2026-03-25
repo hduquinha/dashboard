@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 
 const SCHEMA_NAME = "inscricoes";
@@ -9,6 +10,12 @@ interface ResolveRequest {
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const body: ResolveRequest = await request.json();
     const { pendingId, inscricaoId } = body;
@@ -91,6 +98,14 @@ export async function POST(request: NextRequest) {
 
 // Endpoint para buscar inscrições para associação
 export async function GET(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const searchParams = request.nextUrl.searchParams;
     const query = searchParams.get("q") ?? "";

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool, loadRecruiterCache, getRecruiterFromCache } from "@/lib/db";
 import { getRecruiterByCodeIfNamed } from "@/lib/recruiters";
 
@@ -16,6 +17,14 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const { id: treinamentoId } = await params;
 

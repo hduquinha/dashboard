@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import {
   parseZoomCSV,
   consolidateParticipants,
@@ -147,6 +148,12 @@ async function getInscricoesByTreinamento(treinamentoId: string): Promise<Inscri
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const formData = await request.formData();
     

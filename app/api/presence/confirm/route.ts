@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 
 const SCHEMA_NAME = "inscricoes";
@@ -36,6 +37,12 @@ interface RequestBody {
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const body: RequestBody = await request.json();
     const { associations, pending, treinamentoId, totalDays, currentDay, dinamicaDays } = body;

@@ -1,13 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { linkAnamneseToRecruiter } from "@/lib/anamnese";
 
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const body = await request.json();
     const { anamneseId, recruiterCode } = body;
 
     if (!anamneseId || !recruiterCode) {
-      return NextResponse.json({ error: "Missing anamneseId or recruiterCode" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Missing anamneseId or recruiterCode" },
+        { status: 400 }
+      );
     }
 
     await linkAnamneseToRecruiter(anamneseId, recruiterCode);

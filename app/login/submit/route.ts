@@ -1,12 +1,44 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { getExpectedToken } from "@/lib/auth";
+import {
+  DASHBOARD_COOKIE_NAME,
+  createSessionValue,
+  getExpectedToken,
+  getSessionCookieMaxAge,
+  isValidAccessToken,
+} from "@/lib/auth";
+import {
+  consumeRateLimit,
+  getClientIp,
+  peekRateLimit,
+  resetRateLimit,
+} from "@/lib/rateLimit";
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 8;
+
+function buildErrorResponse(request: NextRequest, errorCode: "invalid" | "rate_limited") {
+  const url = new URL("/login", request.url);
+  url.searchParams.set("error", errorCode);
+
+  const response = NextResponse.redirect(url);
+  response.cookies.set(DASHBOARD_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+  response.headers.set("Cache-Control", "no-store");
+
+  return response;
+}
 
 export async function POST(request: NextRequest) {
   const expected = getExpectedToken();
   if (!expected) {
     console.error("DASHBOARD_TOKEN is not configured");
-    return NextResponse.json({ error: "Configuração ausente" }, { status: 500 });
+    return NextResponse.json({ error: "Configuracao ausente" }, { status: 500 });
   }
 
   const contentType = request.headers.get("content-type") ?? "";
@@ -25,20 +57,54 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (providedToken !== expected) {
-    const url = new URL("/login", request.url);
-    url.searchParams.set("error", "invalid");
-    return NextResponse.redirect(url);
+  const clientIp = getClientIp(request);
+  const rateLimitKey = `login:${clientIp}`;
+  const rateLimitStatus = peekRateLimit({
+    key: rateLimitKey,
+    maxHits: LOGIN_MAX_ATTEMPTS,
+    windowMs: LOGIN_WINDOW_MS,
+  });
+
+  if (!rateLimitStatus.allowed) {
+    const response = buildErrorResponse(request, "rate_limited");
+    response.headers.set("Retry-After", String(rateLimitStatus.retryAfterSeconds));
+    return response;
+  }
+
+  if (!isValidAccessToken(providedToken)) {
+    const failedAttempt = consumeRateLimit({
+      key: rateLimitKey,
+      maxHits: LOGIN_MAX_ATTEMPTS,
+      windowMs: LOGIN_WINDOW_MS,
+    });
+
+    if (!failedAttempt.allowed) {
+      const response = buildErrorResponse(request, "rate_limited");
+      response.headers.set("Retry-After", String(failedAttempt.retryAfterSeconds));
+      return response;
+    }
+
+    return buildErrorResponse(request, "invalid");
+  }
+
+  resetRateLimit(rateLimitKey);
+
+  const sessionValue = createSessionValue();
+  if (!sessionValue) {
+    console.error("Failed to create dashboard session");
+    return NextResponse.json({ error: "Configuracao ausente" }, { status: 500 });
   }
 
   const response = NextResponse.redirect(new URL("/", request.url));
-  response.cookies.set("dashboardToken", expected, {
+  response.cookies.set(DASHBOARD_COOKIE_NAME, sessionValue, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: getSessionCookieMaxAge(),
+    priority: "high",
   });
+  response.headers.set("Cache-Control", "no-store");
 
   return response;
 }

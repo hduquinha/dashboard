@@ -1,16 +1,25 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import { listTrainingsWithStats } from "@/lib/db";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado", trainings: [] }, { status: 401 });
+  }
+
   try {
     const trainings = await listTrainingsWithStats();
-    
+
     return NextResponse.json({
-      trainings: trainings.map((t) => ({
-        id: t.id,
-        label: t.label,
-        startsAt: t.startsAt,
-        days: t.days ?? 1,
+      trainings: trainings.map((training) => ({
+        id: training.id,
+        label: training.label,
+        startsAt: training.startsAt,
+        days: training.days ?? 1,
       })),
     });
   } catch (error) {

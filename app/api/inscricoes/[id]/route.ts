@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { assertToken } from "@/lib/auth";
-import { deleteInscricao, getInscricaoById, updateInscricao, type UpdateInscricaoInput } from "@/lib/db";
+import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
+import {
+  deleteInscricao,
+  getInscricaoById,
+  updateInscricao,
+  type UpdateInscricaoInput,
+} from "@/lib/db";
 
 type RouteParams = {
   id: string;
@@ -36,44 +40,43 @@ async function resolveInscricaoId(context: RouteContext): Promise<number | null>
   const resolvedParams = await Promise.resolve(context.params);
   const idRaw = resolvedParams?.id;
   const id = Number.parseInt(idRaw ?? "", 10);
+
   if (!Number.isFinite(id) || id < 1) {
     return null;
   }
+
   return id;
 }
 
-async function ensureAuthorizedToken(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
-
-  try {
-    assertToken(token);
-  } catch {
-    return null;
+function handleUnauthorized(error: unknown) {
+  if (error instanceof UnauthorizedError) {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
   }
 
-  return token ?? null;
+  throw error;
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
-  if (!(await ensureAuthorizedToken())) {
-    return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+  try {
+    assertAuthenticatedRequest(request);
+  } catch (error) {
+    return handleUnauthorized(error);
   }
 
   const id = await resolveInscricaoId(context);
   if (!id) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+    return NextResponse.json({ error: "ID invalido" }, { status: 400 });
   }
 
   let payload: unknown;
   try {
     payload = await request.json();
   } catch {
-    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+    return NextResponse.json({ error: "JSON invalido" }, { status: 400 });
   }
 
   if (!payload || typeof payload !== "object") {
-    return NextResponse.json({ error: "Corpo da requisição inválido" }, { status: 400 });
+    return NextResponse.json({ error: "Corpo da requisicao invalido" }, { status: 400 });
   }
 
   const record = payload as Record<string, unknown>;
@@ -104,7 +107,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (error instanceof Error) {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
-    return NextResponse.json({ error: "Dados inválidos" }, { status: 400 });
+
+    return NextResponse.json({ error: "Dados invalidos" }, { status: 400 });
   }
 
   const updates: UpdateInscricaoInput = {
@@ -117,7 +121,6 @@ export async function PATCH(request: Request, context: RouteContext) {
   };
 
   const hasUpdates = Object.values(updates).some((value) => value !== undefined);
-
   if (!hasUpdates) {
     return NextResponse.json(
       { error: "Informe ao menos um campo para atualizar" },
@@ -129,56 +132,63 @@ export async function PATCH(request: Request, context: RouteContext) {
     const inscricao = await updateInscricao(id, updates);
     return NextResponse.json({ inscricao });
   } catch (error) {
-    if (error instanceof Error && error.message.includes("não encontrada")) {
+    if (error instanceof Error && /encontrad/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }
 
-    console.error("Failed to update inscrição", error);
-    return NextResponse.json({ error: "Erro ao atualizar inscrição" }, { status: 500 });
+    console.error("Failed to update inscricao", error);
+    return NextResponse.json({ error: "Erro ao atualizar inscricao" }, { status: 500 });
   }
 }
 
-export async function GET(_request: Request, context: RouteContext) {
-  if (!(await ensureAuthorizedToken())) {
-    return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+export async function GET(request: Request, context: RouteContext) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch (error) {
+    return handleUnauthorized(error);
   }
 
   const id = await resolveInscricaoId(context);
   if (!id) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+    return NextResponse.json({ error: "ID invalido" }, { status: 400 });
   }
 
   try {
     const inscricao = await getInscricaoById(id);
     if (!inscricao) {
-      return NextResponse.json({ error: "Inscrição não encontrada" }, { status: 404 });
+      return NextResponse.json({ error: "Inscricao nao encontrada" }, { status: 404 });
     }
+
     return NextResponse.json({ inscricao });
   } catch (error) {
-    console.error("Failed to load inscrição", error);
-    return NextResponse.json({ error: "Erro ao carregar inscrição" }, { status: 500 });
+    console.error("Failed to load inscricao", error);
+    return NextResponse.json({ error: "Erro ao carregar inscricao" }, { status: 500 });
   }
 }
 
-export async function DELETE(_request: Request, context: RouteContext) {
-  if (!(await ensureAuthorizedToken())) {
-    return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
+export async function DELETE(request: Request, context: RouteContext) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch (error) {
+    return handleUnauthorized(error);
   }
 
   const id = await resolveInscricaoId(context);
   if (!id) {
-    return NextResponse.json({ error: "ID inválido" }, { status: 400 });
+    return NextResponse.json({ error: "ID invalido" }, { status: 400 });
   }
 
   try {
     await deleteInscricao(id);
     return NextResponse.json({ success: true });
   } catch (error) {
-    if (error instanceof Error && error.message.includes("não encontrada")) {
+    if (error instanceof Error && /encontrad/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });
     }
 
-    console.error("Failed to delete inscrição", error);
-    return NextResponse.json({ error: "Erro ao excluir inscrição" }, { status: 500 });
+    console.error("Failed to delete inscricao", error);
+    return NextResponse.json({ error: "Erro ao excluir inscricao" }, { status: 500 });
   }
 }

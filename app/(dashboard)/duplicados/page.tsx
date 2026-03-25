@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { assertToken } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
 import DuplicateAlerts from "@/components/DuplicateAlerts";
 
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function DuplicadosPage() {
   const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
+  const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
 
   try {
     assertToken(token);

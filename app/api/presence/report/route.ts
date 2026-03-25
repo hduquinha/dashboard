@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertAuthenticatedRequest } from "@/lib/auth";
 import PDFDocument from "pdfkit";
 import { Buffer } from "node:buffer";
 
@@ -32,6 +33,12 @@ function formatMinutes(minutes: number): string {
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+
   try {
     const body: ReportRequest = await request.json();
     const { treinamentoId, clusters, totalParticipantes, totalAprovados, totalReprovados } = body;

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { assertToken } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
 
 interface LoginPageProps {
   searchParams:
@@ -14,20 +14,26 @@ function pickMessage(searchParams: Record<string, string | string[] | undefined>
   if (!error) {
     return null;
   }
+
   const value = Array.isArray(error) ? error[0] : error;
   if (value === "invalid") {
-    return "Token inválido. Verifique e tente novamente.";
+    return "Token invalido. Verifique e tente novamente.";
   }
+  if (value === "rate_limited") {
+    return "Muitas tentativas de login. Aguarde alguns minutos e tente novamente.";
+  }
+
   return null;
 }
 
 export const metadata: Metadata = {
-  title: "Login | Painel de Inscrições",
+  title: "Login | Painel de Inscricoes",
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const cookieStore = await cookies();
-  const token = cookieStore.get("dashboardToken")?.value;
+  const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
+
   if (token) {
     try {
       assertToken(token);
@@ -45,7 +51,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       <div className="w-full max-w-md rounded-lg border border-neutral-200 bg-white p-8 shadow-sm">
         <h1 className="text-lg font-semibold text-neutral-900">Acessar painel</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Informe o token de acesso para visualizar as inscrições.
+          Informe o token de acesso para visualizar as inscricoes.
         </p>
 
         <form action="/login/submit" method="post" className="mt-6 space-y-4">

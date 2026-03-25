@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { assertToken, UnauthorizedError } from "@/lib/auth";
+import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
 import { listInscricoes, listRecruitersWithDbNames } from "@/lib/db";
 import { humanizeName } from "@/lib/utils";
 import type { InscricaoItem, OrderableField, OrderDirection } from "@/types/inscricao";
@@ -94,9 +93,9 @@ function getPresencaLabel(inscricao: InscricaoItem): string {
 
 export async function GET(request: NextRequest) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("dashboardToken")?.value;
-    assertToken(token);
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
 
     const url = new URL(request.url);
     const searchParams = url.searchParams;
