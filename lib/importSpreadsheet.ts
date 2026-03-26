@@ -77,6 +77,13 @@ function normalizeString(value: unknown): string | null {
 }
 
 function parseList(value: unknown): string[] | null {
+  if (Array.isArray(value)) {
+    const values = value
+      .map((entry) => normalizeString(entry))
+      .filter((entry): entry is string => Boolean(entry));
+    return values.length ? values : null;
+  }
+
   const normalized = normalizeString(value);
   if (!normalized) {
     return null;
@@ -244,6 +251,12 @@ function normalizeTrainingValue(value: unknown): string | null {
     return null;
   }
 
+  const isoDateMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDateMatch) {
+    const [, year, month, day] = isoDateMatch;
+    return formatDateParts(Number(year), Number(month), Number(day));
+  }
+
   const directDate = new Date(normalized);
   if (!Number.isNaN(directDate.getTime())) {
     return formatDateParts(directDate.getFullYear(), directDate.getMonth() + 1, directDate.getDate());
@@ -301,6 +314,36 @@ function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
     comentarios_adicionais: normalizeString(row.comentarios_adicionais),
     relacionamentos_familiares: normalizeString(row.relacionamentos_familiares),
   };
+}
+
+export function sanitizeImportFilename(value: unknown): string | null {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+
+  const sanitized = normalized.replace(/[\u0000-\u001F\u007F]+/g, "").trim();
+  if (!sanitized) {
+    return null;
+  }
+
+  return sanitized.slice(0, 180);
+}
+
+export function sanitizeImportedRecord(record: unknown): ImportPayload {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    throw new Error("Registro de importacao invalido.");
+  }
+
+  return buildPayload(record as Record<string, unknown>);
+}
+
+export function sanitizeImportedRecords(records: unknown): ImportPayload[] {
+  if (!Array.isArray(records)) {
+    throw new Error("Lote de importacao invalido.");
+  }
+
+  return records.map((record) => sanitizeImportedRecord(record));
 }
 
 export function importSpreadsheet(data: SpreadsheetBinary, options?: ImportOptions): ImportResult {

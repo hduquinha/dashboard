@@ -1,15 +1,96 @@
 "use server";
 
+import { cookies, headers } from "next/headers";
+import {
+  assertSameOrigin,
+  assertToken,
+  DASHBOARD_COOKIE_NAME,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { insertImportedInscricoes, type InsertImportedInscricoesResult } from "@/lib/db";
-import { importSpreadsheet, type ImportPayload } from "@/lib/importSpreadsheet";
+import {
+  importSpreadsheet,
+  sanitizeImportFilename,
+  sanitizeImportedRecords,
+  type ImportPayload,
+} from "@/lib/importSpreadsheet";
 import type { ImportActionState } from "./state";
 
 const MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024; // 15MB guard to avoid oversized uploads
+const IMPORT_AUTH_ERROR_MESSAGE =
+  "Sessão expirada ou origem inválida. Atualize a página e faça login novamente.";
+
+function buildServerActionUrl(headerStore: Awaited<ReturnType<typeof headers>>): string {
+  const forwardedProto = headerStore.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = headerStore.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || headerStore.get("host") || "localhost";
+
+  if (forwardedProto) {
+    return `${forwardedProto}://${host}/`;
+  }
+
+  const origin = headerStore.get("origin");
+  if (origin) {
+    try {
+      return `${new URL(origin).protocol}//${host}/`;
+    } catch {
+      // Fall through to the default URL below.
+    }
+  }
+
+  return `https://${host}/`;
+}
+
+async function assertAuthenticatedImportAction(): Promise<void> {
+  const [cookieStore, headerStore] = await Promise.all([cookies(), headers()]);
+  const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
+
+  assertToken(token);
+  assertSameOrigin({
+    headers: headerStore,
+    url: buildServerActionUrl(headerStore),
+  });
+}
+
+function buildUnauthorizedImportState(): ImportActionState {
+  return {
+    status: "error",
+    message: IMPORT_AUTH_ERROR_MESSAGE,
+  };
+}
+
+export interface ConfirmImportInput {
+  filename?: string | null;
+  registros: ImportPayload[];
+}
+
+export interface ConfirmImportResponse {
+  status: "success" | "error";
+  message: string;
+  summary?: InsertImportedInscricoesResult;
+}
+
+function buildUnauthorizedConfirmResponse(): ConfirmImportResponse {
+  return {
+    status: "error",
+    message: IMPORT_AUTH_ERROR_MESSAGE,
+  };
+}
 
 export async function previewImportAction(
   _prevState: ImportActionState,
   formData: FormData
 ): Promise<ImportActionState> {
+  try {
+    await assertAuthenticatedImportAction();
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return buildUnauthorizedImportState();
+    }
+
+    throw error;
+  }
+
   const file = formData.get("planilha");
   if (!file || !(file instanceof File)) {
     return {
@@ -32,13 +113,15 @@ export async function previewImportAction(
     };
   }
 
+  const sanitizedFilename = sanitizeImportFilename(file.name) ?? "planilha";
+
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const result = importSpreadsheet(bytes, { filename: file.name });
+    const result = importSpreadsheet(bytes, { filename: sanitizedFilename });
     return {
       status: "success",
       message: `Pré-visualização pronta: ${result.importados.length} registros válidos`,
-      filename: file.name,
+      filename: sanitizedFilename,
       result,
     };
   } catch (error) {
@@ -50,19 +133,28 @@ export async function previewImportAction(
   }
 }
 
-export interface ConfirmImportInput {
-  filename?: string | null;
-  registros: ImportPayload[];
-}
-
-export interface ConfirmImportResponse {
-  status: "success" | "error";
-  message: string;
-  summary?: InsertImportedInscricoesResult;
-}
-
 export async function confirmImportAction(input: ConfirmImportInput): Promise<ConfirmImportResponse> {
-  if (!input || !Array.isArray(input.registros) || input.registros.length === 0) {
+  try {
+    await assertAuthenticatedImportAction();
+  } catch (error) {
+    if (error instanceof UnauthorizedError) {
+      return buildUnauthorizedConfirmResponse();
+    }
+
+    throw error;
+  }
+
+  let registros: ImportPayload[];
+  try {
+    registros = sanitizeImportedRecords(input?.registros);
+  } catch {
+    return {
+      status: "error",
+      message: "Lote inválido. Gere a pré-visualização novamente antes de importar.",
+    };
+  }
+
+  if (registros.length === 0) {
     return {
       status: "error",
       message: "Nenhum registro válido para importar.",
@@ -70,8 +162,8 @@ export async function confirmImportAction(input: ConfirmImportInput): Promise<Co
   }
 
   try {
-    const summary = await insertImportedInscricoes(input.registros, {
-      filename: input.filename ?? null,
+    const summary = await insertImportedInscricoes(registros, {
+      filename: sanitizeImportFilename(input?.filename) ?? null,
     });
 
     const insertedLabel = `${summary.inserted} registro${summary.inserted === 1 ? "" : "s"} importado${
@@ -82,7 +174,7 @@ export async function confirmImportAction(input: ConfirmImportInput): Promise<Co
           summary.skipped === 1 ? "" : "s"
         }`
       : null;
-    const combinedMessage = skippedLabel ? `${insertedLabel} · ${skippedLabel}` : insertedLabel;
+    const combinedMessage = skippedLabel ? `${insertedLabel} | ${skippedLabel}` : insertedLabel;
     const finalMessage = summary.inserted > 0 ? combinedMessage : skippedLabel ?? "Nenhum registro novo para importar.";
 
     return {
