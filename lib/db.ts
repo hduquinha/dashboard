@@ -869,28 +869,61 @@ export async function searchInscricoesByName(
 
   const sanitized = needle.replace(/[\\%_]/g, (match) => `\\${match}`);
   const likeValue = `%${sanitized}%`;
+  const digits = needle.replace(/\D+/g, "");
+  const nameExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'nome'), ''), NULLIF(TRIM(i.payload->>'name'), ''), NULLIF(TRIM(i.payload->>'dashboard_nome'), ''), '')";
+  const phoneExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'telefone'), ''), NULLIF(TRIM(i.payload->>'phone'), ''), NULLIF(TRIM(i.payload->>'celular'), ''), NULLIF(TRIM(i.payload->>'whatsapp'), ''), NULLIF(TRIM(i.payload->>'dashboard_telefone'), ''), '')";
+  const cityExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'cidade'), ''), NULLIF(TRIM(i.payload->>'city'), ''), NULLIF(TRIM(i.payload->>'dashboard_cidade'), ''), '')";
+  const professionExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'profissao'), ''), NULLIF(TRIM(i.payload->>'profissao_area'), ''), NULLIF(TRIM(i.payload->>'profissaoArea'), ''), NULLIF(TRIM(i.payload->>'dashboard_profissao'), ''), NULLIF(TRIM(i.payload->>'occupation'), ''), NULLIF(TRIM(i.payload->>'job'), ''), '')";
+  const trainingExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'treinamento'), ''), NULLIF(TRIM(i.payload->>'training'), ''), NULLIF(TRIM(i.payload->>'training_id'), ''), NULLIF(TRIM(i.payload->>'trainingId'), ''), NULLIF(TRIM(i.payload->>'treinamento_nome'), ''), NULLIF(TRIM(i.payload->>'treinamentoNome'), ''), NULLIF(TRIM(i.payload->>'dashboard_treinamento'), ''), '')";
+  const recruiterExpression =
+    "COALESCE(NULLIF(TRIM(i.payload->>'traffic_source'), ''), NULLIF(TRIM(i.payload->>'codigo_indicador'), ''), NULLIF(TRIM(i.payload->>'indicador'), ''), NULLIF(TRIM(i.payload->>'recrutadorCodigo'), ''), NULLIF(TRIM(i.payload->>'codigo_recrutador'), ''), NULLIF(TRIM(i.payload->>'dashboard_indicador_codigo'), ''), NULLIF(TRIM(i.payload->>'dashboard_indicador_nome'), ''), '')";
+  const values: Array<string | number> = [likeValue];
+  const searchConditions = [
+    `${nameExpression} ILIKE $1 ESCAPE '\\'`,
+    `${phoneExpression} ILIKE $1 ESCAPE '\\'`,
+    `${recruiterExpression} ILIKE $1 ESCAPE '\\'`,
+    `COALESCE(i.payload->>'dashboard_search', '') ILIKE $1 ESCAPE '\\'`,
+  ];
+
+  if (digits) {
+    values.push(`%${digits}%`);
+    searchConditions.push(`regexp_replace(${phoneExpression}, '[^0-9]', '', 'g') LIKE $${values.length}`);
+
+    const numericId = Number.parseInt(digits, 10);
+    if (Number.isFinite(numericId)) {
+      values.push(numericId);
+      searchConditions.push(`i.id = $${values.length}`);
+    }
+  }
+
   const safeLimit = Math.max(1, Math.min(50, Math.trunc(limit)));
+  values.push(safeLimit);
 
   const query = `
     SELECT
       i.id,
       i.payload,
       i.criado_em,
-      i.payload->>'nome' AS nome,
-      i.payload->>'telefone' AS telefone,
-      i.payload->>'cidade' AS cidade,
-      i.payload->>'profissao' AS profissao,
-      i.payload->>'treinamento' AS treinamento,
-      i.payload->>'traffic_source' AS traffic_source,
+      ${nameExpression} AS nome,
+      ${phoneExpression} AS telefone,
+      ${cityExpression} AS cidade,
+      ${professionExpression} AS profissao,
+      ${trainingExpression} AS treinamento,
+      ${recruiterExpression} AS traffic_source,
       NULL::bigint AS total_count
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE COALESCE(i.payload->>'nome', '') ILIKE $1 ESCAPE '\\'
+    WHERE (${searchConditions.join(" OR ")})
     ORDER BY i.criado_em DESC
-    LIMIT $2
+    LIMIT $${values.length}
   `;
 
   try {
-    const { rows } = await getPool().query<DbRow>(query, [likeValue, safeLimit]);
+    const { rows } = await getPool().query<DbRow>(query, values);
     return rows.map(mapDbRowToInscricaoItem);
   } catch (error) {
     console.error('Failed to search inscrições by name', error);

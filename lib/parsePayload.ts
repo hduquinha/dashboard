@@ -26,18 +26,26 @@ export const TRAINING_FIELD_KEYS = [
   "treinamentoNome",
   "treinamento_label",
   "treinamentoLabel",
+  "dashboard_treinamento",
 ];
 
 const ALTERNATE_KEYS: Record<keyof InscricaoPayload, string[]> = {
-  nome: ["name"],
-  telefone: ["phone", "celular"],
-  cidade: ["city"],
+  nome: ["name", "dashboard_nome"],
+  telefone: ["phone", "celular", "dashboard_telefone"],
+  cidade: ["city", "dashboard_cidade"],
   estado: ["state"],
   email: [],
   origem: ["source", "origem_lead"],
   timestamp: ["created_at", "createdAt", "dataHora", "timestamp"],
-  traffic_source: ["trafficSource", "codigo_indicador", "indicador", "ref", "referral"],
-  profissao: ["occupation", "job", "profissao"],
+  traffic_source: [
+    "trafficSource",
+    "codigo_indicador",
+    "indicador",
+    "ref",
+    "referral",
+    "dashboard_indicador_codigo",
+  ],
+  profissao: ["occupation", "job", "profissao", "profissao_area", "profissaoArea", "dashboard_profissao"],
   treinamento: TRAINING_FIELD_KEYS.filter((key) => key !== "treinamento"),
   tipo: ["type", "perfil", "papel", "role", "categoria"],
   codigoRecrutador: [
