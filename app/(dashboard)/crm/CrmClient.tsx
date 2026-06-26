@@ -20,6 +20,7 @@ import { buildChatwootOpenChatUrl, humanizeName } from "@/lib/utils";
 import { FormHistoryView } from "@/components/FormHistoryView";
 import { EditLeadPanel } from "@/components/EditLeadPanel";
 import { MergeLeadsModal } from "@/components/MergeLeadsModal";
+import { CrmKanbanView } from "@/components/CrmKanbanView";
 
 /* ───────── Types ───────── */
 
@@ -320,6 +321,9 @@ export default function CrmClient({
   const [showMergeModal, setShowMergeModal] = useState(false);
   const [deletingLead, setDeletingLead] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [view, setView] = useState<"list" | "kanban">(() =>
+    searchParams.get("view") === "kanban" ? "kanban" : "list"
+  );
   const filterBarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { setRecords(inscricoes); }, [inscricoes]);
@@ -787,10 +791,37 @@ export default function CrmClient({
 
         {/* Row 1: Title + sync */}
         <div className="flex items-center justify-between gap-4 px-5 py-3">
-          <div className="flex items-baseline gap-3">
+          <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold text-neutral-900">CRM</h1>
-            <span className="text-xs text-neutral-400">{total.toLocaleString()} registros · p. {page}/{totalPages}</span>
+            <span className="text-xs text-neutral-400">
+              {view === "list" ? `${total.toLocaleString()} registros · p. ${page}/${totalPages}` : "Kanban"}
+            </span>
             {syncMessage && <span className="text-xs text-cyan-600">{syncMessage}</span>}
+            {/* View toggle */}
+            <div className="flex overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50">
+              <button
+                type="button"
+                onClick={() => { setView("list"); updateQuery({ view: null }); }}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium transition ${view === "list" ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-700"}`}
+                title="Vista em lista"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                Lista
+              </button>
+              <button
+                type="button"
+                onClick={() => { setView("kanban"); updateQuery({ view: "kanban" }); }}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium transition ${view === "kanban" ? "bg-white text-neutral-900 shadow-sm" : "text-neutral-500 hover:text-neutral-700"}`}
+                title="Vista em kanban"
+              >
+                <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                Kanban
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <ExportMenu
@@ -1351,8 +1382,19 @@ export default function CrmClient({
       {/* ── MAIN SPLIT ─────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
 
+        {/* ── KANBAN VIEW ────────────────────────────────── */}
+        {view === "kanban" && (
+          <CrmKanbanView
+            selectedId={selectedId}
+            onSelectLead={setSelectedId}
+            produto={filters.produto ?? null}
+            assignedSellerEmail={filters.assignedSellerEmail || undefined}
+            isSupervisor={commercial.isSupervisor}
+          />
+        )}
+
         {/* ── TABLE PANE ─────────────────────────────────── */}
-        <div className={`flex flex-col border-r border-neutral-200 transition-all ${selected ? "hidden lg:flex lg:w-[55%]" : "w-full"}`}>
+        <div className={`${view === "kanban" ? "hidden" : ""} flex flex-col border-r border-neutral-200 transition-all ${selected ? "hidden lg:flex lg:w-[55%]" : "w-full"}`}>
 
           {/* Mobile cards */}
           <div className="flex-1 overflow-y-auto p-3 md:hidden">
