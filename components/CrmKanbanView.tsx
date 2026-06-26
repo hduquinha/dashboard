@@ -277,13 +277,13 @@ function KanbanColumn({
   const cfg = STAGE_CONFIG[stage];
 
   return (
-    <div className="flex w-60 flex-shrink-0 flex-col rounded-xl border border-neutral-200 bg-neutral-50 shadow-sm">
+    <div className="flex w-64 flex-shrink-0 flex-col rounded-xl border border-neutral-200 bg-neutral-50 shadow-sm">
       {/* Header */}
-      <div className={`flex items-center gap-2 rounded-t-xl px-3 py-2.5 ${cfg.headerBg}`}>
-        <span className={`flex-1 truncate text-[11px] font-bold uppercase tracking-wider ${cfg.headerText}`}>
+      <div className={`flex items-center gap-2 rounded-t-xl px-4 py-3 ${cfg.headerBg}`}>
+        <span className={`flex-1 truncate text-[13px] font-bold leading-tight tracking-normal ${cfg.headerText}`}>
           {cfg.label}
         </span>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${cfg.badgeBg} ${cfg.badgeText}`}>
+        <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${cfg.badgeBg} ${cfg.badgeText}`}>
           {total}
         </span>
       </div>
