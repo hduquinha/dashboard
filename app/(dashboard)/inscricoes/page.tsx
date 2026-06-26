@@ -1,15 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ArrowLeft, Download, MessageCircle, UploadCloud, Users } from "lucide-react";
 import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
+import { listChatwootChannelOptions } from "@/lib/chatwoot";
+import { isOnlineTraining } from "@/lib/participantTags";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
-import type { TrainingOption } from "@/types/training";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PAGE_SIZE = 500;
-const MAX_PAGE_SIZE = 1000;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 interface CrmPageProps {
   searchParams:
@@ -74,32 +76,12 @@ export default async function CrmPage(props: CrmPageProps) {
   const orderDirection = parseDirection(searchParams?.orderDirection);
   const nome = pickStringParam(searchParams?.nome) ?? "";
   const telefone = pickStringParam(searchParams?.telefone) ?? "";
+  const cidade = pickStringParam(searchParams?.cidade) ?? "";
   const indicacao = pickStringParam(searchParams?.indicacao) ?? "";
-  const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
+  const treinamentoSelecionado =
+    pickStringParam(searchParams?.data_treinamento) ?? pickStringParam(searchParams?.treinamento) ?? "";
+  const tamanhoCamiseta = pickStringParam(searchParams?.tamanho_camiseta) ?? "";
   const presencaFiltro = pickStringParam(searchParams?.presenca) as "aprovada" | "reprovada" | "validada" | "nao-validada" | undefined;
-
-  const baseSearchParams = new URLSearchParams();
-  if (searchParams && typeof searchParams === "object") {
-    for (const [key, value] of Object.entries(searchParams)) {
-      const normalized = Array.isArray(value) ? value[0] : value;
-      if (typeof normalized === "string" && normalized.length > 0) {
-        baseSearchParams.set(key, normalized);
-      }
-    }
-  }
-
-  const buildFiltersHref = (overrides: Record<string, string | null | undefined>) => {
-    const next = new URLSearchParams(baseSearchParams);
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value === null || value === undefined || value === "") {
-        next.delete(key);
-      } else {
-        next.set(key, value);
-      }
-    }
-    const query = next.toString();
-    return query.length ? `/crm?${query}` : "/crm";
-  };
 
   const recruiterOptionsPromise = listRecruitersWithDbNames();
   const trainingOptions = await listTrainingFilterOptions();
@@ -136,18 +118,28 @@ export default async function CrmPage(props: CrmPageProps) {
     filters: {
       nome,
       telefone,
+      cidade,
       indicacao,
-      treinamento: activeTreinamentoId || undefined,
+      dataTreinamento: activeTreinamentoId || undefined,
+      tamanhoCamiseta,
       presenca: presencaFiltro,
     },
   });
 
-  const [recruiterOptions, result] = await Promise.all([recruiterOptionsPromise, resultPromise]);
+  const [recruiterOptions, result, chatwootChannels] = await Promise.all([
+    recruiterOptionsPromise,
+    resultPromise,
+    listChatwootChannelOptions(),
+  ]);
 
-  const indicatorDatalistId = "indicator-options";
   const selectedTrainingOption = activeTreinamentoId.length
     ? trainingOptions.find((option) => option.id === activeTreinamentoId)
     : undefined;
+  const useOnlineTrainingTable =
+    activeTreinamentoId.length > 0 &&
+    (selectedTrainingOption
+      ? selectedTrainingOption.kind === "online"
+      : isOnlineTraining(activeTreinamentoId));
   const trainingFilterLabel = selectedTrainingOption
     ? selectedTrainingOption.label ?? selectedTrainingOption.id
     : activeTreinamentoId;
@@ -169,7 +161,9 @@ export default async function CrmPage(props: CrmPageProps) {
   const activeFilters = [
     nome ? { label: "Nome", value: nome } : null,
     telefone ? { label: "Telefone", value: telefone } : null,
-    indicacao ? { label: "Indicador", value: indicadorLabel } : null,
+    cidade ? { label: "Cidade", value: cidade } : null,
+    tamanhoCamiseta ? { label: "Camiseta", value: tamanhoCamiseta } : null,
+    indicacao ? { label: "Indicacao", value: indicadorLabel } : null,
     activeTreinamentoId
       ? {
           label: "Treinamento",
@@ -188,41 +182,83 @@ export default async function CrmPage(props: CrmPageProps) {
   const paramsForExport = new URLSearchParams();
   if (nome) paramsForExport.set("nome", nome);
   if (telefone) paramsForExport.set("telefone", telefone);
+  if (cidade) paramsForExport.set("cidade", cidade);
   if (indicacao) paramsForExport.set("indicacao", indicacao);
-  if (activeTreinamentoId) paramsForExport.set("treinamento", activeTreinamentoId);
+  if (activeTreinamentoId) paramsForExport.set("data_treinamento", activeTreinamentoId);
+  if (tamanhoCamiseta) paramsForExport.set("tamanho_camiseta", tamanhoCamiseta);
   paramsForExport.set("orderBy", orderBy);
   paramsForExport.set("orderDirection", orderDirection);
   const exportUrl = buildExportUrl(paramsForExport);
+  const crmHref = activeTreinamentoId
+    ? `/crm?treinamento=${encodeURIComponent(activeTreinamentoId)}`
+    : "/crm";
+
+  const distribuirParams = new URLSearchParams();
+  if (activeTreinamentoId) distribuirParams.set("treinamento", activeTreinamentoId);
+  if (presencaFiltro) distribuirParams.set("presenca", presencaFiltro);
+  if (indicacao) distribuirParams.set("indicacao", indicacao);
+  const distribuirHref = `/distribuicao?${distribuirParams.toString()}`;
 
   return (
-    <main className="space-y-6">
+    <main className="space-y-4 sm:space-y-6">
       {/* Header */}
-      <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <header className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">CRM</h1>
-          <p className="text-sm text-neutral-500">Gerencie a base de leads e recrutadores.</p>
+          {activeTreinamentoId ? (
+            <Link
+              href="/treinamentos"
+              className="mb-2 inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-neutral-500 transition hover:text-neutral-900"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Treinamentos
+            </Link>
+          ) : null}
+          <h1 className="text-xl font-bold text-neutral-900 sm:text-2xl">
+            {activeTreinamentoId ? "Inscritos do treinamento" : "Inscrições"}
+          </h1>
+          <p className="text-sm text-neutral-500">
+            {activeTreinamentoId
+              ? trainingFilterLabel || "Lista filtrada por treinamento"
+              : "Gerencie a base de leads e recrutadores."}
+          </p>
         </div>
-        <div className="flex gap-3">
-          <PrintButton className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50" />
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap">
+          <Link
+            href={crmHref}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
+          >
+            <MessageCircle className="h-4 w-4" />
+            CRM/Chatwoot
+          </Link>
+          <PrintButton className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50" />
           <Link
             href={exportUrl}
-            className="inline-flex items-center gap-2 rounded-xl border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50"
           >
+            <Download className="h-4 w-4" />
             Exportar CSV
           </Link>
           <Link
-            href="/importar"
-            className="inline-flex items-center gap-2 rounded-xl bg-neutral-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-neutral-800"
+            href={distribuirHref}
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-medium text-violet-700 shadow-sm hover:bg-violet-100"
           >
+            <Users className="h-4 w-4" />
+            Distribuir
+          </Link>
+          <Link
+            href="/importar"
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-neutral-800"
+          >
+            <UploadCloud className="h-4 w-4" />
             Importar Dados
           </Link>
         </div>
       </header>
 
       {/* CRM Table Section */}
-      <section className="rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <section className="rounded-lg border border-neutral-200 bg-white shadow-sm">
         {/* Header with search */}
-        <div className="border-b border-neutral-200 px-6 py-4">
+        <div className="border-b border-neutral-200 px-4 py-4 sm:px-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex-1">
               <h2 className="text-lg font-bold text-neutral-900">Inscrições</h2>
@@ -230,7 +266,7 @@ export default async function CrmPage(props: CrmPageProps) {
             </div>
             
             {/* Quick Search */}
-            <form className="flex flex-1 gap-2 lg:max-w-xl">
+            <form className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] lg:max-w-xl">
               <div className="relative flex-1">
                 <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -245,7 +281,7 @@ export default async function CrmPage(props: CrmPageProps) {
               </div>
               <button
                 type="submit"
-                className="rounded-xl bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800"
+                className="min-h-10 rounded-xl bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-neutral-800"
               >
                 Buscar
               </button>
@@ -254,16 +290,16 @@ export default async function CrmPage(props: CrmPageProps) {
         </div>
 
         {/* Filter Bar */}
-        <div className="border-b border-neutral-100 bg-neutral-50/80 px-6 py-3">
-          <form className="flex flex-wrap items-center gap-3">
+        <div className="border-b border-neutral-100 bg-neutral-50/80 px-4 py-3 sm:px-6">
+          <form className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:flex-wrap xl:items-center xl:gap-3">
             {/* Treinamento Filter */}
-            <div className="relative">
+            <div className="relative min-w-0">
               <select
-                name="treinamento"
+                name="data_treinamento"
                 defaultValue={activeTreinamentoId}
-                className="appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                className="min-h-10 w-full appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-auto"
               >
-                <option value="">🎓 Treinamento</option>
+                <option value="">Data do treinamento</option>
                 {sortedClusterKeys.map((clusterKey) => {
                   const options = trainingsByCluster[clusterKey];
                   if (sortedClusterKeys.length === 1 && clusterKey === 999) {
@@ -291,11 +327,11 @@ export default async function CrmPage(props: CrmPageProps) {
             </div>
 
             {/* Presença Filter */}
-            <div className="relative">
+            <div className="relative min-w-0">
               <select
                 name="presenca"
                 defaultValue={presencaFiltro ?? ""}
-                className="appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                className="min-h-10 w-full appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-auto"
               >
                 <option value="">✓ Presença</option>
                 <option value="aprovada">✅ Aprovada</option>
@@ -308,15 +344,33 @@ export default async function CrmPage(props: CrmPageProps) {
               </svg>
             </div>
 
-            {/* Indicador Filter */}
-            <div className="relative">
+            {/* Camiseta Filter */}
+            <div className="relative min-w-0">
+              <select
+                name="tamanho_camiseta"
+                defaultValue={tamanhoCamiseta}
+                className="min-h-10 w-full appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-auto"
+              >
+                <option value="">Camiseta</option>
+                {["P", "M", "G", "GG", "XG", "XGG"].map((size) => (
+                  <option key={size} value={size}>
+                    {size}
+                  </option>
+                ))}
+              </select>
+              <svg className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+
+            <div className="relative min-w-0">
               <input
                 type="text"
                 name="indicacao"
                 defaultValue={indicacao}
                 list="recruiters-list"
-                placeholder="👤 Indicador..."
-                className="w-36 rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                placeholder="Indicacao..."
+                className="min-h-10 w-full rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-36"
               />
               <datalist id="recruiters-list">
                 {recruiterOptions.map((r) => (
@@ -333,13 +387,21 @@ export default async function CrmPage(props: CrmPageProps) {
               name="telefone"
               defaultValue={telefone}
               placeholder="📱 Telefone..."
-              className="w-36 rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+              className="min-h-10 w-full rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-36"
+            />
+
+            <input
+              type="text"
+              name="cidade"
+              defaultValue={cidade}
+              placeholder="Cidade..."
+              className="min-h-10 w-full rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-36"
             />
 
             {/* Apply button for text inputs */}
             <button
               type="submit"
-              className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-cyan-600"
+              className="min-h-10 rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-cyan-600"
             >
               Filtrar
             </button>
@@ -348,7 +410,7 @@ export default async function CrmPage(props: CrmPageProps) {
             {activeFiltersCount > 0 && (
               <Link
                 href="/inscricoes"
-                className="ml-auto flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-neutral-500 transition hover:bg-neutral-100 hover:text-red-600"
+                className="flex min-h-10 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-neutral-500 transition hover:bg-neutral-100 hover:text-red-600 xl:ml-auto"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -384,6 +446,8 @@ export default async function CrmPage(props: CrmPageProps) {
             orderDirection={orderDirection}
             trainingOptions={trainingOptions}
             recruiterOptions={recruiterOptions}
+            chatwootChannels={chatwootChannels}
+            showUpDayColumns={!useOnlineTrainingTable}
           />
         </div>
       </section>

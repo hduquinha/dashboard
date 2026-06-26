@@ -1,7 +1,10 @@
 'use client';
 
 import { useState } from 'react';
-import type { DuplicateGroup, DuplicateReasonDetail } from '@/types/inscricao';
+import { TagBadge } from '@/components/TagBadge';
+import type { DuplicateGroup, DuplicateReasonDetail, InscricaoItem } from '@/types/inscricao';
+import { buildOperationalTags } from '@/lib/participantTags';
+import { DuplicateMergeModal } from '@/components/DuplicateMergeModal';
 
 interface DuplicateAlertsProps {
   groups: DuplicateGroup[];
@@ -11,6 +14,12 @@ interface AlertState extends DuplicateGroup {
   selectedId: number | null;
   isDeleting: boolean;
   error: string | null;
+}
+
+interface MergeTarget {
+  groupId: string;
+  primary: InscricaoItem;
+  secondary: InscricaoItem;
 }
 
 function formatReasonLabel(reason: DuplicateReasonDetail['reason']): string {
@@ -23,8 +32,22 @@ function formatReasonLabel(reason: DuplicateReasonDetail['reason']): string {
       return 'Nome e data semelhantes';
     case 'payload':
       return 'Payload duplicado';
+    case 'fantasma':
+      return 'Possível fantasma';
+    case 'nome-suspeito':
+      return 'Nome suspeito';
+    case 'telefone-invalido':
+      return 'Telefone inválido';
+    case 'email-suspeito':
+      return 'E-mail suspeito';
+    case 'dados-incompletos':
+      return 'Dados incompletos';
+    case 'payload-teste':
+      return 'Teste/Aleatório';
+    case 'treinamento-ausente':
+      return 'Treinamento ausente';
     default:
-      return 'Possível duplicado';
+      return 'Alerta de qualidade';
   }
 }
 
@@ -54,6 +77,7 @@ function initializeState(groups: DuplicateGroup[]): AlertState[] {
 
 export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
   const [alerts, setAlerts] = useState<AlertState[]>(() => initializeState(groups));
+  const [mergeTarget, setMergeTarget] = useState<MergeTarget | null>(null);
 
   if (alerts.length === 0) {
     return null;
@@ -71,7 +95,7 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
     const group = alerts.find((item) => item.id === groupId);
     if (!group) return;
 
-    // Persist dismissal to DB so it doesn't reappear on refresh
+    // Persist dismissal to DB so it doesn't reappear on refresh.
     const ids = group.entries.map((e) => e.id);
     try {
       const res = await fetch("/api/inscricoes/dismiss-duplicates", {
@@ -87,6 +111,21 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
     }
 
     // Remove from UI regardless
+    setAlerts((previous) => previous.filter((item) => item.id !== groupId));
+  };
+
+  const handleMergeClick = (groupId: string) => {
+    const group = alerts.find((item) => item.id === groupId);
+    if (!group || group.entries.length < 2) return;
+    setMergeTarget({
+      groupId,
+      primary: group.entries[0],
+      secondary: group.entries[1],
+    });
+  };
+
+  const handleMerged = (groupId: string) => {
+    setMergeTarget(null);
     setAlerts((previous) => previous.filter((item) => item.id !== groupId));
   };
 
@@ -157,13 +196,14 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
   };
 
   return (
+    <>
     <section className="rounded-lg border border-amber-200 bg-amber-50 px-6 py-5 shadow-sm">
       <header className="mb-4">
         <h2 className="text-base font-semibold text-amber-900">
-          Suspeitas de duplicidade ({alerts.length})
+          Suspeitas de duplicidade e inscrições fantasmas ({alerts.length})
         </h2>
         <p className="text-sm text-amber-800">
-          Revise as inscrições abaixo e confirme se alguma deve ser excluída antes de continuar.
+          Revise registros repetidos, testes, aleatoriedades e cadastros incompletos antes de continuar.
         </p>
       </header>
       <div className="space-y-4">
@@ -201,40 +241,65 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
                 <span className="rounded-full bg-amber-100 px-3 py-1 font-semibold">
                   {group.entries.length} registro{group.entries.length > 1 ? 's' : ''}
                 </span>
+                {group.entries.length === 2 && (
+                  <button
+                    type="button"
+                    className="rounded-md bg-cyan-600 px-3 py-1 font-semibold text-white transition hover:bg-cyan-700"
+                    onClick={() => handleMergeClick(group.id)}
+                  >
+                    Unificar
+                  </button>
+                )}
                 <button
                   type="button"
                   className="text-amber-700 underline-offset-4 hover:underline"
                   onClick={() => handleDismiss(group.id)}
                 >
-                  Manter todos
+                  {group.entries.length > 1 ? 'Manter todos' : 'Dispensar alerta'}
                 </button>
               </div>
             </div>
             <div className="mt-3 space-y-2">
-              {group.entries.map((entry) => (
-                <label
-                  key={entry.id}
-                  className="flex flex-col gap-1 rounded-md border border-neutral-200 bg-white p-3 text-sm shadow-sm transition hover:border-neutral-400 md:flex-row md:items-center md:justify-between"
-                >
-                  <div>
-                    <p className="font-semibold text-neutral-900">
-                      {entry.nome ?? `Inscrição #${entry.id}`}
-                    </p>
-                    <p className="text-xs text-neutral-500">{formatEntrySubtitle(entry)}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="radio"
-                      name={`duplicate-${group.id}`}
-                      value={entry.id}
-                      checked={group.selectedId === entry.id}
-                      onChange={() => handleSelect(group.id, entry.id)}
-                      className="h-4 w-4 text-neutral-900"
-                    />
-                    <span className="text-xs text-neutral-600">Excluir esta</span>
-                  </div>
-                </label>
-              ))}
+              {group.entries.map((entry) => {
+                const tags = buildOperationalTags(entry).slice(0, 6);
+                return (
+                  <label
+                    key={entry.id}
+                    className="flex flex-col gap-3 rounded-md border border-neutral-200 bg-white p-3 text-sm shadow-sm transition hover:border-neutral-400 md:flex-row md:items-center md:justify-between"
+                  >
+                    <div className="space-y-2">
+                      <div>
+                        <p className="font-semibold text-neutral-900">
+                          {entry.nome ?? `Inscrição #${entry.id}`}
+                        </p>
+                        <p className="text-xs text-neutral-500">{formatEntrySubtitle(entry)}</p>
+                      </div>
+                      {tags.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {tags.map((tag) => (
+                            <TagBadge
+                              key={`${entry.id}-${tag.key}-${tag.label}`}
+                              tag={tag}
+                              size="xs"
+                            />
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name={`duplicate-${group.id}`}
+                        value={entry.id}
+                        checked={group.selectedId === entry.id}
+                        onChange={() => handleSelect(group.id, entry.id)}
+                        className="h-4 w-4 text-neutral-900"
+                      />
+                      <span className="text-xs text-neutral-600">Excluir esta</span>
+                    </div>
+                  </label>
+                );
+              })}
             </div>
             {group.error ? (
               <p className="mt-2 text-sm text-red-600">{group.error}</p>
@@ -256,5 +321,15 @@ export default function DuplicateAlerts({ groups }: DuplicateAlertsProps) {
         ))}
       </div>
     </section>
+
+    {mergeTarget && (
+      <DuplicateMergeModal
+        primary={mergeTarget.primary}
+        secondary={mergeTarget.secondary}
+        onMerged={() => handleMerged(mergeTarget.groupId)}
+        onClose={() => setMergeTarget(null)}
+      />
+    )}
+  </>
   );
 }

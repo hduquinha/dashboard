@@ -29,17 +29,12 @@ function parseOptionalString(field: string, value: unknown): string | null | und
   }
 
   const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-
-  return trimmed;
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 async function resolveInscricaoId(context: RouteContext): Promise<number | null> {
   const resolvedParams = await Promise.resolve(context.params);
-  const idRaw = resolvedParams?.id;
-  const id = Number.parseInt(idRaw ?? "", 10);
+  const id = Number.parseInt(resolvedParams?.id ?? "", 10);
 
   if (!Number.isFinite(id) || id < 1) {
     return null;
@@ -54,6 +49,33 @@ function handleUnauthorized(error: unknown) {
   }
 
   throw error;
+}
+
+export async function GET(request: Request, context: RouteContext) {
+  try {
+    assertAuthenticatedRequest(request, {
+      requireSameOriginForSession: false,
+    });
+  } catch (error) {
+    return handleUnauthorized(error);
+  }
+
+  const id = await resolveInscricaoId(context);
+  if (!id) {
+    return NextResponse.json({ error: "ID invalido" }, { status: 400 });
+  }
+
+  try {
+    const inscricao = await getInscricaoById(id);
+    if (!inscricao) {
+      return NextResponse.json({ error: "Inscricao nao encontrada" }, { status: 404 });
+    }
+
+    return NextResponse.json({ inscricao });
+  } catch (error) {
+    console.error("Failed to load inscricao", error);
+    return NextResponse.json({ error: "Erro ao carregar inscricao" }, { status: 500 });
+  }
 }
 
 export async function PATCH(request: Request, context: RouteContext) {
@@ -111,6 +133,15 @@ export async function PATCH(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Dados invalidos" }, { status: 400 });
   }
 
+  let payloadUpdates: Record<string, string | null> | undefined;
+  if (record.payloadUpdates && typeof record.payloadUpdates === "object" && !Array.isArray(record.payloadUpdates)) {
+    payloadUpdates = {};
+    for (const [k, v] of Object.entries(record.payloadUpdates as Record<string, unknown>)) {
+      if (typeof v === "string") payloadUpdates[k] = v.trim() || null;
+      else if (v === null) payloadUpdates[k] = null;
+    }
+  }
+
   const updates: UpdateInscricaoInput = {
     nome,
     telefone,
@@ -118,6 +149,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     profissao,
     treinamento,
     trafficSource: indicacao,
+    payloadUpdates,
   };
 
   const hasUpdates = Object.values(updates).some((value) => value !== undefined);
@@ -138,33 +170,6 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     console.error("Failed to update inscricao", error);
     return NextResponse.json({ error: "Erro ao atualizar inscricao" }, { status: 500 });
-  }
-}
-
-export async function GET(request: Request, context: RouteContext) {
-  try {
-    assertAuthenticatedRequest(request, {
-      requireSameOriginForSession: false,
-    });
-  } catch (error) {
-    return handleUnauthorized(error);
-  }
-
-  const id = await resolveInscricaoId(context);
-  if (!id) {
-    return NextResponse.json({ error: "ID invalido" }, { status: 400 });
-  }
-
-  try {
-    const inscricao = await getInscricaoById(id);
-    if (!inscricao) {
-      return NextResponse.json({ error: "Inscricao nao encontrada" }, { status: 404 });
-    }
-
-    return NextResponse.json({ inscricao });
-  } catch (error) {
-    console.error("Failed to load inscricao", error);
-    return NextResponse.json({ error: "Erro ao carregar inscricao" }, { status: 500 });
   }
 }
 

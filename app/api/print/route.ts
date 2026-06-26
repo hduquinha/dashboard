@@ -10,8 +10,11 @@ const EXPORT_PAGE_SIZE = 500;
 interface ExportFilters {
   nome: string;
   telefone: string;
+  cidade: string;
   indicacao: string;
   treinamento: string;
+  dataTreinamento: string;
+  tamanhoCamiseta: string;
   presenca?: "aprovada" | "reprovada" | "validada" | "nao-validada";
 }
 
@@ -103,8 +106,11 @@ export async function GET(request: NextRequest) {
     const filters: ExportFilters = {
       nome: sanitizeParam(searchParams.get("nome")),
       telefone: sanitizeParam(searchParams.get("telefone")),
+      cidade: sanitizeParam(searchParams.get("cidade")),
       indicacao: sanitizeParam(searchParams.get("indicacao")),
       treinamento: sanitizeParam(searchParams.get("treinamento")),
+      dataTreinamento: sanitizeParam(searchParams.get("data_treinamento")),
+      tamanhoCamiseta: sanitizeParam(searchParams.get("tamanho_camiseta")),
       presenca: parsePresenca(searchParams.get("presenca")),
     };
 
@@ -122,11 +128,15 @@ export async function GET(request: NextRequest) {
     const activeFilters: string[] = [];
     if (filters.nome) activeFilters.push(`Nome: ${filters.nome}`);
     if (filters.telefone) activeFilters.push(`Telefone: ${filters.telefone}`);
+    if (filters.cidade) activeFilters.push(`Cidade: ${filters.cidade}`);
     if (filters.indicacao) {
       const recruiterName = recruiterMap.get(filters.indicacao.toLowerCase()) || filters.indicacao;
       activeFilters.push(`Indicador: ${recruiterName}`);
     }
-    if (filters.treinamento) activeFilters.push(`Treinamento: ${filters.treinamento}`);
+    if (filters.dataTreinamento || filters.treinamento) {
+      activeFilters.push(`Treinamento: ${filters.dataTreinamento || filters.treinamento}`);
+    }
+    if (filters.tamanhoCamiseta) activeFilters.push(`Camiseta: ${filters.tamanhoCamiseta}`);
     if (filters.presenca) {
       const presencaLabels: Record<string, string> = {
         aprovada: "Aprovada",

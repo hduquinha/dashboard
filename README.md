@@ -188,7 +188,13 @@ scripts/migrations/              # Migrations SQL (schema normalizado)
 | ----------------- | ------------------------------------------------------------------------------ |
 | `DATABASE_URL`    | Connection string do PostgreSQL (`postgres://user:pass@host:5432/db`).         |
 | `PG_SSL`          | `true` quando o banco exigir SSL (Aiven, Vercel Postgres, etc.).               |
-| `DASHBOARD_TOKEN` | Token compartilhado para autenticação no painel.                               |
+| `DASHBOARD_SESSION_SECRET` | Segredo longo usado para criptografar o cookie de sessão da dashboard. |
+| `DASHBOARD_TOKEN` | Token legado opcional para automações via `Authorization: Bearer`. O login web usa o Chatwoot. |
+| `CHATWOOT_INTERNAL_URL` | URL interna usada pela dashboard para autenticar em `/auth/sign_in` do Chatwoot. |
+| `CHATWOOT_DATABASE_URL` | Connection string do banco do Chatwoot para mensagens e sincronização de contatos. |
+| `CHATWOOT_ACCOUNT_ID` | ID da conta do Chatwoot sincronizada pelo CRM. |
+| `CHATWOOT_FRONTEND_URL` | URL usada para abrir o Chatwoot e conversas a partir do CRM. |
+| `CHATWOOT_DEFAULT_INBOX_ID` | Opcional. Inbox usado ao criar conversa pelo botão de WhatsApp do CRM. Se vazio, usa o inbox WhatsApp/API mais usado. |
 | `TRAINING_CONFIG` | JSON com as opções de treinamento (`id`, `label`, `startsAt`) exibidas no app. |
 
 Em produção (Vercel), configure também `VERCEL_ENV` conforme o ambiente.
@@ -228,7 +234,7 @@ O projeto roda na **Vercel** com deploy automático a cada push na branch `main`
 **Produção:** [dashboard-instituto-up.vercel.app](https://dashboard-instituto-up.vercel.app)
 
 1. Conecte o repositório na Vercel.
-2. Configure as variáveis de ambiente (`DATABASE_URL`, `PG_SSL`, `DASHBOARD_TOKEN`, `TRAINING_CONFIG`).
+2. Configure as variáveis de ambiente (`DATABASE_URL`, `PG_SSL`, `DASHBOARD_SESSION_SECRET`, `CHATWOOT_INTERNAL_URL`, `CHATWOOT_DATABASE_URL`, `TRAINING_CONFIG`).
 3. Push na `main` → deploy automático.
 
 ---

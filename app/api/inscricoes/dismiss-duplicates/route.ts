@@ -15,11 +15,11 @@ export async function POST(request: NextRequest) {
 
     if (
       !Array.isArray(ids) ||
-      ids.length < 2 ||
+      ids.length < 1 ||
       !ids.every((id) => typeof id === "number" && Number.isFinite(id))
     ) {
       return NextResponse.json(
-        { error: "Envie um array 'ids' com pelo menos 2 IDs numericos." },
+        { error: "Envie um array 'ids' com pelo menos 1 ID numerico." },
         { status: 400 }
       );
     }
@@ -28,9 +28,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true, dismissed: ids.length });
   } catch (error) {
-    console.error("Failed to dismiss duplicate group:", error);
+    console.error("Failed to dismiss duplicate alert:", error);
     return NextResponse.json(
-      { error: "Falha ao registrar dismissal de duplicados." },
+      { error: "Falha ao registrar dispensa do alerta." },
       { status: 500 }
     );
   }

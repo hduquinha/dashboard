@@ -27,3 +27,25 @@ export function humanizeName(raw: string | null | undefined): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
     .join(" ");
 }
+
+export function buildWhatsAppWebUrl(phone: string | null | undefined): string {
+  const digits = phone?.replace(/\D/g, "") ?? "";
+  if (!digits) return "#";
+
+  const phoneWithCountryCode = digits.startsWith("55") ? digits : `55${digits}`;
+  return `https://web.whatsapp.com/send?phone=${phoneWithCountryCode}`;
+}
+
+export function buildChatwootOpenChatUrl(
+  inscricaoId: number | string | null | undefined,
+  inboxId?: string | number | null
+): string {
+  if (!inscricaoId) return "#";
+
+  const params = new URLSearchParams({ inscricaoId: String(inscricaoId) });
+  if (inboxId) {
+    params.set("inboxId", String(inboxId));
+  }
+
+  return `/api/chatwoot/open-chat?${params.toString()}`;
+}

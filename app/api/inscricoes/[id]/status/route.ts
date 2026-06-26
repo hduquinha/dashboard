@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
+import {
+  assertAuthenticatedRequest,
+  getRequestDashboardSession,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { setInscricaoStatus } from "@/lib/db";
 import type { InscricaoStatus } from "@/types/inscricao";
 
@@ -72,11 +76,15 @@ export async function PATCH(request: Request, context: RouteContext) {
   const whatsappContacted =
     typeof record.whatsappContacted === "boolean" ? record.whatsappContacted : undefined;
   const note = typeof record.note === "string" ? record.note : undefined;
+  const session = getRequestDashboardSession(request);
+  const author =
+    session?.user.displayName || session?.user.name || session?.user.email || null;
 
   try {
     const inscricao = await setInscricaoStatus(id, status, {
       whatsappContacted,
       note,
+      author,
     });
     return NextResponse.json({ inscricao });
   } catch (error) {

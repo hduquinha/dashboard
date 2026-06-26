@@ -1,7 +1,9 @@
 import {
   assertAuthenticatedRequest,
+  createChatwootSessionValue,
   createSessionValue,
   DASHBOARD_COOKIE_NAME,
+  getDashboardSession,
   isValidToken,
   UnauthorizedError,
 } from "@/lib/auth";
@@ -41,6 +43,36 @@ describe("lib/auth", () => {
     expect(isValidToken(sessionValue, now + 1_000)).toBe(true);
     expect(isValidToken("test-token", now + 1_000)).toBe(true);
     expect(isValidToken(sessionValue, now + 31 * 24 * 60 * 60 * 1000)).toBe(false);
+  });
+
+  it("creates encrypted Chatwoot session values for dashboard users", () => {
+    const now = Date.parse("2026-03-25T12:00:00.000Z");
+    const expiry = Math.floor(now / 1000) + 60 * 60;
+    const sessionValue = createChatwootSessionValue(
+      {
+        auth: {
+          accessToken: "chatwoot-access-token",
+          tokenType: "Bearer",
+          client: "chatwoot-client",
+          expiry: String(expiry),
+          uid: "agent@example.com",
+        },
+        user: {
+          id: 7,
+          email: "agent@example.com",
+          name: "Agent Example",
+          accounts: [{ id: 1, name: "Instituto UP", role: "administrator" }],
+        },
+      },
+      now
+    );
+
+    expect(sessionValue).not.toBeNull();
+    const encryptedSession = sessionValue ?? "";
+    expect(encryptedSession).not.toContain("chatwoot-access-token");
+    expect(isValidToken(encryptedSession, now + 1_000)).toBe(true);
+    expect(getDashboardSession(encryptedSession, now + 1_000)?.user.email).toBe("agent@example.com");
+    expect(isValidToken(encryptedSession, now + 2 * 60 * 60 * 1000)).toBe(false);
   });
 
   it("accepts bearer authentication for mutating requests", () => {

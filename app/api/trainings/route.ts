@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { assertAuthenticatedRequest } from "@/lib/auth";
 import { listTrainingsWithStats } from "@/lib/db";
+import { ttlCache } from "@/lib/serverCache";
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,7 +13,11 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const trainings = await listTrainingsWithStats();
+    const trainings = await ttlCache(
+      "dashboard:api:trainings",
+      60_000,
+      () => listTrainingsWithStats()
+    );
 
     return NextResponse.json({
       trainings: trainings.map((training) => ({

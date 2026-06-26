@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const isProduction = process.env.NODE_ENV === "production";
+const isLocalHttp = process.env.DASHBOARD_LOCAL_HTTP === "true";
 
 const securityHeaders = [
   {
@@ -31,7 +32,7 @@ const securityHeaders = [
     key: "Cross-Origin-Resource-Policy",
     value: "same-site",
   },
-  ...(isProduction
+  ...(isProduction && !isLocalHttp
     ? [
         {
           key: "Strict-Transport-Security",
@@ -59,6 +60,7 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  serverExternalPackages: ["pdfkit"],
   async headers() {
     return [
       {

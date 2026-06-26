@@ -5,6 +5,11 @@ import { Pool } from "pg";
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
 import { parsePayload, TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
+import {
+  extractPreviousFormFields,
+  extractUpDayFormData,
+  hasUpDayFormData,
+} from "@/lib/inscricaoForm";
 import type { ImportPayload } from "@/lib/importSpreadsheet";
 import {
   getRecruiterByCode,
@@ -16,26 +21,313 @@ import {
 } from "@/lib/recruiters";
 import {
   getTrainingById,
+  listTrainingOptionIds,
   listTrainingOptions as listConfiguredTrainingOptions,
   formatTrainingDateLabel,
   buildAutoTrainingLabel,
+  isIgnoredTrainingId,
 } from "@/lib/trainings";
+import {
+  analyzeInscricaoQuality,
+  hasQualityDismissed,
+  issueCodeToDuplicateReason,
+} from "@/lib/inscricaoQuality";
 import type { TrainingOption } from "@/types/training";
 import type {
   DuplicateGroup,
   DuplicateReason,
   DuplicateReasonDetail,
   DuplicateSummary,
+  EnrollmentSummary,
   InscricaoItem,
   InscricaoNote,
   InscricaoStatus,
   InscricaoTipo,
+  CommercialStage,
   ListInscricoesResult,
   OrderableField,
   OrderDirection,
 } from "@/types/inscricao";
 
 const SCHEMA_NAME = "inscricoes";
+
+function payloadTextExpression(alias: string, keys: string[], fallback = "''"): string {
+  const selectors = keys.flatMap((key) => [
+    `NULLIF(TRIM(${alias}.payload->>'${key}'), '')`,
+    `NULLIF(TRIM(${alias}.payload->'dados_extras'->>'${key}'), '')`,
+    `NULLIF(TRIM(${alias}.payload->'dadosExtras'->>'${key}'), '')`,
+  ]);
+  return `COALESCE(${selectors.join(", ")}, ${fallback})`;
+}
+
+const NAME_EXPRESSION = payloadTextExpression("i", ["nome", "name", "dashboard_nome"]);
+const PHONE_EXPRESSION = payloadTextExpression("i", ["telefone", "phone", "celular", "whatsapp", "dashboard_telefone"]);
+const CITY_EXPRESSION = payloadTextExpression("i", ["cidade", "city", "dashboard_cidade"]);
+const EMAIL_EXPRESSION = payloadTextExpression("i", ["email"]);
+const PROFESSION_EXPRESSION = payloadTextExpression("i", [
+  "profissao_area",
+  "profissaoArea",
+  "profissao",
+  "dashboard_profissao",
+  "occupation",
+  "job",
+]);
+const EXPLICIT_TRAINING_EXPRESSION = payloadTextExpression("i", [
+  "treinamento",
+  "training",
+  "training_id",
+  "trainingId",
+  "training_code",
+  "trainingCode",
+  "treinamento_id",
+  "treinamento_nome",
+  "treinamentoNome",
+  "training_option",
+  "trainingOption",
+]);
+const UPDAY_TRAINING_DATE_EXPRESSION = payloadTextExpression("i", [
+  "data_treinamento",
+  "dataTreinamento",
+  "training_date",
+  "trainingDate",
+  "data_treinamento_extenso",
+  "dataTreinamentoExtenso",
+  "treinamento_inicio",
+  "treinamentoInicio",
+  "training_start",
+  "trainingStart",
+]);
+const ONLINE_TRAINING_DATE_EXPRESSION = payloadTextExpression("i", [
+  "data_treinamento",
+  "dataTreinamento",
+  "training_date",
+  "trainingDate",
+  "data_treinamento_extenso",
+  "dataTreinamentoExtenso",
+]);
+const DASHBOARD_TRAINING_EXPRESSION = payloadTextExpression("i", ["dashboard_treinamento"]);
+const UPDAY_PAYLOAD_CONDITION = `(
+  LOWER(${EXPLICIT_TRAINING_EXPRESSION}) LIKE '%up day%'
+  OR LOWER(${payloadTextExpression("i", ["origem", "source", "origin"])}) = 'landing-inscricao-agosto-2026'
+  OR (
+    ${payloadTextExpression("i", ["tamanho_camiseta", "tamanhoCamiseta", "multa_ciente", "multaCiente", "cancelamento_ciente", "cancelamentoCiente"])} <> ''
+    AND ${UPDAY_TRAINING_DATE_EXPRESSION} <> ''
+  )
+)`;
+const TRAINING_EXPRESSION = `COALESCE(
+  CASE WHEN ${UPDAY_PAYLOAD_CONDITION} THEN NULLIF(${UPDAY_TRAINING_DATE_EXPRESSION}, '') END,
+  CASE WHEN NOT ${UPDAY_PAYLOAD_CONDITION} THEN NULLIF(${ONLINE_TRAINING_DATE_EXPRESSION}, '') END,
+  NULLIF(${EXPLICIT_TRAINING_EXPRESSION}, ''),
+  NULLIF(${DASHBOARD_TRAINING_EXPRESSION}, ''),
+  ''
+)`;
+const RECRUITER_EXPRESSION = payloadTextExpression("i", [
+  "traffic_source",
+  "codigo_indicador",
+  "indicador",
+  "recrutadorCodigo",
+  "codigo_recrutador",
+  "recruiter_code",
+  "source",
+  "ref",
+  "referral",
+  "dashboard_indicador_codigo",
+  "dashboard_indicador_nome",
+]);
+const INDICATION_EXPRESSION = payloadTextExpression("i", [
+  "indicacao",
+  "indicado_por",
+  "traffic_source",
+  "codigo_indicador",
+  "indicador",
+  "recrutadorCodigo",
+  "codigo_recrutador",
+  "recruiter_code",
+  "source",
+  "ref",
+  "referral",
+  "dashboard_indicador_codigo",
+  "dashboard_indicador_nome",
+]);
+const SHIRT_SIZE_EXPRESSION = payloadTextExpression("i", [
+  "tamanho_camiseta",
+  "tamanhoCamiseta",
+  "camiseta",
+]);
+const CPF_EXPRESSION = payloadTextExpression("i", ["cpf", "documento", "document"]);
+const CLIENT_ID_EXPRESSION = payloadTextExpression("i", ["clientId", "client_id"]);
+const FINALIZED_INSCRICAO_CONDITION =
+  process.env.DASHBOARD_INCLUDE_INCOMPLETE === "true"
+    ? "TRUE"
+    : `LOWER(TRIM(${payloadTextExpression("i", ["_final"], "''")})) IN ('true', '1', 'sim', 'yes')`;
+const PRESENCE_VALIDATED_CONDITION =
+  "LOWER(TRIM(COALESCE(i.payload->>'presenca_validada', ''))) IN ('true', '1', 'sim', 'yes')";
+const PRESENCE_APPROVED_CONDITION =
+  "LOWER(TRIM(COALESCE(i.payload->>'presenca_aprovada', ''))) IN ('true', '1', 'sim', 'yes')";
+const PRESENCE_TRAINING_EXPRESSION = `COALESCE(NULLIF(TRIM(i.payload->>'presenca_treinamento_id'), ''), ${TRAINING_EXPRESSION})`;
+const NORMALIZE_BR_PHONE = (expr: string) => `(
+  CASE
+    WHEN LENGTH(REGEXP_REPLACE(${expr}, '\\D', '', 'g')) BETWEEN 12 AND 13
+         AND REGEXP_REPLACE(${expr}, '\\D', '', 'g') LIKE '55%'
+      THEN SUBSTRING(REGEXP_REPLACE(${expr}, '\\D', '', 'g') FROM 3)
+    ELSE REGEXP_REPLACE(${expr}, '\\D', '', 'g')
+  END
+)`;
+const UNIQUE_INSCRICAO_PERSON_KEY = `
+  CASE
+    WHEN LENGTH(${NORMALIZE_BR_PHONE(PHONE_EXPRESSION)}) >= 10
+      THEN 'phone:' || ${NORMALIZE_BR_PHONE(PHONE_EXPRESSION)}
+    WHEN TRIM(${CLIENT_ID_EXPRESSION}) <> ''
+      THEN 'client:' || LOWER(TRIM(${CLIENT_ID_EXPRESSION}))
+    WHEN LOWER(TRIM(${EMAIL_EXPRESSION})) LIKE '%@%'
+      THEN 'email:' || LOWER(TRIM(${EMAIL_EXPRESSION}))
+    WHEN LENGTH(REGEXP_REPLACE(${CPF_EXPRESSION}, '\\D', '', 'g')) >= 11
+      THEN 'cpf:' || REGEXP_REPLACE(${CPF_EXPRESSION}, '\\D', '', 'g')
+    ELSE 'row:' || i.id::text
+  END
+`;
+const UNIQUE_INSCRICAO_TRAINING_KEY = `LOWER(TRIM(COALESCE(NULLIF(${TRAINING_EXPRESSION}, ''), 'sem-treinamento')))`;
+// Uma linha por pessoa (não por pessoa+treinamento): histórico de eventos vira etiquetas
+const UNIQUE_INSCRICAO_PARTITION = UNIQUE_INSCRICAO_PERSON_KEY;
+const DASHBOARD_SCHEMA_NAME = "dashboard";
+const COMMERCIAL_STAGE_VALUES: CommercialStage[] = [
+  "novo",
+  "primeiro_contato",
+  "em_atendimento",
+  "agendado",
+  "fechamento",
+  "ganho",
+  "perdido",
+  "no_show",
+];
+const COMMERCIAL_STAGE_LABELS: Record<CommercialStage, string> = {
+  novo: "Novo",
+  primeiro_contato: "Primeiro contato",
+  em_atendimento: "Em atendimento",
+  agendado: "Agendado",
+  fechamento: "Fechamento",
+  ganho: "Ganho",
+  perdido: "Perdido",
+  no_show: "No-show",
+};
+let commercialSchemaReady = false;
+
+async function ensureCommercialSchemaForReads(): Promise<void> {
+  if (commercialSchemaReady) {
+    return;
+  }
+
+  await getPool().query(`
+    CREATE SCHEMA IF NOT EXISTS ${DASHBOARD_SCHEMA_NAME};
+
+    CREATE TABLE IF NOT EXISTS ${DASHBOARD_SCHEMA_NAME}.commercial_leads (
+      inscricao_id INTEGER PRIMARY KEY REFERENCES ${SCHEMA_NAME}.inscricoes(id) ON DELETE CASCADE,
+      campaign_source TEXT,
+      campaign_name TEXT,
+      campaign_medium TEXT,
+      campaign_term TEXT,
+      landing_page TEXT,
+      commercial_stage TEXT NOT NULL DEFAULT 'novo',
+      assigned_seller_id INTEGER,
+      assigned_seller_email TEXT,
+      assigned_seller_name TEXT,
+      assigned_by_user_id INTEGER,
+      assigned_by_email TEXT,
+      assigned_by_name TEXT,
+      assigned_at TIMESTAMP WITH TIME ZONE,
+      first_contact_inbox_id INTEGER,
+      first_contact_inbox_name TEXT,
+      closing_inbox_id INTEGER,
+      closing_inbox_name TEXT,
+      closing_conversation_id INTEGER,
+      closing_conversation_display_id INTEGER,
+      closing_conversation_url TEXT,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage);
+    CREATE INDEX IF NOT EXISTS idx_commercial_leads_seller ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(assigned_seller_email, assigned_seller_id);
+    CREATE INDEX IF NOT EXISTS idx_commercial_leads_campaign ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(campaign_source, campaign_name);
+  `);
+
+  commercialSchemaReady = true;
+}
+
+function payloadCampaignExpression(alias: string, keys: string[]): string {
+  return payloadTextExpression(alias, keys, "NULL");
+}
+
+const CAMPAIGN_SOURCE_EXPRESSION = payloadCampaignExpression("i", [
+  "campaign_source",
+  "campaignSource",
+  "utm_source",
+  "utmSource",
+  "lead_source",
+  "leadSource",
+  "origem_formulario",
+  "origemFormulario",
+  "lead_origem",
+  "leadOrigem",
+  "platform",
+  "plataforma",
+  "publisher_platform",
+  "publisherPlatform",
+  "channel",
+  "canal",
+  "origem",
+  "source",
+  "traffic_source",
+  "trafficSource",
+]);
+const CAMPAIGN_NAME_EXPRESSION = payloadCampaignExpression("i", [
+  "campaign_name",
+  "campaignName",
+  "utm_campaign",
+  "utmCampaign",
+  "utm_id",
+  "utmId",
+  "campaign",
+  "campaign_id",
+  "campaignId",
+  "ad_campaign",
+  "adCampaign",
+  "campanha",
+]);
+const CAMPAIGN_MEDIUM_EXPRESSION = payloadCampaignExpression("i", [
+  "campaign_medium",
+  "campaignMedium",
+  "utm_medium",
+  "utmMedium",
+  "placement",
+  "posicionamento",
+  "medium",
+]);
+const CAMPAIGN_TERM_EXPRESSION = payloadCampaignExpression("i", [
+  "campaign_term",
+  "campaignTerm",
+  "utm_term",
+  "utmTerm",
+  "keyword",
+  "palavra_chave",
+  "ad_name",
+  "adName",
+  "creative_name",
+  "creativeName",
+  "term",
+]);
+const LANDING_PAGE_EXPRESSION = payloadCampaignExpression("i", [
+  "landing_page",
+  "landingPage",
+  "landing",
+  "page_url",
+  "pageUrl",
+  "form_url",
+  "formUrl",
+  "referrer",
+  "referer",
+  "url",
+]);
 
 // Cache de recrutadores do banco de dados
 interface RecruiterCache {
@@ -55,7 +347,7 @@ export async function loadRecruiterCache(): Promise<void> {
     const query = `
       SELECT 
         i.id,
-        i.payload->>'nome' AS nome,
+        ${NAME_EXPRESSION} AS nome,
         COALESCE(
           NULLIF(TRIM(i.payload->>'codigoRecrutador'), ''),
           NULLIF(TRIM(i.payload->>'codigo_recrutador'), ''),
@@ -71,6 +363,7 @@ export async function loadRecruiterCache(): Promise<void> {
         NULLIF(TRIM(i.payload->>'codigoProprio'), '') IS NOT NULL OR
         NULLIF(TRIM(i.payload->>'codigo_indicador_proprio'), '') IS NOT NULL
       )
+      AND ${FINALIZED_INSCRICAO_CONDITION}
     `;
     
     const { rows } = await getPool().query<{ id: number; nome: string | null; codigo_proprio: string | null }>(query);
@@ -141,13 +434,16 @@ const RECRUITER_CODE_FIELDS = [
 
 const ORDERABLE_COLUMNS: Record<OrderableField, string> = {
   id: "i.id",
-  nome: "LOWER(COALESCE(i.payload->>'nome', ''))",
-  telefone: "COALESCE(i.payload->>'telefone', '')",
-  cidade: "LOWER(COALESCE(i.payload->>'cidade', ''))",
-  profissao: "LOWER(COALESCE(i.payload->>'profissao', ''))",
-  treinamento: "COALESCE(i.payload->>'treinamento', '')",
-  recrutador: "COALESCE(i.payload->>'traffic_source', '')",
+  nome: `LOWER(${NAME_EXPRESSION})`,
+  telefone: PHONE_EXPRESSION,
+  cidade: `LOWER(${CITY_EXPRESSION})`,
+  profissao: `LOWER(${PROFESSION_EXPRESSION})`,
+  treinamento: TRAINING_EXPRESSION,
+  recrutador: RECRUITER_EXPRESSION,
   criado_em: "i.criado_em",
+  status_at: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_status_at', i.payload->>'status_at', '')), ''), i.criado_em::text)`,
+  stars: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_stars', '')), ''), '0')::int`,
+  commercial_stage: `COALESCE(cl.commercial_stage, 'novo')`,
 };
 
 declare global {
@@ -160,11 +456,27 @@ interface ListInscricoesOptions {
   orderBy?: OrderableField;
   orderDirection?: OrderDirection;
   filters?: {
+    caracteristica?: string;
     nome?: string;
     telefone?: string;
+    cidade?: string;
+    profissao?: string;
     indicacao?: string;
     treinamento?: string;
+    treinamentoIds?: string[];
+    dataTreinamento?: string;
+    tamanhoCamiseta?: string;
+    status?: InscricaoStatus;
+    stars?: string | number;
+    campaignSource?: string;
+    campaignName?: string;
+    commercialStage?: CommercialStage;
+    assignedSellerEmail?: string;
+    assignedSellerId?: number;
+    unassignedOnly?: boolean;
     presenca?: "aprovada" | "reprovada" | "validada" | "nao-validada";
+    produto?: "vozup" | "instituto";
+    tag?: "recrutador" | "whatsapp" | "com-indicador" | "com-dinamica";
   };
 }
 
@@ -179,6 +491,24 @@ interface DbRow {
   treinamento: string | null;
   traffic_source: string | null;
   total_count: number | string | null;
+  person_key: string | null;
+  campaign_source: string | null;
+  campaign_name: string | null;
+  campaign_medium: string | null;
+  campaign_term: string | null;
+  landing_page: string | null;
+  commercial_stage: CommercialStage | null;
+  assigned_seller_id: number | null;
+  assigned_seller_email: string | null;
+  assigned_seller_name: string | null;
+  assigned_at: Date | string | null;
+  first_contact_inbox_id: number | null;
+  first_contact_inbox_name: string | null;
+  closing_inbox_id: number | null;
+  closing_inbox_name: string | null;
+  closing_conversation_id: number | null;
+  closing_conversation_display_id: number | null;
+  closing_conversation_url: string | null;
 }
 
 interface DuplicateDbRow extends DbRow {
@@ -247,6 +577,24 @@ function parseIntField(value: unknown): number | null {
   return null;
 }
 
+function toIsoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+function normalizeCommercialStage(value: unknown): CommercialStage {
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (COMMERCIAL_STAGE_VALUES.includes(normalized as CommercialStage)) {
+      return normalized as CommercialStage;
+    }
+  }
+  return "novo";
+}
+
 function buildPresencaDia(payload: Record<string, unknown>, dia: number): import("@/types/inscricao").PresencaDia | null {
   const prefix = `presenca_dia${dia}`;
   const nome = payload[`${prefix}_participante_nome`];
@@ -290,6 +638,9 @@ function appendNoteToPayload(
 function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
   const payload = (row.payload ?? {}) as Record<string, unknown>;
   const parsed = parsePayload(payload);
+  const upDay = extractUpDayFormData(payload);
+  const previousFormFields = extractPreviousFormFields(payload);
+  const isUpDayInscricao = hasUpDayFormData(upDay);
 
   const createdAtRaw = row.criado_em;
   let createdAt: string;
@@ -327,7 +678,9 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     typeof row.treinamento === "string" && row.treinamento.trim().length > 0
       ? row.treinamento.trim()
       : undefined;
-  const treinamentoId = parsedTreinamento ?? rowTreinamento ?? null;
+  const treinamentoId = isUpDayInscricao
+    ? rowTreinamento ?? upDay.dataTreinamento ?? parsedTreinamento ?? null
+    : parsedTreinamento ?? rowTreinamento ?? null;
   const treinamentoInfo = treinamentoId ? getTrainingById(treinamentoId) : null;
   const treinamentoLabel =
     treinamentoInfo && typeof treinamentoInfo.label === "string"
@@ -335,7 +688,12 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
         ? null
         : treinamentoInfo.label
       : null;
-  const treinamentoData = treinamentoInfo?.startsAt ?? treinamentoId ?? null;
+  const treinamentoData =
+    treinamentoInfo?.startsAt ??
+    (isUpDayInscricao ? upDay.dataTreinamentoExtenso ?? upDay.dataTreinamento : null) ??
+    treinamentoId ??
+    null;
+  const isOnlineEnrollment = !isUpDayInscricao && formatTrainingDateLabel(treinamentoData ?? treinamentoId) !== null;
 
   const parseRecruiterCode = (value: unknown): string | null => {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -422,16 +780,19 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
     payload,
     criadoEm: createdAt,
     parsedPayload: parsed,
-    nome: typeof row.nome === "string" ? row.nome : null,
-    telefone: typeof row.telefone === "string" ? row.telefone : null,
-    cidade: typeof row.cidade === "string" ? row.cidade : null,
-    profissao: parsedProfissao ?? rowProfissao ?? null,
+    upDay,
+    isUpDayInscricao,
+    previousFormFields,
+    nome: upDay.nome ?? (typeof row.nome === "string" ? row.nome : null),
+    telefone: upDay.telefone ?? (typeof row.telefone === "string" ? row.telefone : null),
+    cidade: upDay.cidade ?? (typeof row.cidade === "string" ? row.cidade : null),
+    profissao: upDay.profissaoArea ?? parsedProfissao ?? rowProfissao ?? null,
     recrutadorCodigo: recruiterCode ?? (codeCandidate ? codeCandidate.trim() : null),
     recrutadorNome: recruiterName,
     recrutadorUrl:
       recruiterFromList?.url ?? (recruiterCode ? `${RECRUITERS_BASE_URL}${recruiterCode}` : null),
     treinamentoId,
-    treinamentoNome: treinamentoLabel,
+    treinamentoNome: isOnlineEnrollment ? "Encontro Online" : treinamentoLabel ?? upDay.treinamentoNome,
     treinamentoData,
     tipo,
     codigoProprio,
@@ -472,6 +833,27 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       : typeof payload.dashboard_stars === "string"
         ? parseInt(payload.dashboard_stars as string, 10) || null
         : null,
+    commercial: {
+      campaignSource: row.campaign_source ?? null,
+      campaignName: row.campaign_name ?? null,
+      campaignMedium: row.campaign_medium ?? null,
+      campaignTerm: row.campaign_term ?? null,
+      landingPage: row.landing_page ?? null,
+      stage: normalizeCommercialStage(row.commercial_stage),
+      assignedSellerId: row.assigned_seller_id ?? null,
+      assignedSellerEmail: row.assigned_seller_email ?? null,
+      assignedSellerName: row.assigned_seller_name ?? null,
+      assignedAt: toIsoOrNull(row.assigned_at),
+      firstContactInboxId: row.first_contact_inbox_id ?? null,
+      firstContactInboxName: row.first_contact_inbox_name ?? null,
+      closingInboxId: row.closing_inbox_id ?? null,
+      closingInboxName: row.closing_inbox_name ?? null,
+      closingConversationId: row.closing_conversation_id ?? null,
+      closingConversationDisplayId: row.closing_conversation_display_id ?? null,
+      closingConversationUrl: row.closing_conversation_url ?? null,
+    },
+    personKey: typeof row.person_key === "string" ? row.person_key : null,
+    allEnrollments: null,
   };
 }
 
@@ -482,11 +864,12 @@ function createPool(): Pool {
   }
 
   const sslDisabled = process.env.PG_SSL === "false";
+  const poolMax = Number.parseInt(process.env.DASHBOARD_PG_POOL_MAX ?? "4", 10);
 
   return new Pool({
     connectionString,
     application_name: "painel-inscricoes",
-    max: 1, // Serverless: apenas 1 conexão por instância
+    max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 4,
     min: 0, // Não manter conexões mínimas ociosas
     idleTimeoutMillis: 10000, // Fecha conexões ociosas após 10s
     connectionTimeoutMillis: 10000, // Timeout de 10s para conexão
@@ -687,11 +1070,85 @@ function formatDateLabelPtBR(value: string | Date | null | undefined): string {
   });
 }
 
+interface EnrollmentRow {
+  person_key: string;
+  id: number;
+  treinamento_id: string | null;
+  treinamento_nome: string | null;
+  treinamento_data: string | null;
+  presenca_validada: boolean;
+  presenca_aprovada: boolean;
+  criado_em: Date | string;
+  payload: Record<string, unknown> | null;
+}
+
+async function fetchEnrollmentsByPersonKeys(
+  personKeys: string[]
+): Promise<Map<string, EnrollmentSummary[]>> {
+  const uniqueKeys = [...new Set(personKeys.filter(Boolean))];
+  if (uniqueKeys.length === 0) return new Map();
+
+  const enrollmentTrainingNomeExpr = `COALESCE(
+    NULLIF(TRIM(i.payload->>'treinamento_nome'), ''),
+    NULLIF(TRIM(i.payload->>'treinamentoNome'), ''),
+    NULLIF(TRIM(i.payload->>'nome_evento'), ''),
+    ''
+  )`;
+
+  const query = `
+    SELECT
+      TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key,
+      i.id,
+      NULLIF(${TRAINING_EXPRESSION}, '') AS treinamento_id,
+      NULLIF(${enrollmentTrainingNomeExpr}, '') AS treinamento_nome,
+      NULLIF(TRIM(COALESCE(
+        NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
+        NULLIF(TRIM(i.payload->>'dataTreinamento'), ''),
+        NULLIF(TRIM(i.payload->>'training_date'), ''),
+        ''
+      )), '') AS treinamento_data,
+      CASE WHEN ${PRESENCE_VALIDATED_CONDITION} THEN true ELSE false END AS presenca_validada,
+      CASE WHEN ${PRESENCE_APPROVED_CONDITION} THEN true ELSE false END AS presenca_aprovada,
+      i.criado_em,
+      i.payload
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE ${FINALIZED_INSCRICAO_CONDITION}
+    AND TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) = ANY($1)
+    ORDER BY i.criado_em ASC
+  `;
+
+  try {
+    const { rows } = await getPool().query<EnrollmentRow>(query, [uniqueKeys]);
+    const result = new Map<string, EnrollmentSummary[]>();
+
+    for (const row of rows) {
+      const key = row.person_key;
+      if (!result.has(key)) result.set(key, []);
+
+      result.get(key)!.push({
+        id: Number(row.id),
+        treinamentoId: row.treinamento_id ?? null,
+        treinamentoNome: row.treinamento_nome ?? null,
+        treinamentoData: row.treinamento_data ?? null,
+        presencaValidada: Boolean(row.presenca_validada),
+        presencaAprovada: Boolean(row.presenca_aprovada),
+        criadoEm: toIsoOrNull(row.criado_em) ?? new Date().toISOString(),
+        payload: row.payload ?? null,
+      });
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Failed to fetch enrollment history", error);
+    return new Map();
+  }
+}
+
 export async function listInscricoes(
   options: ListInscricoesOptions = {}
 ): Promise<ListInscricoesResult> {
   // Carregar cache de recrutadores do banco
-  await loadRecruiterCache();
+  await Promise.all([loadRecruiterCache(), ensureCommercialSchemaForReads()]);
   
   const {
     page = 1,
@@ -709,20 +1166,64 @@ export async function listInscricoes(
   const sortColumn = ORDERABLE_COLUMNS[orderBy] ?? ORDERABLE_COLUMNS.criado_em;
   const sortDirection = orderDirection === "asc" ? "ASC" : "DESC";
 
-  const conditions: string[] = [];
+  const conditions: string[] = [
+    FINALIZED_INSCRICAO_CONDITION,
+    "COALESCE(i.payload->>'dashboard_merged_into', '') = ''",
+  ];
   const filtersValues: unknown[] = [];
+
+  if (filters.caracteristica && filters.caracteristica.trim().length > 0) {
+    const term = filters.caracteristica.trim();
+    filtersValues.push(`%${term}%`);
+    const likeIndex = filtersValues.length;
+    const searchParts = [
+      `${NAME_EXPRESSION} ILIKE $${likeIndex}`,
+      `${EMAIL_EXPRESSION} ILIKE $${likeIndex}`,
+      `${CITY_EXPRESSION} ILIKE $${likeIndex}`,
+      `${PROFESSION_EXPRESSION} ILIKE $${likeIndex}`,
+      `${TRAINING_EXPRESSION} ILIKE $${likeIndex}`,
+      `${INDICATION_EXPRESSION} ILIKE $${likeIndex}`,
+      `COALESCE(i.payload->>'dashboard_status', '') ILIKE $${likeIndex}`,
+      `COALESCE(i.payload->>'dashboard_notes', '') ILIKE $${likeIndex}`,
+      `CAST(i.payload AS TEXT) ILIKE $${likeIndex}`,
+    ];
+
+    const digits = term.replace(/\D+/g, "");
+    if (digits.length >= 3) {
+      filtersValues.push(`%${digits}%`);
+      const digitsIndex = filtersValues.length;
+      searchParts.push(`REGEXP_REPLACE(${PHONE_EXPRESSION}, '\\D', '', 'g') ILIKE $${digitsIndex}`);
+    }
+
+    conditions.push(`(${searchParts.join(" OR ")})`);
+  }
 
   if (filters.nome && filters.nome.trim().length > 0) {
     filtersValues.push(`%${filters.nome.trim()}%`);
-    conditions.push(`(i.payload->>'nome') ILIKE $${filtersValues.length}`);
+    conditions.push(`${NAME_EXPRESSION} ILIKE $${filtersValues.length}`);
   }
 
   if (filters.telefone && filters.telefone.trim().length > 0) {
     const cleaned = filters.telefone.replace(/\D+/g, "");
     filtersValues.push(`%${cleaned}%`);
     conditions.push(
-      `REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') ILIKE $${filtersValues.length}`
+      `REGEXP_REPLACE(${PHONE_EXPRESSION}, '\\D', '', 'g') ILIKE $${filtersValues.length}`
     );
+  }
+
+  if (filters.cidade && filters.cidade.trim().length > 0) {
+    filtersValues.push(`%${filters.cidade.trim()}%`);
+    conditions.push(`${CITY_EXPRESSION} ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.profissao && filters.profissao.trim().length > 0) {
+    filtersValues.push(`%${filters.profissao.trim()}%`);
+    conditions.push(`${PROFESSION_EXPRESSION} ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.tamanhoCamiseta && filters.tamanhoCamiseta.trim().length > 0) {
+    filtersValues.push(filters.tamanhoCamiseta.trim().toUpperCase());
+    conditions.push(`UPPER(${SHIRT_SIZE_EXPRESSION}) = $${filtersValues.length}`);
   }
 
   if (filters.indicacao && filters.indicacao.trim().length > 0) {
@@ -749,35 +1250,68 @@ export async function listInscricoes(
       filtersValues.push(Array.from(codeCandidates));
       const arrayIndex = filtersValues.length;
       conditions.push(
-        `(COALESCE(i.payload->>'traffic_source', '') ILIKE $${likeIndex} OR COALESCE(i.payload->>'traffic_source', '') = ANY($${arrayIndex}))`
+        `(${INDICATION_EXPRESSION} ILIKE $${likeIndex} OR ${RECRUITER_EXPRESSION} = ANY($${arrayIndex}))`
       );
     } else {
-      conditions.push(`COALESCE(i.payload->>'traffic_source', '') ILIKE $${likeIndex}`);
+      conditions.push(`${INDICATION_EXPRESSION} ILIKE $${likeIndex}`);
     }
   }
 
-  if (filters.treinamento && filters.treinamento.trim().length > 0) {
-    const treinamentoValue = filters.treinamento.trim();
-    
-    // Usar correspondência EXATA com a mesma expressão de listTrainingsWithStats
-    // Isso garante que o ID do treinamento seja correspondido corretamente
-    const treinamentoExpr = `TRIM(COALESCE(
-      NULLIF(TRIM(i.payload->>'treinamento'), ''),
-      NULLIF(TRIM(i.payload->>'training'), ''),
-      NULLIF(TRIM(i.payload->>'training_date'), ''),
-      NULLIF(TRIM(i.payload->>'trainingDate'), ''),
-      NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
-      NULLIF(TRIM(i.payload->>'training_id'), ''),
-      NULLIF(TRIM(i.payload->>'trainingId'), ''),
-      NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
-      NULLIF(TRIM(i.payload->>'training_option'), ''),
-      NULLIF(TRIM(i.payload->>'trainingOption'), ''),
-      ''
-    ))`;
-    
+  const trainingFilterValue = filters.dataTreinamento?.trim() || filters.treinamento?.trim() || "";
+  if (trainingFilterValue.length > 0) {
+    const treinamentoValue = trainingFilterValue;
     filtersValues.push(treinamentoValue);
     const paramIndex = filtersValues.length;
-    conditions.push(`${treinamentoExpr} = $${paramIndex}`);
+    conditions.push(`${TRAINING_EXPRESSION} = $${paramIndex}`);
+  } else if (filters.treinamentoIds && filters.treinamentoIds.length > 0) {
+    filtersValues.push(filters.treinamentoIds);
+    conditions.push(`${TRAINING_EXPRESSION} = ANY($${filtersValues.length}::text[])`);
+  }
+
+  if (filters.status && STATUS_VALUES.includes(filters.status)) {
+    filtersValues.push(filters.status);
+    conditions.push(
+      `LOWER(TRIM(COALESCE(i.payload->>'dashboard_status', i.payload->>'status', 'aguardando'))) = $${filtersValues.length}`
+    );
+  }
+
+  if (filters.stars !== undefined && filters.stars !== null && String(filters.stars).trim().length > 0) {
+    const parsedStars = Number.parseInt(String(filters.stars), 10);
+    if (Number.isInteger(parsedStars) && parsedStars >= 1 && parsedStars <= 5) {
+      filtersValues.push(parsedStars);
+      conditions.push(
+        `(i.payload->>'dashboard_stars') ~ '^[1-5]$' AND (i.payload->>'dashboard_stars')::int = $${filtersValues.length}`
+      );
+    }
+  }
+
+  if (filters.campaignSource && filters.campaignSource.trim().length > 0) {
+    filtersValues.push(`%${filters.campaignSource.trim()}%`);
+    conditions.push(`COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.campaignName && filters.campaignName.trim().length > 0) {
+    filtersValues.push(`%${filters.campaignName.trim()}%`);
+    conditions.push(`COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.commercialStage && COMMERCIAL_STAGE_VALUES.includes(filters.commercialStage)) {
+    filtersValues.push(filters.commercialStage);
+    conditions.push(`COALESCE(cl.commercial_stage, 'novo') = $${filtersValues.length}`);
+  }
+
+  if (filters.assignedSellerEmail && filters.assignedSellerEmail.trim().length > 0) {
+    filtersValues.push(filters.assignedSellerEmail.trim().toLowerCase());
+    conditions.push(`LOWER(COALESCE(cl.assigned_seller_email, '')) = $${filtersValues.length}`);
+  }
+
+  if (filters.assignedSellerId && Number.isFinite(filters.assignedSellerId)) {
+    filtersValues.push(Math.trunc(filters.assignedSellerId));
+    conditions.push(`cl.assigned_seller_id = $${filtersValues.length}`);
+  }
+
+  if (filters.unassignedOnly) {
+    conditions.push(`cl.assigned_seller_id IS NULL AND COALESCE(cl.assigned_seller_email, '') = ''`);
   }
 
   // Filtro de presença
@@ -798,7 +1332,50 @@ export async function listInscricoes(
     }
   }
 
-  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  // Filtro de etiqueta
+  if (filters.tag) {
+    switch (filters.tag) {
+      case "recrutador":
+        conditions.push(`(
+          LOWER(TRIM(COALESCE(i.payload->>'tipo', ''))) LIKE 'recrutador%'
+          OR LOWER(TRIM(COALESCE(i.payload->>'tipo', ''))) IN ('indicador', 'upline')
+          OR NULLIF(TRIM(COALESCE(i.payload->>'codigo_recrutador', i.payload->>'recrutadorCodigo', '')), '') IS NOT NULL
+          OR NULLIF(TRIM(COALESCE(i.payload->>'recrutadorId', i.payload->>'parentId', i.payload->>'indicadorId', i.payload->>'sponsorId', '')), '') IS NOT NULL
+        )`);
+        break;
+      case "whatsapp":
+        conditions.push(`LOWER(TRIM(COALESCE(i.payload->>'dashboard_status_whatsapp', ''))) IN ('true', '1', 'sim', 'yes')`);
+        break;
+      case "com-indicador":
+        conditions.push(`(
+          NULLIF(TRIM(COALESCE(i.payload->>'traffic_source', '')), '') IS NOT NULL
+          OR NULLIF(TRIM(COALESCE(i.payload->>'codigo_indicador', '')), '') IS NOT NULL
+          OR NULLIF(TRIM(COALESCE(i.payload->>'codigo_recrutador', '')), '') IS NOT NULL
+          OR NULLIF(TRIM(COALESCE(i.payload->>'recrutadorCodigo', '')), '') IS NOT NULL
+          OR NULLIF(TRIM(COALESCE(i.payload->>'recrutadorId', '')), '') IS NOT NULL
+        )`);
+        break;
+      case "com-dinamica":
+        conditions.push(`(
+          (i.payload->>'presenca_tempo_dinamica_minutos' IS NOT NULL AND TRIM(COALESCE(i.payload->>'presenca_tempo_dinamica_minutos', '0')) <> '' AND TRIM(COALESCE(i.payload->>'presenca_tempo_dinamica_minutos', '0')) <> '0')
+          OR (NULLIF(TRIM(COALESCE(i.payload->>'presenca_dinamica_dias', '')), '') IS NOT NULL)
+        )`);
+        break;
+    }
+  }
+
+  // Filtro de produto (unidade de negócio)
+  if (filters.produto) {
+    const vozupCond = `(
+      LOWER(COALESCE(i.payload->>'unidade_negocio', '')) LIKE '%voz%'
+      OR LOWER(COALESCE(i.payload->>'origem', '')) LIKE '%vozup%'
+      OR LOWER(COALESCE(i.payload->>'origem', '')) LIKE '%voz up%'
+      OR LOWER(COALESCE(i.payload->>'lead_setor', '')) LIKE '%voz%'
+    )`;
+    conditions.push(filters.produto === "vozup" ? vozupCond : `NOT ${vozupCond}`);
+  }
+
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
   const offset = (page - 1) * pageSizeValue;
   const limitIndex = filtersValues.length + 1;
@@ -806,19 +1383,53 @@ export async function listInscricoes(
   const queryValues = [...filtersValues, pageSizeValue, offset];
 
   const query = `
+    WITH filtered_unique_inscricoes AS (
+      SELECT
+        i.id,
+        ROW_NUMBER() OVER (
+          PARTITION BY ${UNIQUE_INSCRICAO_PARTITION}
+          ORDER BY
+            CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
+            CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
+            i.criado_em DESC,
+            i.id DESC
+        ) AS duplicate_rank
+      FROM ${SCHEMA_NAME}.inscricoes AS i
+      LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
+      ${whereClause}
+    )
     SELECT
       i.id,
       i.payload,
       i.criado_em,
-      i.payload->>'nome' AS nome,
-      i.payload->>'telefone' AS telefone,
-      i.payload->>'cidade' AS cidade,
-      i.payload->>'profissao' AS profissao,
-      i.payload->>'treinamento' AS treinamento,
-      i.payload->>'traffic_source' AS traffic_source,
-      COUNT(*) OVER() AS total_count
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${CITY_EXPRESSION} AS cidade,
+      ${PROFESSION_EXPRESSION} AS profissao,
+      ${TRAINING_EXPRESSION} AS treinamento,
+      ${RECRUITER_EXPRESSION} AS traffic_source,
+      COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
+      COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
+      COALESCE(cl.campaign_medium, ${CAMPAIGN_MEDIUM_EXPRESSION}) AS campaign_medium,
+      COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
+      COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
+      cl.commercial_stage,
+      cl.assigned_seller_id,
+      cl.assigned_seller_email,
+      cl.assigned_seller_name,
+      cl.assigned_at,
+      cl.first_contact_inbox_id,
+      cl.first_contact_inbox_name,
+      cl.closing_inbox_id,
+      cl.closing_inbox_name,
+      cl.closing_conversation_id,
+      cl.closing_conversation_display_id,
+      cl.closing_conversation_url,
+      COUNT(*) OVER() AS total_count,
+      TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    ${whereClause}
+    INNER JOIN filtered_unique_inscricoes fui ON fui.id = i.id AND fui.duplicate_rank = 1
+    LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
     ORDER BY ${sortColumn} ${sortDirection}, i.id ${sortDirection}
     LIMIT $${limitIndex} OFFSET $${offsetIndex}
   `;
@@ -831,9 +1442,24 @@ export async function listInscricoes(
 
     if (rows.length === 0) {
       const countQuery = `
+        WITH filtered_unique_inscricoes AS (
+          SELECT
+            i.id,
+            ROW_NUMBER() OVER (
+              PARTITION BY ${UNIQUE_INSCRICAO_PARTITION}
+              ORDER BY
+                CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
+                CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
+                i.criado_em DESC,
+                i.id DESC
+            ) AS duplicate_rank
+          FROM ${SCHEMA_NAME}.inscricoes AS i
+          LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
+          ${whereClause}
+        )
         SELECT COUNT(*) AS total
-        FROM ${SCHEMA_NAME}.inscricoes AS i
-        ${whereClause}
+        FROM filtered_unique_inscricoes
+        WHERE duplicate_rank = 1
       `;
       const { rows: countRows } = await getPool().query<{ total: number | string | null }>(
         countQuery,
@@ -842,7 +1468,21 @@ export async function listInscricoes(
       total = countRows[0]?.total ? Number(countRows[0].total) : 0;
     }
 
-    const data: InscricaoItem[] = rows.map(mapDbRowToInscricaoItem);
+    const primaryItems = rows.map(mapDbRowToInscricaoItem);
+
+    // Busca em batch todos os eventos de cada pessoa e anexa como allEnrollments
+    const personKeys = rows
+      .map((r) => (typeof r.person_key === "string" ? r.person_key.trim() : null))
+      .filter((k): k is string => k !== null && k.length > 0 && !k.startsWith("row:"));
+    const enrollmentMap = await fetchEnrollmentsByPersonKeys(personKeys);
+
+    const data: InscricaoItem[] = primaryItems.map((item) => {
+      const key = item.personKey;
+      if (key && enrollmentMap.has(key)) {
+        return { ...item, allEnrollments: enrollmentMap.get(key) ?? null };
+      }
+      return item;
+    });
 
     return {
       data,
@@ -852,6 +1492,53 @@ export async function listInscricoes(
     };
   } catch (error) {
     console.error("Failed to list inscricoes", error);
+    throw error;
+  }
+}
+
+export async function listPresenceInscricoes(
+  options: {
+    treinamento?: string | null;
+    apenasAprovados?: boolean;
+  } = {}
+): Promise<InscricaoItem[]> {
+  await Promise.all([loadRecruiterCache(), ensureCommercialSchemaForReads()]);
+
+  const conditions: string[] = [FINALIZED_INSCRICAO_CONDITION, PRESENCE_VALIDATED_CONDITION];
+  const values: unknown[] = [];
+
+  const treinamento = options.treinamento?.trim();
+  if (treinamento) {
+    values.push(treinamento);
+    conditions.push(`${PRESENCE_TRAINING_EXPRESSION} = $${values.length}`);
+  }
+
+  if (options.apenasAprovados !== false) {
+    conditions.push(PRESENCE_APPROVED_CONDITION);
+  }
+
+  const query = `
+    SELECT
+      i.id,
+      i.payload,
+      i.criado_em,
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${CITY_EXPRESSION} AS cidade,
+      ${PROFESSION_EXPRESSION} AS profissao,
+      ${TRAINING_EXPRESSION} AS treinamento,
+      ${RECRUITER_EXPRESSION} AS traffic_source,
+      NULL::bigint AS total_count
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE ${conditions.join(" AND ")}
+    ORDER BY NULLIF(i.payload->>'presenca_validada_em', '') DESC NULLS LAST, i.criado_em DESC, i.id DESC
+  `;
+
+  try {
+    const { rows } = await getPool().query<DbRow>(query, values);
+    return rows.map(mapDbRowToInscricaoItem);
+  } catch (error) {
+    console.error("Failed to list presence inscricoes", error);
     throw error;
   }
 }
@@ -932,7 +1619,7 @@ export async function searchInscricoesByName(
 }
 
 export async function getInscricaoById(id: number): Promise<InscricaoItem | null> {
-  await loadRecruiterCache();
+  await Promise.all([loadRecruiterCache(), ensureCommercialSchemaForReads()]);
   
   if (!Number.isFinite(id) || id < 1) {
     throw new Error("Invalid inscrição id");
@@ -943,14 +1630,33 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
       i.id,
       i.payload,
       i.criado_em,
-      i.payload->>'nome' AS nome,
-      i.payload->>'telefone' AS telefone,
-      i.payload->>'cidade' AS cidade,
-      i.payload->>'profissao' AS profissao,
-      i.payload->>'treinamento' AS treinamento,
-      i.payload->>'traffic_source' AS traffic_source,
-      NULL::bigint AS total_count
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${CITY_EXPRESSION} AS cidade,
+      ${PROFESSION_EXPRESSION} AS profissao,
+      ${TRAINING_EXPRESSION} AS treinamento,
+      ${RECRUITER_EXPRESSION} AS traffic_source,
+      COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
+      COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
+      COALESCE(cl.campaign_medium, ${CAMPAIGN_MEDIUM_EXPRESSION}) AS campaign_medium,
+      COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
+      COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
+      cl.commercial_stage,
+      cl.assigned_seller_id,
+      cl.assigned_seller_email,
+      cl.assigned_seller_name,
+      cl.assigned_at,
+      cl.first_contact_inbox_id,
+      cl.first_contact_inbox_name,
+      cl.closing_inbox_id,
+      cl.closing_inbox_name,
+      cl.closing_conversation_id,
+      cl.closing_conversation_display_id,
+      cl.closing_conversation_url,
+      NULL::bigint AS total_count,
+      TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
     FROM ${SCHEMA_NAME}.inscricoes AS i
+    LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
     WHERE i.id = $1
     LIMIT 1
   `;
@@ -960,7 +1666,17 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
   if (!row) {
     return null;
   }
-  return mapDbRowToInscricaoItem(row);
+  const item = mapDbRowToInscricaoItem(row);
+
+  // Populate allEnrollments for this person (same as listInscricoes does)
+  if (item.personKey && !item.personKey.startsWith("row:")) {
+    const enrollmentMap = await fetchEnrollmentsByPersonKeys([item.personKey]);
+    if (enrollmentMap.has(item.personKey)) {
+      item.allEnrollments = enrollmentMap.get(item.personKey) ?? null;
+    }
+  }
+
+  return item;
 }
 
 export interface UpdateInscricaoInput {
@@ -974,6 +1690,8 @@ export interface UpdateInscricaoInput {
   codigoProprio?: string | null;
   parentInscricaoId?: number | null;
   nivel?: number | null;
+  /** Atualização genérica de campos do payload. null remove o campo. */
+  payloadUpdates?: Record<string, string | null>;
 }
 
 export async function updateInscricao(
@@ -1079,6 +1797,14 @@ export async function updateInscricao(
       apply("hierarchy_level", levelValue);
     }
 
+    if (updates.payloadUpdates) {
+      for (const [key, value] of Object.entries(updates.payloadUpdates)) {
+        if (!key.startsWith("dashboard_") && !key.startsWith("presenca_") && !key.startsWith("_")) {
+          apply(key, value);
+        }
+      }
+    }
+
     await client.query(
       `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
       [id, JSON.stringify(nextPayload)]
@@ -1098,6 +1824,53 @@ export async function updateInscricao(
   }
 
   return updated;
+}
+
+export async function mergeInscricoes(
+  primaryId: number,
+  secondaryId: number,
+  mergedPayload: Record<string, unknown>
+): Promise<InscricaoItem> {
+  if (primaryId === secondaryId) throw new Error("Não é possível mesclar um lead consigo mesmo");
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    const { rows } = await client.query<{ id: number; payload: Record<string, unknown> }>(
+      `SELECT id, payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = ANY($1) FOR UPDATE`,
+      [[primaryId, secondaryId]]
+    );
+    if (rows.length < 2) throw new Error("Um ou mais leads não foram encontrados");
+
+    const safePayload: Record<string, unknown> = { ...mergedPayload };
+    // Garantir que campos internos do secundário não contaminem o primário
+    delete safePayload["dashboard_merged_into"];
+
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [primaryId, JSON.stringify(safePayload)]
+    );
+
+    // Marcar o secundário como mesclado
+    const secondaryRow = rows.find((r) => r.id === secondaryId);
+    const secondaryPayload = { ...(secondaryRow?.payload ?? {}), dashboard_merged_into: String(primaryId) };
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
+      [secondaryId, JSON.stringify(secondaryPayload)]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const result = await getInscricaoById(primaryId);
+  if (!result) throw new Error("Lead primário não encontrado após mesclagem");
+  return result;
 }
 
 interface UpdateStatusOptions {
@@ -1354,6 +2127,7 @@ export async function createRecruiterInscricao(
 
   const payload: Record<string, unknown> = {
     nome,
+    _final: true,
     tipo: "recrutador",
     isRecruiter: true,
     codigoRecrutador: normalizedCode,
@@ -1620,50 +2394,30 @@ export async function insertImportedInscricoes(
 export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   const configured = listConfiguredTrainingOptions();
   const orderedOptions: TrainingOption[] = [...configured];
-  const seen = new Set(orderedOptions.map((option) => option.id));
+  const seen = new Set(orderedOptions.flatMap((option) => listTrainingOptionIds(option)));
 
   // Query que busca de todos os campos possíveis de treinamento
   const query = `
-    SELECT DISTINCT
-      TRIM(COALESCE(
-        NULLIF(TRIM(i.payload->>'treinamento'), ''),
-        NULLIF(TRIM(i.payload->>'training'), ''),
-        NULLIF(TRIM(i.payload->>'training_date'), ''),
-        NULLIF(TRIM(i.payload->>'trainingDate'), ''),
-        NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
-        NULLIF(TRIM(i.payload->>'training_id'), ''),
-        NULLIF(TRIM(i.payload->>'trainingId'), ''),
-        NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
-        NULLIF(TRIM(i.payload->>'training_option'), ''),
-        NULLIF(TRIM(i.payload->>'trainingOption'), ''),
-        ''
-      )) AS treinamento
+    SELECT
+      ${TRAINING_EXPRESSION} AS treinamento,
+      BOOL_OR(${UPDAY_PAYLOAD_CONDITION}) AS is_upday
     FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE TRIM(COALESCE(
-      NULLIF(TRIM(i.payload->>'treinamento'), ''),
-      NULLIF(TRIM(i.payload->>'training'), ''),
-      NULLIF(TRIM(i.payload->>'training_date'), ''),
-      NULLIF(TRIM(i.payload->>'trainingDate'), ''),
-      NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
-      NULLIF(TRIM(i.payload->>'training_id'), ''),
-      NULLIF(TRIM(i.payload->>'trainingId'), ''),
-      NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
-      NULLIF(TRIM(i.payload->>'training_option'), ''),
-      NULLIF(TRIM(i.payload->>'trainingOption'), ''),
-      ''
-    )) <> ''
+    WHERE ${FINALIZED_INSCRICAO_CONDITION}
+      AND ${TRAINING_EXPRESSION} <> ''
+    GROUP BY ${TRAINING_EXPRESSION}
     ORDER BY 1
   `;
 
   try {
     const { rows } = await getPool().query<{
       treinamento: string | null;
+      is_upday: boolean | null;
     }>(query);
     const extras: TrainingOption[] = [];
 
     for (const row of rows) {
       const treinamentoId = row.treinamento?.trim() ?? "";
-      if (!treinamentoId) {
+      if (!treinamentoId || isIgnoredTrainingId(treinamentoId)) {
         continue;
       }
 
@@ -1675,13 +2429,16 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
 
       // Tentar formatar como data se parecer ser uma data ISO
       const formatted = formatTrainingDateLabel(treinamentoId);
-      const label = buildAutoTrainingLabel(treinamentoId);
-      const startsAt = formatted ? treinamentoId : null;
+      const isUpDay = Boolean(row.is_upday);
+      const label = buildAutoTrainingLabel(treinamentoId, isUpDay ? "up-day-plus" : "online");
+      const startsAt = !isUpDay && formatted ? treinamentoId : null;
 
       extras.push({
         id: treinamentoId,
         label,
         startsAt,
+        kind: isUpDay ? "up-day-plus" : formatted ? "online" : undefined,
+        days: isUpDay && /\be\b/.test(treinamentoId) ? 2 : 1,
       });
     }
 
@@ -1725,22 +2482,36 @@ export async function getTrainingSnapshot(
   filters: TrainingSnapshotFilters = {}
 ): Promise<TrainingSnapshot> {
   const params: Array<string> = [];
-  const conditions: string[] = [];
+  const conditions: string[] = [FINALIZED_INSCRICAO_CONDITION];
 
   if (filters.treinamentoId) {
     params.push(filters.treinamentoId.trim());
-    conditions.push(`TRIM(COALESCE(i.payload->>'treinamento', '')) = $${params.length}`);
+    conditions.push(`${TRAINING_EXPRESSION} = $${params.length}`);
   }
 
-  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+  const whereClause = `WHERE ${conditions.join(" AND ")}`;
   const typeExpression = "LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead'))";
-  const indicatorExpression = `COALESCE(
-    NULLIF(TRIM(i.payload->>'recrutadorCodigo'), ''),
-    NULLIF(TRIM(i.payload->>'codigo_indicador'), ''),
-    NULLIF(TRIM(i.payload->>'traffic_source'), '')
-  )`;
+  const indicatorExpression = RECRUITER_EXPRESSION;
 
   const query = `
+    WITH unique_inscricoes AS (
+      SELECT *
+      FROM (
+        SELECT
+          i.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ${UNIQUE_INSCRICAO_PARTITION}
+            ORDER BY
+              CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
+              CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
+              i.criado_em DESC,
+              i.id DESC
+          ) AS duplicate_rank
+        FROM ${SCHEMA_NAME}.inscricoes AS i
+        ${whereClause}
+      ) ranked
+      WHERE duplicate_rank = 1
+    )
     SELECT
       COUNT(*)::bigint AS total,
       COUNT(*) FILTER (WHERE ${typeExpression} = 'recrutador')::bigint AS recruiters,
@@ -1748,8 +2519,7 @@ export async function getTrainingSnapshot(
       COUNT(*) FILTER (WHERE ${indicatorExpression} IS NOT NULL)::bigint AS with_indicator,
       COUNT(*) FILTER (WHERE ${indicatorExpression} IS NULL)::bigint AS without_indicator,
       COUNT(*) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h
-    FROM ${SCHEMA_NAME}.inscricoes AS i
-    ${whereClause}
+    FROM unique_inscricoes AS i
   `;
 
   try {
@@ -1879,6 +2649,67 @@ interface DuplicateEntry {
   email: string | null;
   name: string | null;
   payloadHash: string | null;
+  quality: ReturnType<typeof analyzeInscricaoQuality>;
+}
+
+export async function listInscricoesByIds(ids: number[]): Promise<InscricaoItem[]> {
+  const normalizedIds = Array.from(
+    new Set(
+      ids
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.trunc(id))
+    )
+  ).slice(0, 100);
+
+  if (normalizedIds.length === 0) {
+    return [];
+  }
+
+  await Promise.all([loadRecruiterCache(), ensureCommercialSchemaForReads()]);
+
+  const query = `
+    SELECT
+      i.id,
+      i.payload,
+      i.criado_em,
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${CITY_EXPRESSION} AS cidade,
+      ${PROFESSION_EXPRESSION} AS profissao,
+      ${TRAINING_EXPRESSION} AS treinamento,
+      ${RECRUITER_EXPRESSION} AS traffic_source,
+      COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
+      COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
+      COALESCE(cl.campaign_medium, ${CAMPAIGN_MEDIUM_EXPRESSION}) AS campaign_medium,
+      COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
+      COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
+      cl.commercial_stage,
+      cl.assigned_seller_id,
+      cl.assigned_seller_email,
+      cl.assigned_seller_name,
+      cl.assigned_at,
+      cl.first_contact_inbox_id,
+      cl.first_contact_inbox_name,
+      cl.closing_inbox_id,
+      cl.closing_inbox_name,
+      cl.closing_conversation_id,
+      cl.closing_conversation_display_id,
+      cl.closing_conversation_url,
+      NULL::bigint AS total_count
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
+    WHERE i.id = ANY($1::int[])
+    ORDER BY array_position($1::int[], i.id)
+  `;
+
+  try {
+    const { rows } = await getPool().query<DbRow>(query, [normalizedIds]);
+    return rows.map(mapDbRowToInscricaoItem);
+  } catch (error) {
+    console.error("Failed to list inscricoes by ids", error);
+    throw error;
+  }
 }
 
 export async function listDuplicateSuspects(
@@ -1894,20 +2725,22 @@ export async function listDuplicateSuspects(
         i.id,
         i.payload,
         i.criado_em,
-        i.payload->>'nome' AS nome,
-        i.payload->>'telefone' AS telefone,
-        i.payload->>'cidade' AS cidade,
-        i.payload->>'profissao' AS profissao,
-        i.payload->>'treinamento' AS treinamento,
-        i.payload->>'traffic_source' AS traffic_source,
+        ${NAME_EXPRESSION} AS nome,
+        ${PHONE_EXPRESSION} AS telefone,
+        ${CITY_EXPRESSION} AS cidade,
+        ${PROFESSION_EXPRESSION} AS profissao,
+        ${TRAINING_EXPRESSION} AS treinamento,
+        ${RECRUITER_EXPRESSION} AS traffic_source,
         NULL::bigint AS total_count,
-        REGEXP_REPLACE(COALESCE(i.payload->>'telefone', ''), '\\D', '', 'g') AS telefone_normalizado,
-        LOWER(TRIM(COALESCE(i.payload->>'email', ''))) AS email_normalizado,
-        LOWER(TRIM(COALESCE(i.payload->>'nome', ''))) AS nome_normalizado,
+        REGEXP_REPLACE(${PHONE_EXPRESSION}, '\\D', '', 'g') AS telefone_normalizado,
+        LOWER(TRIM(${EMAIL_EXPRESSION})) AS email_normalizado,
+        LOWER(TRIM(${NAME_EXPRESSION})) AS nome_normalizado,
         DATE_TRUNC('day', i.criado_em) AS criado_dia,
         MD5(CAST(i.payload AS TEXT)) AS payload_hash
       FROM ${SCHEMA_NAME}.inscricoes AS i
-      WHERE i.criado_em >= NOW() - ($1::text || ' days')::interval
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+        AND i.criado_em >= NOW() - ($1::text || ' days')::interval
       ORDER BY i.criado_em DESC
       LIMIT $2
     `,
@@ -1942,6 +2775,7 @@ export async function listDuplicateSuspects(
       email: normalizeValue(row.email_normalizado),
       name: normalizeValue(row.nome_normalizado),
       payloadHash: normalizeValue(row.payload_hash),
+      quality: analyzeInscricaoQuality(item),
     };
   });
 
@@ -2021,6 +2855,7 @@ export async function listDuplicateSuspects(
   const phoneMap = new Map<string, DuplicateEntry[]>();
   const emailMap = new Map<string, DuplicateEntry[]>();
   const nameDayMap = new Map<string, DuplicateEntry[]>();
+  const nameWindowMap = new Map<string, DuplicateEntry[]>();
   const payloadMap = new Map<string, DuplicateEntry[]>();
 
   for (const entry of entries) {
@@ -2032,6 +2867,9 @@ export async function listDuplicateSuspects(
     }
     if (entry.name && entry.createdDay) {
       addToMap(nameDayMap, `${entry.name}|${entry.createdDay}`, entry);
+    }
+    if (entry.name && entry.name.split(" ").length >= 2) {
+      addToMap(nameWindowMap, entry.name, entry);
     }
     if (entry.payloadHash) {
       addToMap(payloadMap, entry.payloadHash, entry);
@@ -2100,6 +2938,52 @@ export async function listDuplicateSuspects(
     hint: key,
   }));
 
+  // Mesmo nome completo (≥2 palavras) dentro da janela, com telefones distintos
+  for (const [name, bucket] of nameWindowMap.entries()) {
+    if (bucket.length < 2) continue;
+    // Só processar pares que já não foram unidos por telefone/email
+    const newPairs: [DuplicateEntry, DuplicateEntry][] = [];
+    for (let i = 0; i < bucket.length; i++) {
+      for (let j = i + 1; j < bucket.length; j++) {
+        const a = bucket[i]!;
+        const b = bucket[j]!;
+        if (find(a.item.id) !== find(b.item.id) && !isDismissedPair(a.item.id, b.item.id)) {
+          newPairs.push([a, b]);
+        }
+      }
+    }
+    if (newPairs.length === 0) continue;
+    const allInvolved = [...new Set(newPairs.flatMap(([a, b]) => [a, b]))];
+    const sorted = allInvolved.slice().sort((a, b) => b.item.criadoEm.localeCompare(a.item.criadoEm));
+    const displayName = sorted.find((e) => e.item.nome)?.item.nome ?? name;
+    bucketReasons.push({
+      entries: sorted,
+      reason: "nome-dia",
+      matchValue: `${displayName} (mesmo nome, telefones diferentes)`,
+      hint: sorted.map((e) => e.phone ?? "—").join(" vs "),
+    });
+    const [first, ...rest] = sorted;
+    for (const other of rest) {
+      if (!isDismissedPair(first!.item.id, other.item.id)) {
+        union(first!.item.id, other.item.id);
+      }
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.quality.isGhostCandidate || hasQualityDismissed(entry.item)) {
+      continue;
+    }
+
+    const primaryIssue = entry.quality.issues[0];
+    bucketReasons.push({
+      entries: [entry],
+      reason: primaryIssue ? issueCodeToDuplicateReason(primaryIssue.code) : "fantasma",
+      matchValue: entry.quality.primaryLabel ?? "Possivel inscricao fantasma",
+      hint: entry.quality.issues.map((issue) => issue.label).join(" | ") || null,
+    });
+  }
+
   const groupMap = new Map<number, { entries: Set<InscricaoItem>; reasons: DuplicateReasonDetail[]; latest: string }>();
 
   for (const entry of entries) {
@@ -2139,6 +3023,16 @@ export async function listDuplicateSuspects(
     }
   }
 
+  const qualityReasons = new Set<DuplicateReason>([
+    "fantasma",
+    "nome-suspeito",
+    "telefone-invalido",
+    "email-suspeito",
+    "dados-incompletos",
+    "payload-teste",
+    "treinamento-ausente",
+  ]);
+
   const groups: DuplicateGroup[] = Array.from(groupMap.entries())
     .map(([root, data]) => {
       const sortedEntries = Array.from(data.entries).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm));
@@ -2146,11 +3040,11 @@ export async function listDuplicateSuspects(
         id: `group:${root}`,
         entries: sortedEntries,
         reasons: data.reasons,
-        score: sortedEntries.length,
+        score: sortedEntries.length + data.reasons.length,
         latestCreatedAt: sortedEntries[0]?.criadoEm ?? data.latest,
       };
     })
-    .filter((group) => group.entries.length > 1)
+    .filter((group) => group.entries.length > 1 || group.reasons.some((detail) => qualityReasons.has(detail.reason)))
     .sort((a, b) => {
       if (b.score !== a.score) {
         return b.score - a.score;
@@ -2174,6 +3068,51 @@ export interface DashboardStats {
   topRecruiters: { name: string; recruits: number }[];
 }
 
+export interface CommercialStageDashboardStat {
+  key: CommercialStage;
+  label: string;
+  count: number;
+  percentage: number;
+}
+
+export interface CommercialCampaignDashboardStat {
+  source: string;
+  name: string | null;
+  leads: number;
+  won: number;
+  hot: number;
+}
+
+export interface CommercialSellerDashboardStat {
+  name: string;
+  email: string | null;
+  active: number;
+  closing: number;
+  won: number;
+}
+
+export interface CommercialDashboardStats {
+  totalLeads: number;
+  newLeadsToday: number;
+  activeLeads: number;
+  unassignedLeads: number;
+  staleLeads: number;
+  hotLeads: number;
+  assignedToday: number;
+  closingLeads: number;
+  wonLeads: number;
+  lostLeads: number;
+  noShowLeads: number;
+  winRate: number;
+  stageSummary: CommercialStageDashboardStat[];
+  topCampaigns: CommercialCampaignDashboardStat[];
+  sellerWorkload: CommercialSellerDashboardStat[];
+}
+
+interface CommercialDashboardOptions {
+  treinamentoId?: string;
+}
+
 export interface TrainingWithStats {
   id: string;
   label: string;
@@ -2186,42 +3125,252 @@ export interface TrainingWithStats {
   last24h: number;
 }
 
+function buildCommercialDashboardBaseQuery(trainingCondition: string): string {
+  return `
+    WITH unique_inscricoes AS (
+      SELECT *
+      FROM (
+        SELECT
+          i.id,
+          i.payload,
+          i.criado_em,
+          COALESCE(cl.commercial_stage, 'novo') AS commercial_stage,
+          cl.assigned_seller_id,
+          cl.assigned_seller_email,
+          cl.assigned_seller_name,
+          cl.assigned_at,
+          cl.updated_at,
+          COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
+          COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
+          ROW_NUMBER() OVER (
+            PARTITION BY ${UNIQUE_INSCRICAO_PARTITION}
+            ORDER BY
+              CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
+              CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
+              i.criado_em DESC,
+              i.id DESC
+          ) AS duplicate_rank
+        FROM ${SCHEMA_NAME}.inscricoes AS i
+        LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
+        WHERE ${FINALIZED_INSCRICAO_CONDITION}
+          ${trainingCondition}
+      ) ranked
+      WHERE duplicate_rank = 1
+    )
+  `;
+}
+
+function dashboardNumber(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") return Number.parseInt(value, 10) || 0;
+  return 0;
+}
+
+export async function getCommercialDashboardStats(
+  options: CommercialDashboardOptions = {}
+): Promise<CommercialDashboardStats> {
+  await ensureCommercialSchemaForReads();
+
+  const treinamentoId = options.treinamentoId?.trim() ?? "";
+  const queryValues = treinamentoId ? [treinamentoId] : [];
+  const trainingCondition = treinamentoId ? `AND ${TRAINING_EXPRESSION} = $1` : "";
+  const baseQuery = buildCommercialDashboardBaseQuery(trainingCondition);
+
+  const [summaryRes, stageRes, campaignRes, sellerRes] = await Promise.all([
+    getPool().query<{
+      total_leads: string;
+      new_leads_today: string;
+      active_leads: string;
+      unassigned_leads: string;
+      stale_leads: string;
+      hot_leads: string;
+      assigned_today: string;
+      closing_leads: string;
+      won_leads: string;
+      lost_leads: string;
+      no_show_leads: string;
+    }>(
+      `
+        ${baseQuery}
+        SELECT
+          COUNT(*)::bigint AS total_leads,
+          COUNT(*) FILTER (WHERE criado_em >= CURRENT_DATE)::bigint AS new_leads_today,
+          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido'))::bigint AS active_leads,
+          COUNT(*) FILTER (
+            WHERE commercial_stage NOT IN ('ganho', 'perdido')
+              AND assigned_seller_id IS NULL
+              AND COALESCE(TRIM(assigned_seller_email), '') = ''
+          )::bigint AS unassigned_leads,
+          COUNT(*) FILTER (
+            WHERE commercial_stage NOT IN ('ganho', 'perdido')
+              AND COALESCE(updated_at, assigned_at, criado_em) < NOW() - INTERVAL '48 hours'
+          )::bigint AS stale_leads,
+          COUNT(*) FILTER (
+            WHERE COALESCE(payload->>'dashboard_stars', '') = '5'
+          )::bigint AS hot_leads,
+          COUNT(*) FILTER (WHERE assigned_at >= CURRENT_DATE)::bigint AS assigned_today,
+          COUNT(*) FILTER (WHERE commercial_stage = 'fechamento')::bigint AS closing_leads,
+          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won_leads,
+          COUNT(*) FILTER (WHERE commercial_stage = 'perdido')::bigint AS lost_leads,
+          COUNT(*) FILTER (WHERE commercial_stage = 'no_show')::bigint AS no_show_leads
+        FROM unique_inscricoes
+      `,
+      queryValues
+    ),
+    getPool().query<{ commercial_stage: string; count: string }>(
+      `
+        ${baseQuery}
+        SELECT commercial_stage, COUNT(*)::bigint AS count
+        FROM unique_inscricoes
+        GROUP BY commercial_stage
+      `,
+      queryValues
+    ),
+    getPool().query<{
+      campaign_source: string | null;
+      campaign_name: string | null;
+      leads: string;
+      won: string;
+      hot: string;
+    }>(
+      `
+        ${baseQuery}
+        SELECT
+          NULLIF(TRIM(COALESCE(campaign_source, '')), '') AS campaign_source,
+          NULLIF(TRIM(COALESCE(campaign_name, '')), '') AS campaign_name,
+          COUNT(*)::bigint AS leads,
+          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won,
+          COUNT(*) FILTER (WHERE COALESCE(payload->>'dashboard_stars', '') = '5')::bigint AS hot
+        FROM unique_inscricoes
+        GROUP BY 1, 2
+        ORDER BY COUNT(*) DESC
+        LIMIT 6
+      `,
+      queryValues
+    ),
+    getPool().query<{
+      seller_name: string | null;
+      seller_email: string | null;
+      active: string;
+      closing: string;
+      won: string;
+    }>(
+      `
+        ${baseQuery}
+        SELECT
+          NULLIF(TRIM(COALESCE(assigned_seller_name, '')), '') AS seller_name,
+          NULLIF(TRIM(COALESCE(assigned_seller_email, '')), '') AS seller_email,
+          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido'))::bigint AS active,
+          COUNT(*) FILTER (WHERE commercial_stage = 'fechamento')::bigint AS closing,
+          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won
+        FROM unique_inscricoes
+        GROUP BY 1, 2
+        ORDER BY
+          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido')) DESC,
+          COUNT(*) FILTER (WHERE commercial_stage = 'ganho') DESC
+        LIMIT 6
+      `,
+      queryValues
+    ),
+  ]);
+
+  const summary = summaryRes.rows[0];
+  const totalLeads = dashboardNumber(summary?.total_leads);
+  const wonLeads = dashboardNumber(summary?.won_leads);
+  const lostLeads = dashboardNumber(summary?.lost_leads);
+  const decidedLeads = wonLeads + lostLeads;
+  const stageCounts = new Map<CommercialStage, number>(
+    stageRes.rows.map((row): [CommercialStage, number] => [
+      normalizeCommercialStage(row.commercial_stage),
+      dashboardNumber(row.count),
+    ])
+  );
+
+  return {
+    totalLeads,
+    newLeadsToday: dashboardNumber(summary?.new_leads_today),
+    activeLeads: dashboardNumber(summary?.active_leads),
+    unassignedLeads: dashboardNumber(summary?.unassigned_leads),
+    staleLeads: dashboardNumber(summary?.stale_leads),
+    hotLeads: dashboardNumber(summary?.hot_leads),
+    assignedToday: dashboardNumber(summary?.assigned_today),
+    closingLeads: dashboardNumber(summary?.closing_leads),
+    wonLeads,
+    lostLeads,
+    noShowLeads: dashboardNumber(summary?.no_show_leads),
+    winRate: decidedLeads > 0 ? Math.round((wonLeads / decidedLeads) * 1000) / 10 : 0,
+    stageSummary: COMMERCIAL_STAGE_VALUES.map((key) => {
+      const count = stageCounts.get(key) ?? 0;
+      return {
+        key,
+        label: COMMERCIAL_STAGE_LABELS[key],
+        count,
+        percentage: totalLeads > 0 ? Math.round((count / totalLeads) * 1000) / 10 : 0,
+      };
+    }),
+    topCampaigns: campaignRes.rows.map((row) => ({
+      source: row.campaign_source || "Sem campanha",
+      name: row.campaign_name || null,
+      leads: dashboardNumber(row.leads),
+      won: dashboardNumber(row.won),
+      hot: dashboardNumber(row.hot),
+    })),
+    sellerWorkload: sellerRes.rows.map((row) => ({
+      name: row.seller_name || row.seller_email || "Sem vendedor",
+      email: row.seller_email || null,
+      active: dashboardNumber(row.active),
+      closing: dashboardNumber(row.closing),
+      won: dashboardNumber(row.won),
+    })),
+  };
+}
+
 export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
   const pool = getPool();
 
   // Expressão para extrair treinamento de múltiplos campos possíveis
-  const treinamentoExpr = `TRIM(COALESCE(
-    NULLIF(TRIM(i.payload->>'treinamento'), ''),
-    NULLIF(TRIM(i.payload->>'training'), ''),
-    NULLIF(TRIM(i.payload->>'training_date'), ''),
-    NULLIF(TRIM(i.payload->>'trainingDate'), ''),
-    NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
-    NULLIF(TRIM(i.payload->>'training_id'), ''),
-    NULLIF(TRIM(i.payload->>'trainingId'), ''),
-    NULLIF(TRIM(i.payload->>'treinamento_id'), ''),
-    NULLIF(TRIM(i.payload->>'training_option'), ''),
-    NULLIF(TRIM(i.payload->>'trainingOption'), ''),
-    'Sem Treinamento'
-  ))`;
+  const treinamentoExpr = `COALESCE(NULLIF(${TRAINING_EXPRESSION}, ''), 'Sem Treinamento')`;
 
   const query = `
+    WITH base AS (
+      SELECT
+        i.*,
+        TRIM(${UNIQUE_INSCRICAO_PARTITION}) AS person_key,
+        ${treinamentoExpr} AS treinamento_id,
+        ROW_NUMBER() OVER (
+          PARTITION BY TRIM(${UNIQUE_INSCRICAO_PARTITION}), ${treinamentoExpr}
+          ORDER BY
+            CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
+            CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
+            i.criado_em DESC,
+            i.id DESC
+        ) AS rn
+      FROM ${SCHEMA_NAME}.inscricoes AS i
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+    ),
+    unique_per_training AS (
+      SELECT * FROM base WHERE rn = 1
+    )
     SELECT
-      ${treinamentoExpr} AS treinamento_id,
-      COUNT(*)::bigint AS total_inscritos,
-      COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
-      COUNT(*) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
-      COUNT(*) FILTER (WHERE i.payload->>'presenca_validada' = 'true')::bigint AS presentes,
-      COUNT(*) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
+      treinamento_id,
+      BOOL_OR(${UPDAY_PAYLOAD_CONDITION}) AS is_upday,
+      COUNT(DISTINCT person_key)::bigint AS total_inscritos,
+      COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
+      COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
+      COUNT(DISTINCT person_key) FILTER (WHERE i.payload->>'presenca_validada' = 'true')::bigint AS presentes,
+      COUNT(DISTINCT person_key) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
       MIN(i.criado_em) AS first_inscrito,
       MAX(i.criado_em) AS last_inscrito
-    FROM ${SCHEMA_NAME}.inscricoes AS i
-    GROUP BY ${treinamentoExpr}
+    FROM unique_per_training AS i
+    GROUP BY treinamento_id
     ORDER BY MAX(i.criado_em) DESC
   `;
 
   try {
     const { rows } = await pool.query<{
       treinamento_id: string;
+      is_upday: boolean | null;
       total_inscritos: string;
       recrutadores: string;
       leads: string;
@@ -2234,21 +3383,22 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
     return rows
       .filter((row) => {
         const id = (row.treinamento_id || "").trim();
-        return id !== "" && id !== "Sem Treinamento";
+        return id !== "" && id !== "Sem Treinamento" && !isIgnoredTrainingId(id);
       })
       .map((row) => {
       const treinamentoId = row.treinamento_id || "Sem Treinamento";
       const trainingInfo = getTrainingById(treinamentoId);
+      const isUpDay = Boolean(row.is_upday || trainingInfo?.kind === "up-day-plus");
       
       // Tentar formatar como data se o ID parecer uma data
-      let label = trainingInfo?.label ?? treinamentoId;
+      let label = trainingInfo?.label ?? buildAutoTrainingLabel(treinamentoId, isUpDay ? "up-day-plus" : "online");
       let startsAt = trainingInfo?.startsAt ?? null;
       
       // Se o label ainda for igual ao ID e parece ser uma data ISO, formatar com prefixo
       if (label === treinamentoId && treinamentoId !== "Sem Treinamento") {
-        label = buildAutoTrainingLabel(treinamentoId);
+        label = buildAutoTrainingLabel(treinamentoId, isUpDay ? "up-day-plus" : "online");
         const formatted = formatTrainingDateLabel(treinamentoId);
-        if (formatted) {
+        if (formatted && !isUpDay) {
           startsAt = treinamentoId;
         }
       }
@@ -2257,7 +3407,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
         id: treinamentoId,
         label,
         startsAt,
-        days: trainingInfo?.days ?? 1,
+        days: trainingInfo?.days ?? (isUpDay && /\be\b/.test(treinamentoId) ? 2 : 1),
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
@@ -2277,61 +3427,71 @@ export async function getDashboardStats(): Promise<DashboardStats> {
   // Carregar cache de recrutadores do banco
   await loadRecruiterCache();
 
-  // 1. Basic Counts
-  const totalRes = await pool.query(`SELECT COUNT(*) FROM ${SCHEMA_NAME}.inscricoes`);
-  const totalLeads = parseInt(totalRes.rows[0].count, 10);
+  const [countsRes, growthRes, topRecruitersRes] = await Promise.all([
+    pool.query(`
+      SELECT
+        COUNT(*)::bigint AS total_leads,
+        COUNT(*) FILTER (WHERE criado_em >= CURRENT_DATE)::bigint AS new_leads_today,
+        COUNT(*) FILTER (
+          WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador'
+        )::bigint AS recruiters,
+        COUNT(*) FILTER (WHERE ${PRESENCE_APPROVED_CONDITION})::bigint AS graduados
+      FROM ${SCHEMA_NAME}.inscricoes i
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+    `),
+    pool.query(`
+      SELECT
+        TO_CHAR(criado_em, 'Mon') as name,
+        EXTRACT(MONTH FROM criado_em) as month_num,
+        COUNT(*) as leads,
+        COUNT(*) FILTER (
+          WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador'
+        ) as recruits
+      FROM ${SCHEMA_NAME}.inscricoes i
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND criado_em >= CURRENT_DATE - INTERVAL '6 months'
+      GROUP BY 1, 2
+      ORDER BY 2
+    `),
+    pool.query(`
+      SELECT
+        TRIM(COALESCE(
+          NULLIF(TRIM(payload->>'traffic_source'), ''),
+          NULLIF(TRIM(payload->>'source'), ''),
+          NULLIF(TRIM(payload->>'recrutador'), ''),
+          NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+        )) as code,
+        COUNT(*) as recruits
+      FROM ${SCHEMA_NAME}.inscricoes i
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND TRIM(COALESCE(
+          NULLIF(TRIM(payload->>'traffic_source'), ''),
+          NULLIF(TRIM(payload->>'source'), ''),
+          NULLIF(TRIM(payload->>'recrutador'), ''),
+          NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+        )) IS NOT NULL
+        AND TRIM(COALESCE(
+          NULLIF(TRIM(payload->>'traffic_source'), ''),
+          NULLIF(TRIM(payload->>'source'), ''),
+          NULLIF(TRIM(payload->>'recrutador'), ''),
+          NULLIF(TRIM(payload->>'recrutador_codigo'), '')
+        )) != ''
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10
+    `),
+  ]);
 
-  const todayRes = await pool.query(`
-    SELECT COUNT(*) FROM ${SCHEMA_NAME}.inscricoes 
-    WHERE criado_em >= CURRENT_DATE
-  `);
-  const newLeadsToday = parseInt(todayRes.rows[0].count, 10);
+  const totalLeads = parseInt(countsRes.rows[0]?.total_leads ?? "0", 10);
+  const newLeadsToday = parseInt(countsRes.rows[0]?.new_leads_today ?? "0", 10);
+  const recruitersTotal = parseInt(countsRes.rows[0]?.recruiters ?? "0", 10);
+  const graduados = parseInt(countsRes.rows[0]?.graduados ?? "0", 10);
 
-  // 2. Growth Data (Last 6 months)
-  const growthRes = await pool.query(`
-    SELECT 
-      TO_CHAR(criado_em, 'Mon') as name,
-      EXTRACT(MONTH FROM criado_em) as month_num,
-      COUNT(*) as leads
-    FROM ${SCHEMA_NAME}.inscricoes
-    WHERE criado_em >= CURRENT_DATE - INTERVAL '6 months'
-    GROUP BY 1, 2
-    ORDER BY 2
-  `);
-  
   const growthData = growthRes.rows.map(row => ({
     name: row.name,
     leads: parseInt(row.leads, 10),
-    recruits: Math.floor(parseInt(row.leads, 10) * 0.1) // Mocking recruits as 10% of leads for now as we don't have explicit recruiter type in DB yet
+    recruits: parseInt(row.recruits, 10) || 0
   }));
-
-  // 3. Top Recruiters - conta indicações por recrutador
-  const topRecruitersRes = await pool.query(`
-    SELECT 
-      TRIM(COALESCE(
-        NULLIF(TRIM(payload->>'traffic_source'), ''),
-        NULLIF(TRIM(payload->>'source'), ''),
-        NULLIF(TRIM(payload->>'recrutador'), ''),
-        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
-      )) as code,
-      COUNT(*) as recruits
-    FROM ${SCHEMA_NAME}.inscricoes
-    WHERE TRIM(COALESCE(
-        NULLIF(TRIM(payload->>'traffic_source'), ''),
-        NULLIF(TRIM(payload->>'source'), ''),
-        NULLIF(TRIM(payload->>'recrutador'), ''),
-        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
-      )) IS NOT NULL
-      AND TRIM(COALESCE(
-        NULLIF(TRIM(payload->>'traffic_source'), ''),
-        NULLIF(TRIM(payload->>'source'), ''),
-        NULLIF(TRIM(payload->>'recrutador'), ''),
-        NULLIF(TRIM(payload->>'recrutador_codigo'), '')
-      )) != ''
-    GROUP BY 1
-    ORDER BY 2 DESC
-    LIMIT 10
-  `);
 
   const topRecruiters = topRecruitersRes.rows.map(row => {
     // Prioridade: banco de dados > lista estática (sem placeholders)
@@ -2344,18 +3504,17 @@ export async function getDashboardStats(): Promise<DashboardStats> {
     };
   });
 
-  // 4. Distribution (Mocked based on total)
   const distributionData = [
-    { name: "Leads", value: totalLeads },
-    { name: "Recrutadores", value: Math.floor(totalLeads * 0.05) },
-    { name: "Clientes", value: Math.floor(totalLeads * 0.02) },
+    { name: "Leads", value: Math.max(totalLeads - recruitersTotal, 0) },
+    { name: "Recrutadores", value: recruitersTotal },
+    { name: "Graduados", value: graduados },
   ];
 
   return {
     totalLeads,
     newLeadsToday,
-    conversionRate: 12.5, // Mocked
-    graduados: 42, // Mocked
+    conversionRate: totalLeads > 0 ? Math.round((graduados / totalLeads) * 1000) / 10 : 0,
+    graduados,
     growthData,
     distributionData,
     topRecruiters
@@ -2385,14 +3544,15 @@ export async function getInscricaoByRecruiterCode(code: string): Promise<Inscric
       i.id,
       i.payload,
       i.criado_em,
-      i.payload->>'nome' AS nome,
-      i.payload->>'telefone' AS telefone,
-      i.payload->>'cidade' AS cidade,
-      i.payload->>'profissao' AS profissao,
-      i.payload->>'treinamento' AS treinamento,
-      i.payload->>'traffic_source' AS traffic_source
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${CITY_EXPRESSION} AS cidade,
+      ${PROFESSION_EXPRESSION} AS profissao,
+      ${TRAINING_EXPRESSION} AS treinamento,
+      ${RECRUITER_EXPRESSION} AS traffic_source
     FROM ${SCHEMA_NAME}.inscricoes i
-    WHERE (
+    WHERE ${FINALIZED_INSCRICAO_CONDITION}
+    AND (
       LOWER(TRIM(COALESCE(i.payload->>'codigoRecrutador', ''))) = LOWER($1) OR
       LOWER(TRIM(COALESCE(i.payload->>'codigo_recrutador', ''))) = LOWER($1) OR
       LOWER(TRIM(COALESCE(i.payload->>'codigo', ''))) = LOWER($1) OR
@@ -2420,12 +3580,21 @@ export async function getInscricaoByRecruiterCode(code: string): Promise<Inscric
  * contendo os IDs de todas as outras do grupo.
  */
 export async function dismissDuplicateGroup(ids: number[]): Promise<void> {
-  if (!ids || ids.length < 2) return;
+  const normalizedIds = Array.from(
+    new Set(
+      (ids ?? [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+        .map((id) => Math.trunc(id))
+    )
+  );
+
+  if (normalizedIds.length < 1) return;
 
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    for (const id of ids) {
+    for (const id of normalizedIds) {
       const { rows } = await client.query<{ payload: Record<string, unknown> | null }>(
         `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1 FOR UPDATE`,
         [id],
@@ -2438,10 +3607,15 @@ export async function dismissDuplicateGroup(ids: number[]): Promise<void> {
         : [];
 
       // Merge other IDs in the group
-      const otherIds = ids.filter((oid) => oid !== id);
+      const otherIds = normalizedIds.filter((oid) => oid !== id);
       const merged = Array.from(new Set([...existing, ...otherIds]));
 
-      const nextPayload = { ...payload, dashboard_not_duplicate: merged };
+      const nextPayload = {
+        ...payload,
+        dashboard_not_duplicate: merged,
+        dashboard_quality_dismissed: true,
+        dashboard_quality_dismissed_at: new Date().toISOString(),
+      };
       await client.query(
         `UPDATE ${SCHEMA_NAME}.inscricoes SET payload = $2::jsonb WHERE id = $1`,
         [id, JSON.stringify(nextPayload)],

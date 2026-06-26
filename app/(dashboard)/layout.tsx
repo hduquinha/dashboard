@@ -2,8 +2,10 @@ import { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import DashboardLayoutClient from "@/components/DashboardLayoutClient";
-import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { getChatwootFrontendUrl } from "@/lib/chatwootAuth";
 import { listDuplicateSuspects } from "@/lib/db";
+import { ttlCache } from "@/lib/serverCache";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -12,7 +14,9 @@ interface DashboardLayoutProps {
 const DUPLICATE_TIMEOUT_MS = 3_000;
 
 async function loadDuplicateCount(): Promise<number> {
-  const summaryPromise = listDuplicateSuspects({ maxGroups: 1 });
+  const summaryPromise = ttlCache("dashboard:duplicate-sidebar-count", 60_000, async () =>
+    listDuplicateSuspects({ maxGroups: 1, sampleSize: 200 })
+  );
   const timeoutPromise = new Promise<"timeout">((resolve) => {
     setTimeout(() => resolve("timeout"), DUPLICATE_TIMEOUT_MS);
   });
@@ -39,6 +43,8 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
     redirect("/login");
   }
 
+  const session = getDashboardSession(token);
+
   let duplicateCount = 0;
   try {
     duplicateCount = await loadDuplicateCount();
@@ -48,7 +54,11 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   }
 
   return (
-    <DashboardLayoutClient duplicateCount={duplicateCount}>
+    <DashboardLayoutClient
+      chatwootUrl={getChatwootFrontendUrl()}
+      currentUser={session?.user ?? null}
+      duplicateCount={duplicateCount}
+    >
       {children}
     </DashboardLayoutClient>
   );

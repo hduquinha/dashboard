@@ -6,7 +6,8 @@ import {
   UnauthorizedError,
 } from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
-import type { OrderDirection, OrderableField } from "@/types/inscricao";
+import { ttlCache } from "@/lib/serverCache";
+import type { InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 
 interface RequestContext {
   authorization?: string | null;
@@ -43,6 +44,11 @@ function parseDirection(value: string | null): OrderDirection {
   return value === "asc" ? "asc" : "desc";
 }
 
+function parseStatus(value: string | null): InscricaoStatus | undefined {
+  const allowed: InscricaoStatus[] = ["aguardando", "aprovado", "rejeitado"];
+  return value && allowed.includes(value as InscricaoStatus) ? (value as InscricaoStatus) : undefined;
+}
+
 export async function handleInscricoesRequest({
   authorization,
   isAlreadyAuthorized,
@@ -57,23 +63,57 @@ export async function handleInscricoesRequest({
     const pageSize = Math.min(parseNumber(searchParams.get("pageSize"), 10), 50);
     const orderBy = parseOrderField(searchParams.get("orderBy"));
     const orderDirection = parseDirection(searchParams.get("orderDirection"));
+    const caracteristica = searchParams.get("q") ?? searchParams.get("caracteristica") ?? "";
     const nome = searchParams.get("nome") ?? "";
     const telefone = searchParams.get("telefone") ?? "";
+    const cidade = searchParams.get("cidade") ?? "";
+    const profissao = searchParams.get("profissao") ?? "";
     const indicacao = searchParams.get("indicacao") ?? "";
     const treinamento = searchParams.get("treinamento") ?? "";
+    const dataTreinamento = searchParams.get("data_treinamento") ?? "";
+    const tamanhoCamiseta = searchParams.get("tamanho_camiseta") ?? "";
+    const status = parseStatus(searchParams.get("status"));
+    const stars = searchParams.get("stars") ?? "";
 
-    const result = await listInscricoes({
+    const queryKey = JSON.stringify({
       page,
       pageSize,
       orderBy,
       orderDirection,
-      filters: {
-        nome,
-        telefone,
-        indicacao,
-        treinamento,
-      },
+      caracteristica,
+      nome,
+      telefone,
+      cidade,
+      profissao,
+      indicacao,
+      treinamento,
+      dataTreinamento,
+      tamanhoCamiseta,
+      status,
+      stars,
     });
+
+    const result = await ttlCache(`dashboard:api:inscricoes:${queryKey}`, 5_000, () =>
+      listInscricoes({
+        page,
+        pageSize,
+        orderBy,
+        orderDirection,
+        filters: {
+          caracteristica,
+          nome,
+          telefone,
+          cidade,
+          profissao,
+          indicacao,
+          treinamento,
+          dataTreinamento,
+          tamanhoCamiseta,
+          status,
+          stars,
+        },
+      })
+    );
 
     return {
       status: 200,

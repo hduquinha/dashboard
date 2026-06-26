@@ -1,50 +1,62 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { usePathname } from "next/navigation";
+import Image from "next/image";
 import { Menu } from "lucide-react";
 import ModernSidebar from "@/components/ModernSidebar";
+import type { DashboardUser } from "@/lib/auth";
 
 interface DashboardLayoutClientProps {
   children: React.ReactNode;
+  chatwootUrl?: string | null;
+  currentUser?: DashboardUser | null;
   duplicateCount: number;
 }
 
-export default function DashboardLayoutClient({ children, duplicateCount }: DashboardLayoutClientProps) {
+export default function DashboardLayoutClient({
+  children,
+  chatwootUrl,
+  currentUser,
+  duplicateCount,
+}: DashboardLayoutClientProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const [mobileOpenPathname, setMobileOpenPathname] = useState<string | null>(null);
   const pathname = usePathname();
-
-  // Close mobile sidebar on route change
-  useEffect(() => {
-    setIsMobileOpen(false);
-  }, [pathname]);
+  const isMobileOpen = mobileOpenPathname === pathname;
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-neutral-50">
-      {/* Mobile Header */}
-      <div className="fixed top-0 left-0 right-0 z-20 flex h-16 items-center justify-between border-b border-neutral-200 bg-white px-4 shadow-sm lg:hidden">
+    <div className="flex h-dvh w-full overflow-hidden bg-[rgb(var(--background-color))] text-[rgb(var(--slate-12))]">
+      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-3 shadow-[0_1px_2px_rgba(28,32,36,0.04)] lg:hidden">
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setIsMobileOpen(true)}
-            className="rounded-md p-2 text-neutral-600 hover:bg-neutral-100"
+            onClick={() => setMobileOpenPathname(pathname)}
+            className="flex size-9 items-center justify-center rounded-lg text-[rgb(var(--slate-11))] hover:bg-[rgba(var(--alpha-2))]"
+            aria-label="Abrir menu"
           >
-            <Menu size={24} />
+            <Menu size={20} />
           </button>
-          <span className="text-lg font-bold text-neutral-900">Instituto UP</span>
+          <div className="flex items-center gap-2">
+            <Image src="/chatwoot-logo-thumbnail.svg" alt="Chatwoot" width={24} height={24} />
+            <span className="text-sm font-semibold text-[rgb(var(--slate-12))]">
+              CRM Chatwoot
+            </span>
+          </div>
         </div>
       </div>
 
       <ModernSidebar
+        chatwootUrl={chatwootUrl}
+        currentUser={currentUser}
         duplicateCount={duplicateCount}
         isCollapsed={isCollapsed}
         toggleSidebar={() => setIsCollapsed(!isCollapsed)}
         isMobileOpen={isMobileOpen}
-        closeMobileSidebar={() => setIsMobileOpen(false)}
+        closeMobileSidebar={() => setMobileOpenPathname(null)}
       />
       
-      <main className="flex-1 overflow-y-auto overflow-x-hidden transition-all duration-300 pt-16 lg:pt-0">
-        <div className="min-h-full p-4 lg:p-8">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 transition-all duration-300 lg:pt-0">
+        <div className="min-h-full p-3 sm:p-4 lg:p-6">
           {children}
         </div>
       </main>

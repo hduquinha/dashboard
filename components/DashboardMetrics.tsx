@@ -12,34 +12,34 @@ export default function DashboardMetrics({ totalLeads, newLeadsToday, conversion
     {
       label: "Total na Rede",
       value: totalLeads.toLocaleString(),
-      change: "+12%", // Mocked for now
+      change: "base atual",
       icon: Users,
-      color: "text-[#2DBDC2]",
-      bg: "bg-[#2DBDC2]/10",
+      color: "text-[rgb(var(--blue-11))]",
+      bg: "bg-[rgb(var(--blue-3))]",
     },
     {
       label: "Novos Leads (Hoje)",
       value: newLeadsToday.toLocaleString(),
-      change: "+5%", // Mocked
+      change: "desde 00h",
       icon: Target,
-      color: "text-emerald-500",
-      bg: "bg-emerald-50",
+      color: "text-[rgb(var(--teal-9))]",
+      bg: "bg-[rgb(224_248_243)]",
     },
     {
       label: "Taxa de Conversão",
       value: `${conversionRate}%`,
-      change: "+2.1%", // Mocked
+      change: "presença aprovada",
       icon: TrendingUp,
-      color: "text-[#1A9A9E]",
-      bg: "bg-[#2DBDC2]/10",
+      color: "text-[rgb(var(--blue-11))]",
+      bg: "bg-[rgb(var(--blue-3))]",
     },
     {
       label: "Graduados",
       value: graduados.toLocaleString(),
-      change: "+4", // Mocked
+      change: "validados",
       icon: Award,
-      color: "text-[#0f172a]",
-      bg: "bg-slate-100",
+      color: "text-[rgb(var(--slate-12))]",
+      bg: "bg-[rgb(var(--slate-3))]",
     },
   ];
 
@@ -48,16 +48,16 @@ export default function DashboardMetrics({ totalLeads, newLeadsToday, conversion
       {metrics.map((metric) => (
         <div
           key={metric.label}
-          className="flex items-center justify-between rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm transition hover:shadow-md"
+          className="flex items-center justify-between rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-5 shadow-[0_1px_2px_rgba(28,32,36,0.04)] transition hover:border-[rgb(var(--border-strong))]"
         >
           <div>
-            <p className="text-sm font-medium text-neutral-500">{metric.label}</p>
-            <p className="mt-1 text-2xl font-bold text-neutral-900">{metric.value}</p>
-            <span className="mt-1 inline-block rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+            <p className="text-sm font-medium text-[rgb(var(--slate-11))]">{metric.label}</p>
+            <p className="mt-1 text-2xl font-semibold text-[rgb(var(--slate-12))]">{metric.value}</p>
+            <span className="mt-2 inline-block rounded-md bg-[rgb(224_248_243)] px-2 py-0.5 text-xs font-medium text-[rgb(var(--teal-9))]">
               {metric.change}
             </span>
           </div>
-          <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${metric.bg}`}>
+          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${metric.bg}`}>
             <metric.icon className={`h-6 w-6 ${metric.color}`} />
           </div>
         </div>

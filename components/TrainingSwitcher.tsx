@@ -28,10 +28,10 @@ export default function TrainingSwitcher({ options, selectedId }: TrainingSwitch
   }
 
   return (
-    <label className="flex flex-col gap-2 text-sm font-medium text-neutral-700">
+    <label className="flex flex-col gap-2 text-sm font-medium text-[rgb(var(--slate-12))]">
       Treinamento
       <select
-        className="w-full rounded-xl border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 shadow-sm focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200"
+        className="h-10 w-full rounded-lg border border-[rgb(var(--border-strong))] bg-[rgb(var(--surface-1))] px-3 text-sm text-[rgb(var(--slate-12))] shadow-[0_1px_2px_rgba(28,32,36,0.04)] outline-none transition focus:border-[rgb(var(--blue-9))] focus:ring-2 focus:ring-[rgba(var(--border-blue))]"
         value={selectedId ?? ''}
         onChange={(event) => handleChange(event.target.value)}
         disabled={isPending}

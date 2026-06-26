@@ -1,6 +1,6 @@
 # API Routes
 
-Route Handlers REST que alimentam o painel. Todas as rotas protegidas exigem `Authorization: Bearer <DASHBOARD_TOKEN>` ou cookie de sessão.
+Route Handlers REST que alimentam o painel. Todas as rotas protegidas exigem cookie de sessão emitido após login no Chatwoot ou, para automações legadas, `Authorization: Bearer <DASHBOARD_TOKEN>`.
 
 ## Endpoints
 

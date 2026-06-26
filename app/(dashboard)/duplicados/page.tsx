@@ -34,9 +34,9 @@ export default async function DuplicadosPage() {
               <p className="text-xs font-semibold uppercase tracking-[0.35em] text-neutral-500">
                 Higienização
               </p>
-              <h1 className="text-3xl font-semibold text-neutral-900">Possíveis duplicados</h1>
+              <h1 className="text-3xl font-semibold text-neutral-900">Duplicados e inscrições fantasmas</h1>
               <p className="text-sm text-neutral-600">
-                Revise sugestões de duplicidade para manter sua base organizada.
+                Revise duplicidades, cadastros de teste, aleatoriedades e registros incompletos.
               </p>
             </div>
             <span className="inline-flex items-center justify-center rounded-full bg-amber-500 px-6 py-2 text-sm font-semibold text-white shadow-lg">
@@ -47,7 +47,7 @@ export default async function DuplicadosPage() {
 
         {duplicateSummary.groups.length === 0 ? (
           <p className="rounded-2xl border border-emerald-200 bg-emerald-50 px-6 py-5 text-sm text-emerald-900">
-            Nenhuma duplicidade recente foi encontrada.
+            Nenhuma duplicidade ou inscrição fantasma recente foi encontrada.
           </p>
         ) : (
           <DuplicateAlerts groups={duplicateSummary.groups} />

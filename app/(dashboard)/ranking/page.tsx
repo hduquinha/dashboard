@@ -6,11 +6,16 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Ranking de Presença",
-  description: "Ranking de participantes por presença na dinâmica do encontro.",
+  description: "Ranking de participantes por presença no encontro.",
 };
 
-export default async function RankingPage() {
+interface RankingPageProps {
+  searchParams: Promise<{ treinamento?: string }>;
+}
+
+export default async function RankingPage({ searchParams }: RankingPageProps) {
+  const params = await searchParams;
   const trainings = await listTrainingsWithStats();
 
-  return <RankingClient trainings={trainings} />;
+  return <RankingClient trainings={trainings} initialTraining={params.treinamento} />;
 }

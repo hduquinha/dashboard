@@ -72,10 +72,17 @@ describe("GET /api/inscricoes", () => {
       orderBy: "nome",
       orderDirection: "asc",
       filters: {
+        caracteristica: "",
         nome: "Ana",
         telefone: "",
+        cidade: "",
+        profissao: "",
         indicacao: "",
         treinamento: "",
+        dataTreinamento: "",
+        tamanhoCamiseta: "",
+        status: undefined,
+        stars: "",
       },
     });
   });

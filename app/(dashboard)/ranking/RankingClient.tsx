@@ -65,6 +65,7 @@ interface RankingRecord {
 
 interface RankingClientProps {
   trainings: TrainingStats[];
+  initialTraining?: string;
 }
 
 // ── Helpers ────────────────────────────────────────────
@@ -79,8 +80,8 @@ function formatMinutes(minutes: number): string {
 
 // ── Component ──────────────────────────────────────────
 
-export default function RankingClient({ trainings }: RankingClientProps) {
-  const [selectedTraining, setSelectedTraining] = useState("");
+export default function RankingClient({ trainings, initialTraining }: RankingClientProps) {
+  const [selectedTraining, setSelectedTraining] = useState(initialTraining ?? "");
   const [allRecords, setAllRecords] = useState<RankingRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -88,6 +89,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
   const [showExcluded, setShowExcluded] = useState(false);
   const [dinamicaDayLabel, setDinamicaDayLabel] = useState("");
   const [totalPresentesDinamica, setTotalPresentesDinamica] = useState(0);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // ── Fetch ranking data ─────────────────────────────
 
@@ -96,6 +98,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
       setAllRecords([]);
       setDinamicaDayLabel("");
       setTotalPresentesDinamica(0);
+      setErrorMessage(null);
       return;
     }
 
@@ -103,18 +106,28 @@ export default function RankingClient({ trainings }: RankingClientProps) {
 
     async function fetchRanking() {
       setLoading(true);
+      setErrorMessage(null);
       try {
         const res = await fetch(
           `/api/presence/ranking?treinamento=${encodeURIComponent(selectedTraining)}`
         );
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(data.error ?? "Falha ao carregar ranking.");
+        }
         if (!cancelled && res.ok) {
-          const data = await res.json();
           setAllRecords(data.ranking ?? []);
           setDinamicaDayLabel(data.dinamicaDayLabel ?? "");
           setTotalPresentesDinamica(data.totalPresentesDinamica ?? 0);
         }
       } catch (err) {
         console.error("Erro ao carregar ranking:", err);
+        if (!cancelled) {
+          setAllRecords([]);
+          setDinamicaDayLabel("");
+          setTotalPresentesDinamica(0);
+          setErrorMessage(err instanceof Error ? err.message : "Falha ao carregar ranking.");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -189,14 +202,14 @@ export default function RankingClient({ trainings }: RankingClientProps) {
         <div>
           <h1 className="text-2xl font-bold text-neutral-900 flex items-center gap-2">
             <Trophy className="h-6 w-6 text-amber-500" />
-            Ranking de Presença na Dinâmica
+            Ranking de Presença no Encontro
           </h1>
           <p className="text-sm text-neutral-500">
-            Classificação por <strong>quem esteve presente no dia da dinâmica</strong>.
+            Classificação por <strong>quem esteve presente no encontro</strong>.
             {dinamicaDayLabel && (
               <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">
                 <Info className="h-3 w-3" />
-                Dinâmica: {dinamicaDayLabel}
+                {dinamicaDayLabel === "Encontro" ? "Base: Encontro" : `Dinâmica: ${dinamicaDayLabel}`}
               </span>
             )}
           </p>
@@ -213,11 +226,13 @@ export default function RankingClient({ trainings }: RankingClientProps) {
       {/* Print Header */}
       <div className="hidden print:block print:mb-4">
         <h1 className="text-2xl font-bold text-neutral-900">
-          Ranking de Presença na Dinâmica
+          Ranking de Presença no Encontro
         </h1>
         <p className="text-sm text-neutral-500">
           {selectedLabel}
-          {dinamicaDayLabel ? ` — Dinâmica: ${dinamicaDayLabel}` : ""} — Gerado em{" "}
+          {dinamicaDayLabel
+            ? ` — ${dinamicaDayLabel === "Encontro" ? "Base: Encontro" : `Dinâmica: ${dinamicaDayLabel}`}`
+            : ""} — Gerado em{" "}
           {new Date().toLocaleDateString("pt-BR")} às{" "}
           {new Date().toLocaleTimeString("pt-BR")}
         </p>
@@ -260,8 +275,18 @@ export default function RankingClient({ trainings }: RankingClientProps) {
         </div>
       )}
 
+      {selectedTraining && !loading && errorMessage && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="flex items-center gap-2 font-semibold">
+            <XCircle className="h-4 w-4" />
+            Não foi possível carregar o ranking
+          </div>
+          <p className="mt-1 text-red-600">{errorMessage}</p>
+        </div>
+      )}
+
       {/* Results */}
-      {selectedTraining && !loading && (
+      {selectedTraining && !loading && !errorMessage && (
         <>
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4">
@@ -274,7 +299,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
             <Card
               icon={<CheckCircle className="h-5 w-5 text-emerald-600" />}
               bg="bg-emerald-100"
-              label="Presentes Dinâmica"
+              label="Presentes"
               value={totalPresentesDinamica - excludedRecords.filter((r: RankingRecord) => r.presenteNaDinamica).length}
             />
             <Card
@@ -301,12 +326,12 @@ export default function RankingClient({ trainings }: RankingClientProps) {
             />
           </div>
 
-          {/* Chart – Top 15 presentes no dia da dinâmica */}
+          {/* Chart – Top 15 presentes no encontro */}
           {chartData.length > 0 && (
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
               <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-neutral-900">
                 <BarChart3 className="h-5 w-5 text-amber-500" />
-                Top 15 – Presença no Dia da Dinâmica
+                Top 15 – Presença no Encontro
                 {dinamicaDayLabel && (
                   <span className="text-xs font-normal text-neutral-400">({dinamicaDayLabel})</span>
                 )}
@@ -421,7 +446,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
               <div className="border-b border-neutral-200 px-6 py-4 flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-neutral-900 flex items-center gap-2">
                   <Trophy className="h-5 w-5 text-amber-500" />
-                  Ranking por Presença na Dinâmica – {selectedLabel}
+                  Ranking por Presença no Encontro – {selectedLabel}
                 </h3>
                 <span className="text-xs text-neutral-500">
                   {visibleRecords.length} participante{visibleRecords.length !== 1 ? "s" : ""}
@@ -441,7 +466,7 @@ export default function RankingClient({ trainings }: RankingClientProps) {
                         Recrutador
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-amber-600">
-                        Presente Dinâmica
+                        Presente
                       </th>
                       <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
                         Tempo no Dia

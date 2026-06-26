@@ -15,7 +15,6 @@ import {
   Legend,
 } from "recharts";
 import {
-  FileDown,
   Trophy,
   Users,
   UserCheck,
@@ -40,6 +39,7 @@ interface RecruiterRanking {
   recrutadorCodigo: string;
   recrutadorNome: string;
   totalInscritos: number;
+  totalPresentes: number;
   totalAprovados: number;
   percentualAprovacao: number;
 }
@@ -84,41 +84,28 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
     async function fetchData() {
       setLoading(true);
       try {
-        const [rankingRes, presenceRes] = await Promise.all([
-          fetch(`/api/trainings/${encodeURIComponent(selectedTraining)}/recruiters`),
-          fetch(`/api/presence/list?treinamento=${encodeURIComponent(selectedTraining)}&aprovados=false`),
-        ]);
+        const rankingRes = await fetch(`/api/trainings/${encodeURIComponent(selectedTraining)}/recruiters`);
 
         if (rankingRes.ok) {
           const data = await rankingRes.json();
-          setRecruitersRanking(data.ranking || []);
-        }
-
-        if (presenceRes.ok) {
-          const data = await presenceRes.json();
-          // Agrupar presenças por recrutador
-          const presenceMap = new Map<string, PresenceRanking>();
-          for (const p of data.presences || []) {
-            const code = p.recrutadorCodigo ?? "00";
-            const name = p.recrutadorNome ?? "Sem Recrutador";
-            if (!presenceMap.has(code)) {
-              presenceMap.set(code, {
-                recrutadorCodigo: code,
-                recrutadorNome: name,
-                totalPresentes: 0,
-                totalAprovados: 0,
-              });
-            }
-            const entry = presenceMap.get(code)!;
-            entry.totalPresentes++;
-            if (p.aprovado) entry.totalAprovados++;
-          }
+          const ranking = (data.ranking || []) as RecruiterRanking[];
+          setRecruitersRanking(ranking);
           setPresenceRanking(
-            Array.from(presenceMap.values()).sort((a, b) => b.totalAprovados - a.totalAprovados)
+            ranking.map((entry) => ({
+              recrutadorCodigo: entry.recrutadorCodigo,
+              recrutadorNome: entry.recrutadorNome,
+              totalPresentes: entry.totalPresentes ?? 0,
+              totalAprovados: entry.totalAprovados ?? 0,
+            }))
           );
+        } else {
+          setRecruitersRanking([]);
+          setPresenceRanking([]);
         }
       } catch (error) {
         console.error("Erro ao carregar dados:", error);
+        setRecruitersRanking([]);
+        setPresenceRanking([]);
       } finally {
         setLoading(false);
       }
@@ -156,8 +143,9 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
     return {
       name: display.length > 18 ? display.slice(0, 18) + "…" : display,
       fullName: display,
+      presentes: r.totalAprovados,
+      encontro: r.totalPresentes,
       inscritos: r.totalInscritos,
-      aprovados: r.totalAprovados,
     };
   });
 
@@ -363,10 +351,10 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
         {/* Gráficos - Treinamento Selecionado */}
         {selectedTraining && !loading && (
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Ranking de Inscritos */}
+            {/* Ranking Geral */}
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
               <h3 className="mb-4 text-lg font-semibold text-neutral-900">
-                🏆 Ranking de Inscritos
+                🏆 Ranking Geral
               </h3>
               {topRecruitersChart.length > 0 ? (
                 <div className="h-80">
@@ -380,6 +368,8 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
                           payload?.[0]?.payload?.fullName || label
                         }
                       />
+                      <Bar dataKey="presentes" fill="#10B981" name="Presentes" radius={[0, 4, 4, 0]} />
+                      <Bar dataKey="encontro" fill="#2DBDC2" name="No encontro" radius={[0, 4, 4, 0]} />
                       <Bar dataKey="inscritos" fill="#6366F1" name="Inscritos" radius={[0, 4, 4, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
@@ -444,10 +434,13 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
                       Recrutador
                     </th>
                     <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Inscritos
+                      Presentes
                     </th>
                     <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
-                      Presença Aprovada
+                      No encontro
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
+                      Inscritos
                     </th>
                     <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-neutral-500">
                       Taxa
@@ -483,23 +476,28 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
                           <p className="text-xs text-neutral-500">{r.recrutadorCodigo}</p>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className="font-semibold text-neutral-900">{r.totalInscritos}</span>
+                          <span className="font-semibold text-emerald-600">
+                            {r.totalAprovados}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className="font-semibold text-emerald-600">
-                            {presenceData?.totalAprovados ?? 0}
+                          <span className="font-semibold text-cyan-600">
+                            {presenceData?.totalPresentes ?? r.totalPresentes}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="font-semibold text-neutral-900">{r.totalInscritos}</span>
                         </td>
                         <td className="px-4 py-3 text-center">
                           <span
                             className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                              r.totalInscritos > 0 && (presenceData?.totalAprovados ?? 0) / r.totalInscritos >= 0.5
+                              r.totalInscritos > 0 && r.totalAprovados / r.totalInscritos >= 0.5
                                 ? "bg-emerald-100 text-emerald-700"
                                 : "bg-neutral-100 text-neutral-600"
                             }`}
                           >
                             {r.totalInscritos > 0
-                              ? Math.round(((presenceData?.totalAprovados ?? 0) / r.totalInscritos) * 100)
+                              ? Math.round((r.totalAprovados / r.totalInscritos) * 100)
                               : 0}
                             %
                           </span>

@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
-import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
+import {
+  assertAuthenticatedRequest,
+  getRequestDashboardSession,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { addInscricaoNote } from "@/lib/db";
 
 type RouteParams = {
@@ -56,9 +60,12 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const viaWhatsapp = typeof record.viaWhatsapp === "boolean" ? record.viaWhatsapp : undefined;
+  const session = getRequestDashboardSession(request);
+  const author =
+    session?.user.displayName || session?.user.name || session?.user.email || null;
 
   try {
-    const inscricao = await addInscricaoNote(id, content, { viaWhatsapp });
+    const inscricao = await addInscricaoNote(id, content, { viaWhatsapp, author });
     return NextResponse.json({ inscricao });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {

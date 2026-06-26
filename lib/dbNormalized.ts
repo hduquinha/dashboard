@@ -353,6 +353,26 @@ export async function listInscricoesV2(
     params.push(filtros.status);
   }
 
+  if (filtros.cidade) {
+    conditions.push(`p.cidade ILIKE $${paramIndex++}`);
+    params.push(`%${filtros.cidade.trim()}%`);
+  }
+
+  if (filtros.indicacao) {
+    conditions.push(`COALESCE(i.dados_extras->>'indicacao', '') ILIKE $${paramIndex++}`);
+    params.push(`%${filtros.indicacao.trim()}%`);
+  }
+
+  if (filtros.tamanhoCamiseta) {
+    conditions.push(`UPPER(COALESCE(i.dados_extras->>'tamanho_camiseta', i.dados_extras->>'tamanhoCamiseta', '')) = $${paramIndex++}`);
+    params.push(filtros.tamanhoCamiseta.trim().toUpperCase());
+  }
+
+  if (filtros.dataTreinamento) {
+    conditions.push(`COALESCE(i.dados_extras->>'data_treinamento', i.dados_extras->>'dataTreinamento', '') = $${paramIndex++}`);
+    params.push(filtros.dataTreinamento.trim());
+  }
+
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
   // Conta total

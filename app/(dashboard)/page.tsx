@@ -1,14 +1,38 @@
-import { getDashboardStats, listTrainingFilterOptions, getTrainingSnapshot, getDuplicateSummaryCount, listDuplicateSuspects } from "@/lib/db";
+import {
+  getCommercialDashboardStats,
+  getDashboardStats,
+  getDuplicateSummaryCount,
+  getTrainingSnapshot,
+  listTrainingFilterOptions,
+} from "@/lib/db";
 import DashboardMetrics from "@/components/DashboardMetrics";
 import DashboardCharts from "@/components/DashboardCharts";
 import TrainingSwitcher from "@/components/TrainingSwitcher";
 import DuplicateNotification from "@/components/DuplicateNotification";
-import DuplicateAlerts from "@/components/DuplicateAlerts";
+import CommercialCommandCenter from "@/components/CommercialCommandCenter";
 import Link from "next/link";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, Target } from "lucide-react";
+import type { DuplicateReason } from "@/types/inscricao";
+import { ttlCache } from "@/lib/serverCache";
 
 // Force redeploy v2
 export const dynamic = "force-dynamic";
+
+const cachedDashboardStats = () =>
+  ttlCache("dashboard:home:stats", 15_000, () => getDashboardStats());
+
+const cachedTrainingOptions = () =>
+  ttlCache("dashboard:training-options", 60_000, () => listTrainingFilterOptions());
+
+const cachedDuplicateSummary = () =>
+  ttlCache("dashboard:home:duplicate-summary", 60_000, () =>
+    getDuplicateSummaryCount({ windowDays: 30 })
+  );
+
+const cachedCommercialDashboardStats = (treinamentoId: string) =>
+  ttlCache(`dashboard:commercial:${treinamentoId || "todos"}`, 15_000, () =>
+    getCommercialDashboardStats({ treinamentoId: treinamentoId || undefined })
+  );
 
 interface DashboardPageProps {
   searchParams:
@@ -27,21 +51,20 @@ export default async function DashboardPage(props: DashboardPageProps) {
   const searchParams = await props.searchParams;
   const treinamentoSelecionado = pickStringParam(searchParams?.treinamento) ?? "";
   
-  // Busca sequencial para evitar esgotar conexões do banco
-  const stats = await getDashboardStats();
-  const trainingOptions = await listTrainingFilterOptions();
-  const trainingSnapshot = treinamentoSelecionado 
-    ? await getTrainingSnapshot({ treinamentoId: treinamentoSelecionado })
-    : null;
+  const [stats, trainingOptions, trainingSnapshot, commercialStats] = await Promise.all([
+    cachedDashboardStats(),
+    cachedTrainingOptions(),
+    treinamentoSelecionado
+      ? ttlCache(`dashboard:training-snapshot:${treinamentoSelecionado}`, 15_000, () =>
+          getTrainingSnapshot({ treinamentoId: treinamentoSelecionado })
+        )
+      : Promise.resolve(null),
+    cachedCommercialDashboardStats(treinamentoSelecionado),
+  ]);
 
-  // Busca duplicados por último com tratamento de erro
-  let duplicateSummary = { totalGroups: 0, topReasons: [] as Array<{ reason: "telefone" | "email" | "nome-dia" | "payload"; count: number }> };
-  let duplicateGroups: Awaited<ReturnType<typeof listDuplicateSuspects>> = { groups: [], totalGroups: 0 };
+  let duplicateSummary = { totalGroups: 0, topReasons: [] as Array<{ reason: DuplicateReason; count: number }> };
   try {
-    duplicateSummary = await getDuplicateSummaryCount({ windowDays: 30 });
-    if (duplicateSummary.totalGroups > 0) {
-      duplicateGroups = await listDuplicateSuspects({ maxGroups: 20, windowDays: 30 });
-    }
+    duplicateSummary = await cachedDuplicateSummary();
   } catch (error) {
     console.error("Erro ao buscar duplicados:", error);
   }
@@ -73,29 +96,35 @@ export default async function DashboardPage(props: DashboardPageProps) {
 
   return (
     <main className="space-y-6">
-      {/* Header */}
       <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-neutral-900">Dashboard</h1>
-          <p className="text-sm text-neutral-500">
+          <h1 className="text-2xl font-semibold text-[rgb(var(--slate-12))]">Central CRM</h1>
+          <p className="text-sm text-[rgb(var(--slate-11))]">
             {treinamentoSelecionado && selectedTrainingLabel
               ? `Visualizando: ${selectedTrainingLabel}`
-              : "Visão geral da operação e métricas de performance."}
+              : "Resumo comercial da operação integrada ao Chatwoot."}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="w-64">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+          <div className="w-full sm:w-64">
             <TrainingSwitcher 
               options={optionsWithAll} 
               selectedId={treinamentoSelecionado || ""} 
             />
           </div>
           <Link
+            href="/crm"
+            className="flex h-10 items-center justify-center gap-2 rounded-lg bg-[rgb(var(--slate-12))] px-4 text-sm font-medium text-[rgb(var(--surface-1))] shadow-[0_1px_2px_rgba(28,32,36,0.08)] transition hover:bg-[rgb(var(--slate-11))]"
+          >
+            <Target className="h-4 w-4" />
+            Abrir Pipeline
+          </Link>
+          <Link
             href="/treinamentos"
-            className="flex items-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm transition hover:bg-neutral-50"
+            className="flex h-10 items-center justify-center gap-2 rounded-lg border border-[rgb(var(--border-strong))] bg-[rgb(var(--surface-1))] px-4 text-sm font-medium text-[rgb(var(--slate-11))] shadow-[0_1px_2px_rgba(28,32,36,0.04)] transition hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
           >
             <CalendarDays className="h-4 w-4" />
-            Ver Treinamentos
+            Ver Produtos
           </Link>
         </div>
       </header>
@@ -116,6 +145,8 @@ export default async function DashboardPage(props: DashboardPageProps) {
         graduados={displayMetrics.graduados}
       />
 
+      <CommercialCommandCenter stats={commercialStats} />
+
       {/* Charts Section */}
       <DashboardCharts 
         growthData={stats.growthData}
@@ -123,13 +154,6 @@ export default async function DashboardPage(props: DashboardPageProps) {
         topRecruiters={stats.topRecruiters}
       />
 
-      {/* Duplicate Alerts (embedded from Duplicados page) */}
-      {duplicateGroups.groups.length > 0 && (
-        <section className="space-y-3">
-          <h2 className="text-lg font-bold text-neutral-900">Possíveis Duplicados</h2>
-          <DuplicateAlerts groups={duplicateGroups.groups} />
-        </section>
-      )}
     </main>
   );
 }

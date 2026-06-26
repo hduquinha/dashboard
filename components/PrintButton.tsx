@@ -12,22 +12,24 @@ export default function PrintButton({ className }: PrintButtonProps) {
   const handlePrint = () => {
     // Construir URL de impressão com os mesmos filtros
     const printParams = new URLSearchParams();
-    
-    const nome = searchParams.get("nome");
-    const telefone = searchParams.get("telefone");
-    const indicacao = searchParams.get("indicacao");
-    const treinamento = searchParams.get("treinamento");
-    const presenca = searchParams.get("presenca");
-    const orderBy = searchParams.get("orderBy");
-    const orderDirection = searchParams.get("orderDirection");
-    
-    if (nome) printParams.set("nome", nome);
-    if (telefone) printParams.set("telefone", telefone);
-    if (indicacao) printParams.set("indicacao", indicacao);
-    if (treinamento) printParams.set("treinamento", treinamento);
-    if (presenca) printParams.set("presenca", presenca);
-    if (orderBy) printParams.set("orderBy", orderBy);
-    if (orderDirection) printParams.set("orderDirection", orderDirection);
+
+    [
+      "nome",
+      "telefone",
+      "cidade",
+      "indicacao",
+      "treinamento",
+      "data_treinamento",
+      "tamanho_camiseta",
+      "presenca",
+      "orderBy",
+      "orderDirection",
+    ].forEach((key) => {
+      const value = searchParams.get(key);
+      if (value) {
+        printParams.set(key, value);
+      }
+    });
     
     const query = printParams.toString();
     const printUrl = query ? `/api/print?${query}` : "/api/print";

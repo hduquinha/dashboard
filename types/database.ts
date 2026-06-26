@@ -203,6 +203,10 @@ export interface FiltrosInscricoes {
   pessoaId?: number;
   recrutadorId?: number;
   status?: InscricaoStatusV2;
+  cidade?: string;
+  indicacao?: string;
+  tamanhoCamiseta?: string;
+  dataTreinamento?: string;
 }
 
 export interface FiltrosPresencas {

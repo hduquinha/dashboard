@@ -1,3 +1,5 @@
+import type { FormFieldValue, UpDayFormData } from "@/lib/inscricaoForm";
+
 export interface InscricaoPayload {
   nome?: string;
   telefone?: string;
@@ -5,8 +7,69 @@ export interface InscricaoPayload {
   estado?: string;
   email?: string;
   origem?: string;
+  unidade_negocio?: string;
+  lead_setor?: string;
+  lead_origem?: string;
+  lead_produto?: string;
+  lead_entrada?: string;
+  entrada_sinal?: string;
+  produto_interesse?: string;
+  origem_formulario?: string;
+  origemFormulario?: string;
+  campaign_source?: string;
+  campaignSource?: string;
+  campaign_name?: string;
+  campaignName?: string;
+  campaign_id?: string | number;
+  campaignId?: string | number;
+  campaign_medium?: string;
+  campaignMedium?: string;
+  campaign_term?: string;
+  campaignTerm?: string;
+  utm_source?: string;
+  utmSource?: string;
+  utm_campaign?: string;
+  utmCampaign?: string;
+  utm_id?: string;
+  utmId?: string;
+  utm_medium?: string;
+  utmMedium?: string;
+  utm_term?: string;
+  utmTerm?: string;
+  lead_source?: string;
+  leadSource?: string;
+  platform?: string;
+  plataforma?: string;
+  publisher_platform?: string;
+  publisherPlatform?: string;
+  channel?: string;
+  canal?: string;
+  form_id?: string | number;
+  formId?: string | number;
+  form_name?: string;
+  formName?: string;
+  adset_id?: string | number;
+  adsetId?: string | number;
+  adset_name?: string;
+  adsetName?: string;
+  ad_id?: string | number;
+  adId?: string | number;
+  ad_name?: string;
+  adName?: string;
+  gclid?: string;
+  fbclid?: string;
+  landing_page?: string;
+  landingPage?: string;
+  page_url?: string;
+  pageUrl?: string;
+  form_url?: string;
+  formUrl?: string;
+  referrer?: string;
+  referer?: string;
+  source?: string;
   timestamp?: string;
   traffic_source?: string;
+  trafficSource?: string;
   profissao?: string;
   treinamento?: string;
   tipo?: string;
@@ -33,6 +96,36 @@ export type InscricaoTipo = "lead" | "recrutador";
 
 export type InscricaoStatus = "aguardando" | "aprovado" | "rejeitado";
 
+export type CommercialStage =
+  | "novo"
+  | "primeiro_contato"
+  | "em_atendimento"
+  | "agendado"
+  | "fechamento"
+  | "ganho"
+  | "perdido"
+  | "no_show";
+
+export interface CommercialLeadState {
+  campaignSource: string | null;
+  campaignName: string | null;
+  campaignMedium: string | null;
+  campaignTerm: string | null;
+  landingPage: string | null;
+  stage: CommercialStage;
+  assignedSellerId: number | null;
+  assignedSellerEmail: string | null;
+  assignedSellerName: string | null;
+  assignedAt: string | null;
+  firstContactInboxId: number | null;
+  firstContactInboxName: string | null;
+  closingInboxId: number | null;
+  closingInboxName: string | null;
+  closingConversationId: number | null;
+  closingConversationDisplayId: number | null;
+  closingConversationUrl: string | null;
+}
+
 export interface InscricaoNote {
   id: string;
   content: string;
@@ -41,11 +134,25 @@ export interface InscricaoNote {
   viaWhatsapp?: boolean | null;
 }
 
+export interface EnrollmentSummary {
+  id: number;
+  treinamentoId: string | null;
+  treinamentoNome: string | null;
+  treinamentoData: string | null;
+  presencaValidada: boolean;
+  presencaAprovada: boolean;
+  criadoEm: string;
+  payload?: Record<string, unknown> | null;
+}
+
 export interface InscricaoItem {
   id: number;
   criadoEm: string;
   payload: Record<string, unknown>;
   parsedPayload: InscricaoPayload;
+  upDay: UpDayFormData;
+  isUpDayInscricao: boolean;
+  previousFormFields: FormFieldValue[];
   nome: string | null;
   telefone: string | null;
   cidade: string | null;
@@ -81,6 +188,11 @@ export interface InscricaoItem {
   presencaDia2?: PresencaDia | null;
   // Star rating (1-5 lead temperature)
   stars?: number | null;
+  commercial?: CommercialLeadState;
+  // Chave interna de identidade da pessoa (usada para agregar enrollments)
+  personKey?: string | null;
+  // Todos os eventos/treinamentos vinculados a esta pessoa
+  allEnrollments?: EnrollmentSummary[] | null;
 }
 
 export interface ListInscricoesResult {
@@ -98,11 +210,25 @@ export type OrderableField =
   | "profissao"
   | "treinamento"
   | "recrutador"
-  | "criado_em";
+  | "criado_em"
+  | "status_at"
+  | "stars"
+  | "commercial_stage";
 
 export type OrderDirection = "asc" | "desc";
 
-export type DuplicateReason = "telefone" | "email" | "nome-dia" | "payload";
+export type DuplicateReason =
+  | "telefone"
+  | "email"
+  | "nome-dia"
+  | "payload"
+  | "fantasma"
+  | "nome-suspeito"
+  | "telefone-invalido"
+  | "email-suspeito"
+  | "dados-incompletos"
+  | "payload-teste"
+  | "treinamento-ausente";
 
 export interface DuplicateReasonDetail {
   reason: DuplicateReason;

@@ -1,4 +1,5 @@
 import { listAllInscricoes } from "@/lib/db";
+import { extractUpDayFormData } from "@/lib/inscricaoForm";
 import { humanizeName } from "@/lib/utils";
 import {
   listRecruiters,
@@ -74,6 +75,9 @@ function createVirtualRecruiterInscricao(recruiter: Recruiter, normalizedCode: s
     criadoEm: new Date("1990-01-01T00:00:00.000Z").toISOString(),
     payload,
     parsedPayload,
+    upDay: extractUpDayFormData(payload),
+    isUpDayInscricao: false,
+    previousFormFields: [],
     nome: displayName,
     telefone: null,
     cidade: null,

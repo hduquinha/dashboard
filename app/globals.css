@@ -1,33 +1,80 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #0f172a;
-  
-  /* Instituto UP Brand Colors */
-  --up-cyan: #2DBDC2;
-  --up-cyan-light: #4DD0D5;
-  --up-cyan-dark: #1A9A9E;
-  --up-cyan-50: #E6F9FA;
-  --up-cyan-100: #C2F0F2;
-  --up-cyan-200: #8FE4E7;
-  --up-cyan-300: #5CD8DC;
-  --up-cyan-400: #3ACCD0;
-  --up-cyan-500: #2DBDC2;
-  --up-cyan-600: #24999D;
-  --up-cyan-700: #1B7578;
-  --up-cyan-800: #125153;
-  --up-cyan-900: #092D2E;
-  
-  --up-dark: #0f172a;
-  --up-dark-light: #1e293b;
-  --up-white: #ffffff;
-  --up-gray-50: #f8fafc;
-  --up-gray-100: #f1f5f9;
-  --up-gray-200: #e2e8f0;
-  --up-gray-300: #cbd5e1;
-  --up-gray-400: #94a3b8;
-  --up-gray-500: #64748b;
+  --background: #f7f7f7;
+  --foreground: #1c2024;
+
+  --slate-1: 252 252 253;
+  --slate-2: 249 249 251;
+  --slate-3: 240 240 243;
+  --slate-4: 232 232 236;
+  --slate-5: 224 225 230;
+  --slate-6: 217 217 224;
+  --slate-7: 205 206 214;
+  --slate-8: 185 187 198;
+  --slate-9: 139 141 152;
+  --slate-10: 128 131 141;
+  --slate-11: 96 100 108;
+  --slate-12: 28 32 36;
+
+  --blue-1: 251 253 255;
+  --blue-2: 245 249 255;
+  --blue-3: 233 243 255;
+  --blue-4: 218 236 255;
+  --blue-5: 201 226 255;
+  --blue-6: 181 213 255;
+  --blue-7: 155 195 252;
+  --blue-8: 117 171 247;
+  --blue-9: 39 129 246;
+  --blue-10: 16 115 233;
+  --blue-11: 8 109 224;
+  --blue-12: 11 50 101;
+
+  --ruby-1: 255 252 253;
+  --ruby-2: 255 247 248;
+  --ruby-3: 254 234 237;
+  --ruby-4: 255 220 225;
+  --ruby-5: 255 206 214;
+  --ruby-6: 248 191 200;
+  --ruby-7: 239 172 184;
+  --ruby-8: 229 146 163;
+  --ruby-9: 229 70 102;
+  --ruby-10: 220 59 93;
+  --ruby-11: 202 36 77;
+  --ruby-12: 100 23 43;
+
+  --teal-9: 18 165 148;
+  --amber-9: 255 197 61;
+
+  --background-color: 247 247 247;
+  --surface-1: 254 254 254;
+  --surface-2: 255 255 255;
+  --surface-active: 255 255 255;
+  --border-container: 236 236 236;
+  --border-strong: 226 227 231;
+  --border-weak: 234 234 234;
+  --button-color: 255 255 255;
+
+  --alpha-1: 215, 215, 215, 0.22;
+  --alpha-2: 196, 197, 198, 0.22;
+  --alpha-3: 255, 255, 255, 0.96;
+  --black-alpha-1: 0, 0, 0, 0.12;
+  --black-alpha-2: 0, 0, 0, 0.04;
+  --border-blue: 39, 129, 246, 0.5;
+
+  --up-cyan: rgb(var(--blue-9));
+  --up-cyan-light: rgb(var(--blue-8));
+  --up-cyan-dark: rgb(var(--blue-11));
+  --up-cyan-50: rgb(var(--blue-2));
+  --up-cyan-100: rgb(var(--blue-3));
+  --up-cyan-200: rgb(var(--blue-5));
+  --up-cyan-300: rgb(var(--blue-7));
+  --up-cyan-400: rgb(var(--blue-8));
+  --up-cyan-500: rgb(var(--blue-9));
+  --up-cyan-600: rgb(var(--blue-10));
+  --up-cyan-700: rgb(var(--blue-11));
+  --up-cyan-800: rgb(var(--blue-12));
+  --up-cyan-900: rgb(var(--blue-12));
 }
 
 @theme inline {
@@ -36,14 +83,14 @@
   --color-up-cyan: var(--up-cyan);
   --color-up-cyan-light: var(--up-cyan-light);
   --color-up-cyan-dark: var(--up-cyan-dark);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
 }
 
 body {
-  background: #ffffff;
+  background: rgb(var(--background-color));
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 /* Custom Scrollbar with UP colors */
@@ -55,11 +102,11 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--up-cyan-300);
+  background: rgb(var(--slate-7));
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--up-cyan-500);
+  background: rgb(var(--blue-9));
 }
 
 /* Print Styles */
