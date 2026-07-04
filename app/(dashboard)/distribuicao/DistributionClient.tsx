@@ -59,11 +59,7 @@ function dateLabel(value: string | null): string {
 }
 
 function sellerStatusLabel(seller: CommercialSeller): string {
-  if (seller.isSupervisor) return "master";
-  if (seller.availability === "online") return "online";
-  if (seller.availability === "busy") return "ocupado";
-  if (seller.availability === "offline") return "offline";
-  return seller.role === "administrator" ? "admin" : "usuario";
+  return seller.isSupervisor ? "admin" : "usuario";
 }
 
 function resultMessage(result: ManualDistributionResult): string {
@@ -305,7 +301,6 @@ export default function DistributionClient({
                     ...row,
                     assignedSellerName: assigned.sellerName,
                     assignedSellerEmail: assigned.sellerEmail,
-                    chatwootAssigneeName: assigned.sellerName,
                   }
                 : row;
             })
@@ -719,7 +714,6 @@ export default function DistributionClient({
                   <th className="px-4 py-3 text-left">Caminho</th>
                   <th className="px-4 py-3 text-left">Presença</th>
                   <th className="px-4 py-3 text-left">Responsável</th>
-                  <th className="px-4 py-3 text-left">Chatwoot</th>
                   <th className="px-4 py-3 text-left">Entrada</th>
                 </tr>
               </thead>
@@ -786,18 +780,6 @@ export default function DistributionClient({
                         ) : (
                           <span className="text-[rgb(var(--slate-10))]">—</span>
                         )}
-                      </td>
-                      <td className="max-w-44 px-4 py-3">
-                        <p className="truncate font-semibold text-[rgb(var(--slate-12))]">
-                          {row.chatwootConversationDisplayId
-                            ? `#${row.chatwootConversationDisplayId}`
-                            : row.chatwootConversationId
-                              ? `#${row.chatwootConversationId}`
-                              : <span className="font-normal text-[rgb(var(--slate-10))]">—</span>}
-                        </p>
-                        <p className="truncate text-xs text-[rgb(var(--slate-10))]">
-                          {row.chatwootAssigneeName ?? (row.chatwootMessageCount ? `${row.chatwootMessageCount} msg` : "")}
-                        </p>
                       </td>
                       <td className="px-4 py-3 text-xs text-[rgb(var(--slate-10))]">{dateLabel(row.createdAt)}</td>
                     </tr>

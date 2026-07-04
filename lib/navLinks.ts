@@ -23,7 +23,7 @@ export const NAV_LINKS: NavLink[] = [
     key: "crm",
     href: "/crm",
     label: "Pipeline CRM",
-    description: "Leads, etapas e Chatwoot",
+    description: "Leads e etapas comerciais",
     icon: "🎯",
     group: "primary",
     brand: "instituto-up",
@@ -49,7 +49,7 @@ export const NAV_LINKS: NavLink[] = [
   {
     key: "treinamentos",
     href: "/treinamentos",
-    label: "Produtos",
+    label: "Instituto UP",
     description: "Ofertas e turmas",
     icon: "📅",
     group: "primary",

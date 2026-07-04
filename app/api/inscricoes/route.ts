@@ -5,9 +5,12 @@ import {
   assertAuthorizationHeader,
   UnauthorizedError,
 } from "@/lib/auth";
-import { listInscricoes } from "@/lib/db";
+import { insertInscricao, listInscricoes } from "@/lib/db";
 import { ttlCache } from "@/lib/serverCache";
+import { LEAD_FIELD_CATALOG } from "@/lib/leadFields";
 import type { InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
+
+const CREATABLE_FIELD_KEYS = new Set(LEAD_FIELD_CATALOG.map((f) => f.key));
 
 interface RequestContext {
   authorization?: string | null;
@@ -152,4 +155,56 @@ export async function GET(request: NextRequest) {
 
   const result = await handleInscricoesRequest(context);
   return NextResponse.json(result.body, { status: result.status });
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    assertAuthenticatedRequest(request);
+  } catch {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "JSON inválido" }, { status: 400 });
+  }
+
+  if (!body || typeof body !== "object") {
+    return NextResponse.json({ error: "Corpo da requisição inválido" }, { status: 400 });
+  }
+
+  const record = body as Record<string, unknown>;
+  const nome = typeof record.nome === "string" ? record.nome.trim() : "";
+  if (!nome) {
+    return NextResponse.json({ error: "Nome é obrigatório" }, { status: 400 });
+  }
+
+  const telefone = typeof record.telefone === "string" ? record.telefone.trim() : "";
+  const produto = record.produto === "vozup" ? "vozup" : record.produto === "instituto" ? "instituto" : undefined;
+
+  const fields: Record<string, string> = {};
+  if (record.fields && typeof record.fields === "object" && !Array.isArray(record.fields)) {
+    for (const [key, value] of Object.entries(record.fields as Record<string, unknown>)) {
+      if (key === "nome" || key === "telefone") continue;
+      if (!CREATABLE_FIELD_KEYS.has(key)) continue;
+      if (typeof value !== "string") continue;
+      const trimmed = value.trim();
+      if (trimmed) fields[key] = trimmed;
+    }
+  }
+
+  try {
+    const { inscricao, merged } = await insertInscricao({
+      nome,
+      telefone: telefone || undefined,
+      produto,
+      fields,
+    });
+    return NextResponse.json({ inscricao, merged }, { status: 201 });
+  } catch (error) {
+    console.error("Failed to create inscricao", error);
+    return NextResponse.json({ error: "Erro ao criar lead" }, { status: 500 });
+  }
 }

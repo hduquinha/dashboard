@@ -62,7 +62,7 @@ export async function POST(request: Request, context: RouteContext) {
   const viaWhatsapp = typeof record.viaWhatsapp === "boolean" ? record.viaWhatsapp : undefined;
   const session = getRequestDashboardSession(request);
   const author =
-    session?.user.displayName || session?.user.name || session?.user.email || null;
+    session?.user.name || session?.user.email || null;
 
   try {
     const inscricao = await addInscricaoNote(id, content, { viaWhatsapp, author });

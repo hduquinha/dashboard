@@ -20,6 +20,14 @@ Scripts de migração para o schema normalizado do banco PostgreSQL.
 
 8. **[008_fix_august_upday_and_fake_training_date.sql](008_fix_august_upday_and_fake_training_date.sql)** — Canonicaliza o Up Day Plus de agosto e remove a data fantasma 01/01/2026 dos campos de treinamento.
 
+9. **[009_team_members_and_cleanup.sql](009_team_members_and_cleanup.sql)** — Cria `dashboard.team_members` (login e equipe próprios, substituindo o Chatwoot) e prepara a limpeza das colunas de fechamento via Chatwoot em `commercial_leads`.
+
+10. **[010_team_members_instituto_up_only.sql](010_team_members_instituto_up_only.sql)** — Adiciona a flag `instituto_up_only` em `team_members`, que restringe o acesso de um usuário à seção Leads VozUP.
+
+11. **[011_phone_merge_queue_and_trigger.sql](011_phone_merge_queue_and_trigger.sql)** — Cria `dashboard.pending_merge_checks` e um trigger `AFTER INSERT` em `inscricoes.inscricoes` que enfileira toda linha nova para verificação de merge por telefone, consumida por um sweep periódico (`lib/mergeSweep.ts`) dentro do processo do dashboard.
+
+> **Nota sobre `dashboard.commercial_leads.position`** (ordem manual do Kanban, coluna adicionada via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` em `ensureCommercialSchema`/`ensureCommercialSchemaForReads`): não precisou de migração de backfill. Leads sem `position` explícito (nunca arrastados) usam o fallback `COALESCE(cl.position, -i.id)` — único por lead e já preserva "mais recente primeiro" sem precisar tocar dado nenhum.
+
 ## Como executar
 
 ```bash
@@ -32,6 +40,9 @@ psql $DATABASE_URL -f 005_fix_online_training_stale_dashboard_tags.sql
 psql $DATABASE_URL -f 006_fix_online_training_date_and_duplicates.sql
 psql $DATABASE_URL -f 007_dedupe_online_by_phone_date.sql
 psql $DATABASE_URL -f 008_fix_august_upday_and_fake_training_date.sql
+psql $DATABASE_URL -f 009_team_members_and_cleanup.sql
+psql $DATABASE_URL -f 010_team_members_instituto_up_only.sql
+psql $DATABASE_URL -f 011_phone_merge_queue_and_trigger.sql
 ```
 
 > **Atenção:** Faça backup do banco antes de executar as migrações em produção.

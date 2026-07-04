@@ -14,11 +14,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Dashboard Chatwoot",
-    template: "%s | Dashboard Chatwoot",
+    default: "Dashboard",
+    template: "%s | Dashboard",
   },
   description:
-    "Dashboard integrado aos usuarios, sessoes e canais do Chatwoot.",
+    "Dashboard de gestao comercial do Instituto UP.",
 };
 
 export default function RootLayout({

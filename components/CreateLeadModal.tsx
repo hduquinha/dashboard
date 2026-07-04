@@ -1,0 +1,172 @@
+"use client";
+
+import { useState } from "react";
+import type { InscricaoItem } from "@/types/inscricao";
+import { LEAD_FIELD_CATEGORY_LABELS, addableLeadFields, type LeadFieldCategory } from "@/lib/leadFields";
+
+interface CreateLeadModalProps {
+  onCreated: (result: { inscricao: InscricaoItem; merged: boolean }) => void;
+  onClose: () => void;
+}
+
+const EXTRA_FIELDS = addableLeadFields().filter((f) => f.key !== "nome" && f.key !== "telefone");
+const CATEGORIES = Array.from(new Set(EXTRA_FIELDS.map((f) => f.category))) as LeadFieldCategory[];
+
+export function CreateLeadModal({ onCreated, onClose }: CreateLeadModalProps) {
+  const [nome, setNome] = useState("");
+  const [telefone, setTelefone] = useState("");
+  const [produto, setProduto] = useState<"instituto" | "vozup">("instituto");
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async () => {
+    const trimmedNome = nome.trim();
+    if (!trimmedNome) {
+      setError("Informe o nome do lead.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    const fields: Record<string, string> = {};
+    for (const [key, value] of Object.entries(fieldValues)) {
+      const trimmed = value.trim();
+      if (trimmed) fields[key] = trimmed;
+    }
+
+    try {
+      const res = await fetch("/api/inscricoes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nome: trimmedNome, telefone: telefone.trim(), produto, fields }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error((data as { error?: string }).error ?? "Erro ao criar lead");
+      }
+
+      onCreated(data as { inscricao: InscricaoItem; merged: boolean });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl bg-white shadow-2xl">
+        {/* Header */}
+        <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-100 px-6 py-4">
+          <div>
+            <p className="text-sm font-bold text-neutral-900">Novo lead</p>
+            <p className="text-xs text-neutral-400">Mesmo telefone de um lead existente será mesclado automaticamente</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          {error && <p className="rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{error}</p>}
+
+          <div className="flex gap-2">
+            {(["instituto", "vozup"] as const).map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => setProduto(p)}
+                className={`flex-1 rounded-lg border px-3 py-1.5 text-xs font-semibold ${
+                  produto === p
+                    ? "border-cyan-400 bg-cyan-50 text-cyan-700"
+                    : "border-neutral-200 text-neutral-500 hover:bg-neutral-50"
+                }`}
+              >
+                {p === "instituto" ? "Instituto UP" : "Voz UP"}
+              </button>
+            ))}
+          </div>
+
+          <div>
+            <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+              Nome *
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-sm text-neutral-900 focus:border-cyan-400 focus:outline-none focus:bg-white"
+            />
+          </div>
+
+          <div>
+            <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+              Telefone / WhatsApp
+            </label>
+            <input
+              type="text"
+              value={telefone}
+              onChange={(e) => setTelefone(e.target.value)}
+              placeholder="(00) 00000-0000"
+              className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-sm text-neutral-900 focus:border-cyan-400 focus:outline-none focus:bg-white"
+            />
+          </div>
+
+          {CATEGORIES.map((category) => (
+            <div key={category}>
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-widest text-neutral-400">
+                {LEAD_FIELD_CATEGORY_LABELS[category]}
+              </p>
+              <div className="space-y-2">
+                {EXTRA_FIELDS.filter((f) => f.category === category).map((f) => (
+                  <div key={f.key}>
+                    <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+                      {f.label}
+                    </label>
+                    <input
+                      type="text"
+                      value={fieldValues[f.key] ?? ""}
+                      onChange={(e) => setFieldValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                      className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-900 focus:border-cyan-400 focus:outline-none focus:bg-white"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="flex flex-shrink-0 justify-end gap-2 border-t border-neutral-100 px-6 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-semibold text-neutral-600 hover:bg-neutral-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={saving}
+            className="rounded-lg bg-cyan-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-50"
+          >
+            {saving ? "Criando…" : "Criar lead"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

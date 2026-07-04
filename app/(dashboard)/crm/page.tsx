@@ -3,7 +3,7 @@ import { cookies } from "next/headers";
 import CrmClient from "./CrmClient";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { getCommercialWorkspace } from "@/lib/commercial";
-import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
+import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames, listCampaignTermOptions } from "@/lib/db";
 import type { CommercialStage, InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 import { ttlCache } from "@/lib/serverCache";
 
@@ -93,6 +93,7 @@ export default async function LeadsPage(props: LeadsPageProps) {
   const statusFilter = parseStatus(pick(searchParams?.status));
   const campaignSource = pick(searchParams?.campaignSource);
   const campaignName = pick(searchParams?.campaignName);
+  const campaignTerm = pick(searchParams?.campaignTerm);
   const commercialStage = parseCommercialStage(pick(searchParams?.commercialStage));
   const assignedSellerEmail = pick(searchParams?.assignedSellerEmail);
   const unassignedOnly = commercial.isSupervisor && pick(searchParams?.unassignedOnly) === "1";
@@ -106,15 +107,16 @@ export default async function LeadsPage(props: LeadsPageProps) {
   const queryKey = JSON.stringify({
     page, orderBy, orderDirection, q, nome, telefone, cidade, profissao, indicacao,
     treinamentos: treinamentosRaw, kind, presencaFilter, tagFilter, statusFilter,
-    campaignSource, campaignName, commercialStage, produto,
+    campaignSource, campaignName, campaignTerm, commercialStage, produto,
     assignedSellerEmail: commercial.isSupervisor ? assignedSellerEmail : session?.user.email ?? "",
     unassignedOnly, starsFilter,
     user: commercial.isSupervisor ? "supervisor" : session?.user.email ?? "",
   });
 
-  const [trainingOptions, recruiterOptions, result] = await Promise.all([
+  const [trainingOptions, recruiterOptions, campaignTermOptions, result] = await Promise.all([
     ttlCache("dashboard:training-options", 60_000, () => listTrainingFilterOptions()),
     ttlCache("dashboard:recruiter-options", 60_000, () => listRecruitersWithDbNames()),
+    ttlCache("dashboard:campaign-term-options", 60_000, () => listCampaignTermOptions()),
     ttlCache(`dashboard:crm:list:${queryKey}`, 5_000, async () => {
       const allTrainings = await ttlCache("dashboard:training-options", 60_000, () => listTrainingFilterOptions());
 
@@ -144,6 +146,7 @@ export default async function LeadsPage(props: LeadsPageProps) {
           status: statusFilter,
           campaignSource: campaignSource || undefined,
           campaignName: campaignName || undefined,
+          campaignTerm: campaignTerm || undefined,
           commercialStage,
           assignedSellerEmail: commercial.isSupervisor
             ? assignedSellerEmail || undefined
@@ -163,8 +166,6 @@ export default async function LeadsPage(props: LeadsPageProps) {
   return (
     <CrmClient
       inscricoes={previewItems}
-      chatwootByInscricaoId={{}}
-      chatwootChannels={commercial.channels}
       commercial={commercial}
       total={result.total}
       page={page}
@@ -173,6 +174,7 @@ export default async function LeadsPage(props: LeadsPageProps) {
       orderDirection={orderDirection}
       trainingOptions={trainingOptions}
       recruiterOptions={recruiterOptions}
+      campaignTermOptions={campaignTermOptions}
       filters={{
         q, nome, telefone, cidade, profissao, indicacao,
         treinamentos: treinamentosRaw,
@@ -183,6 +185,7 @@ export default async function LeadsPage(props: LeadsPageProps) {
         stars: starsFilter,
         campaignSource,
         campaignName,
+        campaignTerm,
         commercialStage,
         assignedSellerEmail: commercial.isSupervisor ? assignedSellerEmail : session?.user.email ?? "",
         unassignedOnly,

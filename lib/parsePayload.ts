@@ -1,4 +1,5 @@
 import type { InscricaoPayload } from "@/types/inscricao";
+import { UP_DAY_FIELD_KEYS } from "@/lib/inscricaoForm";
 
 function pickString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
@@ -31,7 +32,10 @@ const ALTERNATE_KEYS: Record<keyof InscricaoPayload, string[]> = {
   telefone: ["phone", "celular", "dashboard_telefone"],
   cidade: ["city", "dashboard_cidade"],
   estado: ["state"],
-  email: [],
+  email: ["e_mail"],
+  data_nascimento: UP_DAY_FIELD_KEYS.dataNascimento,
+  empresa: ["company"],
+  cargo: ["job_title", "position"],
   origem: ["source", "origem_lead"],
   timestamp: ["created_at", "createdAt", "dataHora", "timestamp"],
   traffic_source: [

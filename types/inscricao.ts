@@ -6,6 +6,9 @@ export interface InscricaoPayload {
   cidade?: string;
   estado?: string;
   email?: string;
+  data_nascimento?: string;
+  empresa?: string;
+  cargo?: string;
   origem?: string;
   unidade_negocio?: string;
   lead_setor?: string;
@@ -113,17 +116,11 @@ export interface CommercialLeadState {
   campaignTerm: string | null;
   landingPage: string | null;
   stage: CommercialStage;
+  position: number | null;
   assignedSellerId: number | null;
   assignedSellerEmail: string | null;
   assignedSellerName: string | null;
   assignedAt: string | null;
-  firstContactInboxId: number | null;
-  firstContactInboxName: string | null;
-  closingInboxId: number | null;
-  closingInboxName: string | null;
-  closingConversationId: number | null;
-  closingConversationDisplayId: number | null;
-  closingConversationUrl: string | null;
 }
 
 export interface InscricaoNote {
@@ -213,7 +210,8 @@ export type OrderableField =
   | "criado_em"
   | "status_at"
   | "stars"
-  | "commercial_stage";
+  | "commercial_stage"
+  | "commercial_position";
 
 export type OrderDirection = "asc" | "desc";
 

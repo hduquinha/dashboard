@@ -158,8 +158,8 @@ const CPF_EXPRESSION = payloadTextExpression("i", ["cpf", "documento", "document
 const CLIENT_ID_EXPRESSION = payloadTextExpression("i", ["clientId", "client_id"]);
 const FINALIZED_INSCRICAO_CONDITION =
   process.env.DASHBOARD_INCLUDE_INCOMPLETE === "true"
-    ? "TRUE"
-    : `LOWER(TRIM(${payloadTextExpression("i", ["_final"], "''")})) IN ('true', '1', 'sim', 'yes')`;
+    ? "COALESCE(i.payload->>'dashboard_excluido', '') != 'true'"
+    : `LOWER(TRIM(${payloadTextExpression("i", ["_final"], "''")})) IN ('true', '1', 'sim', 'yes') AND COALESCE(i.payload->>'dashboard_excluido', '') != 'true'`;
 const PRESENCE_VALIDATED_CONDITION =
   "LOWER(TRIM(COALESCE(i.payload->>'presenca_validada', ''))) IN ('true', '1', 'sim', 'yes')";
 const PRESENCE_APPROVED_CONDITION =
@@ -228,6 +228,7 @@ async function ensureCommercialSchemaForReads(): Promise<void> {
       campaign_term TEXT,
       landing_page TEXT,
       commercial_stage TEXT NOT NULL DEFAULT 'novo',
+      position DOUBLE PRECISION,
       assigned_seller_id INTEGER,
       assigned_seller_email TEXT,
       assigned_seller_name TEXT,
@@ -235,18 +236,14 @@ async function ensureCommercialSchemaForReads(): Promise<void> {
       assigned_by_email TEXT,
       assigned_by_name TEXT,
       assigned_at TIMESTAMP WITH TIME ZONE,
-      first_contact_inbox_id INTEGER,
-      first_contact_inbox_name TEXT,
-      closing_inbox_id INTEGER,
-      closing_inbox_name TEXT,
-      closing_conversation_id INTEGER,
-      closing_conversation_display_id INTEGER,
-      closing_conversation_url TEXT,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage);
+    CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage_position ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage, position);
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_seller ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(assigned_seller_email, assigned_seller_id);
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_campaign ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(campaign_source, campaign_name);
   `);
@@ -444,6 +441,11 @@ const ORDERABLE_COLUMNS: Record<OrderableField, string> = {
   status_at: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_status_at', i.payload->>'status_at', '')), ''), i.criado_em::text)`,
   stars: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_stars', '')), ''), '0')::int`,
   commercial_stage: `COALESCE(cl.commercial_stage, 'novo')`,
+  // Sem posicao explicita (lead nunca arrastado), cai para -id: unico por
+  // lead e preserva "mais recente primeiro" (maior id = mais negativo =
+  // ordena antes em ASC) — evita empate coletivo em 0 que faria o calculo
+  // de posicao fracionaria do drag-and-drop nao ter efeito nenhum.
+  commercial_position: `COALESCE(cl.position, -i.id)`,
 };
 
 declare global {
@@ -470,6 +472,7 @@ interface ListInscricoesOptions {
     stars?: string | number;
     campaignSource?: string;
     campaignName?: string;
+    campaignTerm?: string;
     commercialStage?: CommercialStage;
     assignedSellerEmail?: string;
     assignedSellerId?: number;
@@ -498,17 +501,11 @@ interface DbRow {
   campaign_term: string | null;
   landing_page: string | null;
   commercial_stage: CommercialStage | null;
+  commercial_position: number | string | null;
   assigned_seller_id: number | null;
   assigned_seller_email: string | null;
   assigned_seller_name: string | null;
   assigned_at: Date | string | null;
-  first_contact_inbox_id: number | null;
-  first_contact_inbox_name: string | null;
-  closing_inbox_id: number | null;
-  closing_inbox_name: string | null;
-  closing_conversation_id: number | null;
-  closing_conversation_display_id: number | null;
-  closing_conversation_url: string | null;
 }
 
 interface DuplicateDbRow extends DbRow {
@@ -840,17 +837,13 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       campaignTerm: row.campaign_term ?? null,
       landingPage: row.landing_page ?? null,
       stage: normalizeCommercialStage(row.commercial_stage),
+      position: row.commercial_position === null || row.commercial_position === undefined
+        ? null
+        : Number(row.commercial_position),
       assignedSellerId: row.assigned_seller_id ?? null,
       assignedSellerEmail: row.assigned_seller_email ?? null,
       assignedSellerName: row.assigned_seller_name ?? null,
       assignedAt: toIsoOrNull(row.assigned_at),
-      firstContactInboxId: row.first_contact_inbox_id ?? null,
-      firstContactInboxName: row.first_contact_inbox_name ?? null,
-      closingInboxId: row.closing_inbox_id ?? null,
-      closingInboxName: row.closing_inbox_name ?? null,
-      closingConversationId: row.closing_conversation_id ?? null,
-      closingConversationDisplayId: row.closing_conversation_display_id ?? null,
-      closingConversationUrl: row.closing_conversation_url ?? null,
     },
     personKey: typeof row.person_key === "string" ? row.person_key : null,
     allEnrollments: null,
@@ -1257,15 +1250,26 @@ export async function listInscricoes(
     }
   }
 
+  // Secondary subquery: finds primaries whose merged secondaries have the matching training
+  const TRAINING_EXPR_S = TRAINING_EXPRESSION.replaceAll("i.payload", "s.payload");
+  const secondaryTrainingSubquery = (paramRef: string) => `
+    EXISTS (
+      SELECT 1 FROM inscricoes.inscricoes s
+      WHERE s.payload->>'dashboard_merged_into' = i.id::text
+        AND COALESCE(s.payload->>'dashboard_excluido', '') != 'true'
+        AND (${TRAINING_EXPR_S}) = ${paramRef}
+    )`;
+
   const trainingFilterValue = filters.dataTreinamento?.trim() || filters.treinamento?.trim() || "";
   if (trainingFilterValue.length > 0) {
     const treinamentoValue = trainingFilterValue;
     filtersValues.push(treinamentoValue);
     const paramIndex = filtersValues.length;
-    conditions.push(`${TRAINING_EXPRESSION} = $${paramIndex}`);
+    conditions.push(`(${TRAINING_EXPRESSION} = $${paramIndex} OR ${secondaryTrainingSubquery(`$${paramIndex}`)})`);
   } else if (filters.treinamentoIds && filters.treinamentoIds.length > 0) {
     filtersValues.push(filters.treinamentoIds);
-    conditions.push(`${TRAINING_EXPRESSION} = ANY($${filtersValues.length}::text[])`);
+    const paramIndex = filtersValues.length;
+    conditions.push(`(${TRAINING_EXPRESSION} = ANY($${paramIndex}::text[]) OR ${secondaryTrainingSubquery(`ANY($${paramIndex}::text[])`)})`);
   }
 
   if (filters.status && STATUS_VALUES.includes(filters.status)) {
@@ -1293,6 +1297,11 @@ export async function listInscricoes(
   if (filters.campaignName && filters.campaignName.trim().length > 0) {
     filtersValues.push(`%${filters.campaignName.trim()}%`);
     conditions.push(`COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) ILIKE $${filtersValues.length}`);
+  }
+
+  if (filters.campaignTerm && filters.campaignTerm.trim().length > 0) {
+    filtersValues.push(filters.campaignTerm.trim());
+    conditions.push(`COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) = $${filtersValues.length}`);
   }
 
   if (filters.commercialStage && COMMERCIAL_STAGE_VALUES.includes(filters.commercialStage)) {
@@ -1418,13 +1427,7 @@ export async function listInscricoes(
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
-      cl.first_contact_inbox_id,
-      cl.first_contact_inbox_name,
-      cl.closing_inbox_id,
-      cl.closing_inbox_name,
-      cl.closing_conversation_id,
-      cl.closing_conversation_display_id,
-      cl.closing_conversation_url,
+      cl.position AS commercial_position,
       COUNT(*) OVER() AS total_count,
       TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
     FROM ${SCHEMA_NAME}.inscricoes AS i
@@ -1543,6 +1546,59 @@ export async function listPresenceInscricoes(
   }
 }
 
+export interface AbsentInscricao {
+  id: number;
+  nome: string;
+  telefone: string | null;
+  recrutadorCodigo: string | null;
+  recrutadorNome: string | null;
+}
+
+export async function listAbsentInscricoes(treinamentoId: string): Promise<AbsentInscricao[]> {
+  await Promise.all([loadRecruiterCache(), ensureCommercialSchemaForReads()]);
+
+  const query = `
+    SELECT
+      i.id,
+      ${NAME_EXPRESSION} AS nome,
+      ${PHONE_EXPRESSION} AS telefone,
+      ${RECRUITER_EXPRESSION} AS traffic_source
+    FROM ${SCHEMA_NAME}.inscricoes AS i
+    WHERE ${FINALIZED_INSCRICAO_CONDITION}
+      AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+      AND ${TRAINING_EXPRESSION} = $1
+      AND NOT (
+        ${PRESENCE_VALIDATED_CONDITION}
+        AND ${PRESENCE_TRAINING_EXPRESSION} = $1
+      )
+    ORDER BY ${NAME_EXPRESSION} ASC NULLS LAST
+  `;
+
+  try {
+    const { rows } = await getPool().query<{
+      id: number;
+      nome: string | null;
+      telefone: string | null;
+      traffic_source: string | null;
+    }>(query, [treinamentoId]);
+
+    return rows.map((row) => {
+      const recruiterCode = typeof row.traffic_source === "string" ? row.traffic_source.trim() : null;
+      const recruiter = getRecruiterFromCache(recruiterCode);
+      return {
+        id: Number(row.id),
+        nome: (row.nome as string | null) ?? `Inscricao #${row.id}`,
+        telefone: row.telefone ?? null,
+        recrutadorCodigo: recruiter?.code ?? recruiterCode ?? null,
+        recrutadorNome: recruiter?.name ?? null,
+      };
+    });
+  } catch (error) {
+    console.error("Failed to list absent inscricoes", error);
+    throw error;
+  }
+}
+
 export async function searchInscricoesByName(
   term: string,
   limit = 8
@@ -1646,13 +1702,7 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
-      cl.first_contact_inbox_id,
-      cl.first_contact_inbox_name,
-      cl.closing_inbox_id,
-      cl.closing_inbox_name,
-      cl.closing_conversation_id,
-      cl.closing_conversation_display_id,
-      cl.closing_conversation_url,
+      cl.position AS commercial_position,
       NULL::bigint AS total_count,
       TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
     FROM ${SCHEMA_NAME}.inscricoes AS i
@@ -1797,11 +1847,14 @@ export async function updateInscricao(
       apply("hierarchy_level", levelValue);
     }
 
+    const ALLOWED_DASHBOARD_UPDATE_KEYS = new Set(["dashboard_nome_sugestoes", "dashboard_email_sugestoes"]);
+
     if (updates.payloadUpdates) {
       for (const [key, value] of Object.entries(updates.payloadUpdates)) {
-        if (!key.startsWith("dashboard_") && !key.startsWith("presenca_") && !key.startsWith("_")) {
-          apply(key, value);
-        }
+        const isDashboardKey = key.startsWith("dashboard_");
+        if (isDashboardKey && !ALLOWED_DASHBOARD_UPDATE_KEYS.has(key)) continue;
+        if (!isDashboardKey && (key.startsWith("presenca_") || key.startsWith("_"))) continue;
+        apply(key, value);
       }
     }
 
@@ -1871,6 +1924,194 @@ export async function mergeInscricoes(
   const result = await getInscricaoById(primaryId);
   if (!result) throw new Error("Lead primário não encontrado após mesclagem");
   return result;
+}
+
+// Fields that should always come from the OLDEST record (first contact)
+const FIRST_CONTACT_KEYS = new Set([
+  "origem", "lead_origem", "campaign_source", "source", "traffic_source", "timestamp",
+]);
+
+// Fields that are event/enrollment-specific — don't overwrite the existing lead's value with them
+const ENROLLMENT_KEYS = new Set([
+  "nome_evento", "data", "local", "modalidade", "escola", "page", "clientId", "client_id",
+]);
+
+// Fields where a conflicting new value is kept as a clickable suggestion
+// (dashboard_<key>_sugestoes) instead of being silently discarded.
+const SUGGESTION_KEYS = new Set(["nome", "email"]);
+
+/**
+ * After inserting a new record, check if another record with the same phone already exists.
+ * If so, automatically merge: existing = primary (kept), new = secondary (archived).
+ * Merge strategy:
+ *   - origin fields: always keep existing (oldest = first contact)
+ *   - enrollment fields: kept only in the secondary (preserved via merged history)
+ *   - other fields: existing wins if non-empty; new value fills empty slots
+ */
+export async function autoMergeNewLeadByPhone(
+  newId: number,
+  rawPhone: string
+): Promise<{ merged: boolean; primaryId: number }> {
+  const digits = rawPhone.replace(/\D/g, "");
+  if (digits.length < 10) return { merged: false, primaryId: newId };
+
+  // Build phone variants for matching (with/without country code 55)
+  const phoneVariants = new Set<string>();
+  phoneVariants.add(digits);
+  if (digits.startsWith("55") && digits.length >= 12) {
+    phoneVariants.add(digits.slice(2));
+  } else {
+    phoneVariants.add(`55${digits}`);
+  }
+
+  const pool = getPool();
+  const variantList = Array.from(phoneVariants);
+
+  // Find the oldest existing record with the same phone that isn't already merged
+  const phoneConditions = variantList
+    .map(
+      (_, i) =>
+        `REGEXP_REPLACE(COALESCE(payload->>'telefone', payload->>'phone', payload->>'celular', payload->>'whatsapp', ''), '[^0-9]', '', 'g') = $${i + 2}`
+    )
+    .join(" OR ");
+
+  const { rows: existing } = await pool.query<{
+    id: number;
+    payload: Record<string, unknown>;
+  }>(
+    `SELECT id, payload
+     FROM ${SCHEMA_NAME}.inscricoes
+     WHERE id != $1
+       AND (payload->>'dashboard_merged_into') IS NULL
+       AND (${phoneConditions})
+     ORDER BY criado_em ASC
+     LIMIT 1`,
+    [newId, ...variantList]
+  );
+
+  if (existing.length === 0) return { merged: false, primaryId: newId };
+
+  const primary = existing[0];
+
+  const { rows: newRows } = await pool.query<{ payload: Record<string, unknown> }>(
+    `SELECT payload FROM ${SCHEMA_NAME}.inscricoes WHERE id = $1`,
+    [newId]
+  );
+  if (!newRows[0]) return { merged: false, primaryId: newId };
+
+  const pPayload = primary.payload as Record<string, unknown>;
+  const sPayload = newRows[0].payload as Record<string, unknown>;
+
+  // Build merged payload for the primary:
+  //   start from existing, fill empty fields with new data
+  const merged: Record<string, unknown> = { ...pPayload };
+
+  for (const [key, value] of Object.entries(sPayload)) {
+    if (key.startsWith("dashboard_")) continue;
+    if (ENROLLMENT_KEYS.has(key)) continue; // Event-specific — stays in secondary
+
+    const existingVal = String(merged[key] ?? "").trim();
+    const newVal = String(value ?? "").trim();
+
+    if (FIRST_CONTACT_KEYS.has(key)) {
+      // Keep existing origin if already set; fill in if primary has no value
+      if (!existingVal && newVal) {
+        merged[key] = value;
+      }
+      continue;
+    }
+
+    if (!existingVal && newVal) {
+      merged[key] = value;
+      continue;
+    }
+
+    if (SUGGESTION_KEYS.has(key) && existingVal && newVal && existingVal.toLowerCase() !== newVal.toLowerCase()) {
+      const suggestionKey = `dashboard_${key}_sugestoes`;
+      const existingSuggestions = Array.isArray(merged[suggestionKey])
+        ? (merged[suggestionKey] as string[])
+        : [];
+      const alreadySuggested = existingSuggestions.some((s) => s.toLowerCase() === newVal.toLowerCase());
+      if (!alreadySuggested) {
+        merged[suggestionKey] = [...existingSuggestions, newVal];
+      }
+    }
+  }
+
+  // Acumula origens adicionais do secundário no primário.
+  // Usa treinamento_nome preferencialmente (mais descritivo), depois origem.
+  // Isso garante que um mesmo contato preserve o histórico de todas as
+  // landing pages/fontes pelas quais entrou, mesmo após a mesclagem.
+  const secondaryLabel = String(
+    sPayload.treinamento_nome ?? sPayload.origem ?? ""
+  ).trim();
+  if (secondaryLabel) {
+    const existingExtras = Array.isArray(pPayload.dashboard_origens_adicionais)
+      ? [...(pPayload.dashboard_origens_adicionais as string[])]
+      : [];
+    if (!existingExtras.includes(secondaryLabel)) {
+      merged.dashboard_origens_adicionais = [...existingExtras, secondaryLabel];
+    }
+  }
+
+  await mergeInscricoes(primary.id, newId, merged);
+
+  console.log(`[autoMerge] Lead #${newId} (phone ${digits}) merged into existing #${primary.id}`);
+  return { merged: true, primaryId: primary.id };
+}
+
+export interface CreateInscricaoInput {
+  nome: string;
+  telefone?: string | null;
+  produto?: "vozup" | "instituto";
+  /** Demais campos do catálogo (email, cidade, estado, empresa, cargo, etc). */
+  fields?: Record<string, string>;
+}
+
+/**
+ * Cria um lead diretamente pela dashboard. Se o telefone já existir em outro
+ * registro, reaproveita o merge automático por telefone (mesma lógica das
+ * landing pages) em vez de gerar uma inscrição duplicada.
+ */
+export async function insertInscricao(
+  input: CreateInscricaoInput
+): Promise<{ inscricao: InscricaoItem; merged: boolean }> {
+  const nome = input.nome.trim();
+  if (!nome) {
+    throw new Error("Nome é obrigatório");
+  }
+
+  const telefone = input.telefone?.trim() || undefined;
+
+  const payload: Record<string, unknown> = { ...(input.fields ?? {}) };
+  payload.nome = nome;
+  if (telefone) payload.telefone = telefone;
+  payload._final = "true";
+  payload.dashboard_criado_manualmente = "true";
+  if (!payload.origem) payload.origem = "Cadastro manual";
+  if (input.produto === "vozup") payload.unidade_negocio = "Voz UP";
+
+  const pool = getPool();
+  const { rows } = await pool.query<{ id: number }>(
+    `INSERT INTO ${SCHEMA_NAME}.inscricoes (payload) VALUES ($1::jsonb) RETURNING id`,
+    [JSON.stringify(payload)]
+  );
+  const newId = rows[0].id;
+
+  let finalId = newId;
+  let merged = false;
+  if (telefone) {
+    const mergeResult = await autoMergeNewLeadByPhone(newId, telefone);
+    finalId = mergeResult.primaryId;
+    merged = mergeResult.merged;
+  }
+
+  const inscricao = await getInscricaoById(finalId);
+  if (!inscricao) {
+    throw new Error("Erro ao carregar inscrição criada");
+  }
+
+  return { inscricao, merged };
 }
 
 interface UpdateStatusOptions {
@@ -2197,8 +2438,15 @@ interface InsertImportedInscricoesOptions {
 
 export interface InsertImportedInscricoesResult {
   inserted: number;
+  /** Registros nao inseridos por clientId duplicado (dentro do lote ou ja existente). */
   skipped: number;
   duplicateClientIds: string[];
+  /**
+   * Telefones que ja existiam no banco no momento da importacao. Esses
+   * registros SAO inseridos normalmente (contam em `inserted`) e sao
+   * mesclados automaticamente pelo trigger+sweep de merge por telefone
+   * logo em seguida — este campo e so informativo para a tela de importacao.
+   */
   duplicatePhones: string[];
 }
 
@@ -2294,6 +2542,11 @@ export async function insertImportedInscricoes(
   const clientIdList = Array.from(clientIdCandidates);
   const phoneList = Array.from(phoneCandidates);
   const conflictClientIds = new Set<string>();
+  // Telefones que ja existem no banco: nao sao mais excluidos da importacao
+  // (o trigger enqueue_merge_check_after_insert + o sweep de lib/mergeSweep.ts
+  // cuidam do merge automaticamente, igual a qualquer outro ponto de entrada
+  // de leads). Mantido aqui so para informar na tela de importacao quais
+  // telefones vao ser mesclados.
   const conflictPhones = new Set<string>();
 
   if (clientIdList.length || phoneList.length) {
@@ -2337,8 +2590,10 @@ export async function insertImportedInscricoes(
   }
 
   const localClientIds = new Set<string>();
-  const localPhones = new Set<string>();
 
+  // Filtra apenas por clientId (identificador explicito de "mesmo cadastro").
+  // Duplicatas de telefone NAO sao mais filtradas aqui: entram todas e o
+  // trigger+sweep de merge por telefone reconcilia depois da insercao.
   const filteredRecords = records.filter((record) => {
     const clientId = normalizeImportClientId(record.clientId);
     if (clientId) {
@@ -2346,13 +2601,6 @@ export async function insertImportedInscricoes(
         return false;
       }
       localClientIds.add(clientId);
-    }
-    const phone = normalizeImportPhoneValue(record.telefone);
-    if (phone) {
-      if (conflictPhones.has(phone) || localPhones.has(phone)) {
-        return false;
-      }
-      localPhones.add(phone);
     }
     return true;
   });
@@ -2465,6 +2713,40 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   }
 }
 
+export interface CampaignTermOption {
+  value: string;
+  count: number;
+}
+
+/**
+ * Lista os valores distintos de "campaign_term" (ad_name/creative_name/keyword) usados
+ * para identificar o criativo/anuncio de trafego pago que originou cada lead.
+ */
+export async function listCampaignTermOptions(): Promise<CampaignTermOption[]> {
+  await ensureCommercialSchemaForReads();
+
+  const query = `
+    SELECT
+      COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS value,
+      COUNT(*)::int AS count
+    FROM ${SCHEMA_NAME}.inscricoes i
+    LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
+    WHERE ${FINALIZED_INSCRICAO_CONDITION}
+      AND COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) IS NOT NULL
+      AND COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) <> ''
+    GROUP BY 1
+    ORDER BY count DESC, value ASC
+  `;
+
+  try {
+    const { rows } = await getPool().query<{ value: string; count: number }>(query);
+    return rows;
+  } catch (error) {
+    console.error("Failed to list campaign term options", error);
+    return [];
+  }
+}
+
 export interface TrainingSnapshotFilters {
   treinamentoId?: string | null;
 }
@@ -2570,8 +2852,11 @@ export async function deleteInscricao(id: number): Promise<void> {
     throw new Error("Invalid inscrição id");
   }
 
+  // Soft-delete: marca o registro como excluído sem apagá-lo do banco.
+  // Assim a pessoa continua visível em outros eventos que ela se inscreveu.
   const query = `
-    DELETE FROM ${SCHEMA_NAME}.inscricoes
+    UPDATE ${SCHEMA_NAME}.inscricoes
+    SET payload = payload || '{"dashboard_excluido": "true"}'::jsonb
     WHERE id = $1
     RETURNING id
   `;
@@ -2689,13 +2974,7 @@ export async function listInscricoesByIds(ids: number[]): Promise<InscricaoItem[
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
-      cl.first_contact_inbox_id,
-      cl.first_contact_inbox_name,
-      cl.closing_inbox_id,
-      cl.closing_inbox_name,
-      cl.closing_conversation_id,
-      cl.closing_conversation_display_id,
-      cl.closing_conversation_url,
+      cl.position AS commercial_position,
       NULL::bigint AS total_count
     FROM ${SCHEMA_NAME}.inscricoes AS i
     LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
@@ -2914,7 +3193,43 @@ export async function listDuplicateSuspects(
     }
   };
 
-  registerBuckets(phoneMap, "telefone", (key) => ({
+  // Returning participants (same phone, different events) are NOT duplicates.
+  // Detected via: explicit cadastro_reaproveitado_id link, or distinct training keys (treinamentoId / data_treinamento date).
+  // We still union() their IDs so nameWindowMap won't re-detect them as "mesmo nome" duplicates.
+  const truePhoneMap = new Map<string, DuplicateEntry[]>();
+  for (const [phone, bucket] of phoneMap.entries()) {
+    // Explicit reuse: any record points back to another record in the same bucket
+    const bucketIds = new Set(bucket.map((e) => e.item.id));
+    const hasExplicitReuse = bucket.some((e) => {
+      const reapId = e.item.payload?.cadastro_reaproveitado_id;
+      return reapId != null && bucketIds.has(Number(reapId));
+    });
+
+    // Training-based: use treinamentoId or data_treinamento date as discriminator
+    const trainingKeys = bucket.map((e) => {
+      const tid = e.item.treinamentoId?.toLowerCase().trim();
+      if (tid) return `tid:${tid}`;
+      const dataTreino = String(e.item.payload?.data_treinamento ?? "").trim();
+      if (dataTreino) return `data:${dataTreino.slice(0, 10)}`;
+      return null;
+    }).filter(Boolean);
+    const allPresentAndDistinct =
+      trainingKeys.length === bucket.length && new Set(trainingKeys).size === bucket.length;
+
+    const isReturningParticipant = hasExplicitReuse || allPresentAndDistinct;
+
+    if (isReturningParticipant) {
+      // Union IDs so nameWindowMap sees them as already-resolved and skips them
+      const [first, ...rest] = bucket;
+      for (const other of rest) {
+        union(first!.item.id, other.item.id);
+      }
+    } else {
+      truePhoneMap.set(phone, bucket);
+    }
+  }
+
+  registerBuckets(truePhoneMap, "telefone", (key) => ({
     matchValue: formatNormalizedPhone(key),
     hint: key,
   }));
@@ -3044,7 +3359,7 @@ export async function listDuplicateSuspects(
         latestCreatedAt: sortedEntries[0]?.criadoEm ?? data.latest,
       };
     })
-    .filter((group) => group.entries.length > 1 || group.reasons.some((detail) => qualityReasons.has(detail.reason)))
+    .filter((group) => (group.entries.length > 1 && group.reasons.length > 0) || group.reasons.some((detail) => qualityReasons.has(detail.reason)))
     .sort((a, b) => {
       if (b.score !== a.score) {
         return b.score - a.score;
@@ -3139,6 +3454,7 @@ function buildCommercialDashboardBaseQuery(trainingCondition: string): string {
           cl.assigned_seller_email,
           cl.assigned_seller_name,
           cl.assigned_at,
+          cl.position AS commercial_position,
           cl.updated_at,
           COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
           COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,

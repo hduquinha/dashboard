@@ -220,7 +220,10 @@ export default function ImportForm({ action }: ImportFormProps) {
                     <li>Client IDs duplicados: {confirmSummary.duplicateClientIds.length}</li>
                   ) : null}
                   {confirmSummary.duplicatePhones.length ? (
-                    <li>Telefones duplicados: {confirmSummary.duplicatePhones.length}</li>
+                    <li>
+                      Telefones já existentes: {confirmSummary.duplicatePhones.length} (serão
+                      mesclados automaticamente em instantes)
+                    </li>
                   ) : null}
                 </ul>
               ) : null}

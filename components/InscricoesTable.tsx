@@ -3,13 +3,12 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Eye, MessageCircle } from 'lucide-react';
-import InscricaoDetails from '@/components/InscricaoDetails';
+import { LeadProfileModal } from '@/components/LeadProfileModal';
 import { TagBadge, TagOverflowBadge } from '@/components/TagBadge';
 import type { InscricaoItem, OrderDirection, OrderableField } from '@/types/inscricao';
 import type { TrainingOption } from '@/types/training';
-import type { ChatwootChannelOption } from '@/types/chatwoot';
 import { buildOperationalTags } from '@/lib/participantTags';
-import { buildChatwootOpenChatUrl, humanizeName } from '@/lib/utils';
+import { buildWhatsAppWebUrl, humanizeName } from '@/lib/utils';
 
 interface RecruiterOption {
   code: string;
@@ -25,7 +24,6 @@ interface InscricoesTableProps {
   orderDirection: OrderDirection;
   trainingOptions: TrainingOption[];
   recruiterOptions: RecruiterOption[];
-  chatwootChannels: ChatwootChannelOption[];
   showUpDayColumns?: boolean;
 }
 
@@ -35,16 +33,6 @@ function formatTrainingDate(value: string | null | undefined): string | null {
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
-
-function fmtEvolutionStatus(channel?: ChatwootChannelOption | null): string {
-  if (!channel || channel.evolutionStatus === 'unknown') return '';
-  if (channel.evolutionStatus === 'open') return 'online';
-  if (channel.evolutionStatus === 'connecting') return 'conectando';
-  return 'offline';
-}
-
-const CHATWOOT_INBOX_STORAGE_KEY = 'dashboard.chatwootInboxId';
-const CHATWOOT_INBOX_QUERY_KEY = 'chatwoot_inbox';
 
 const WA_ICON = (
   <svg className="h-3.5 w-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -61,45 +49,26 @@ export default function InscricoesTable({
   orderDirection,
   trainingOptions,
   recruiterOptions,
-  chatwootChannels,
   showUpDayColumns = true,
 }: InscricoesTableProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
-  const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [records, setRecords] = useState<InscricaoItem[]>(inscricoes);
-  const [chatwootInboxId, setChatwootInboxId] = useState('');
 
   useEffect(() => { setRecords(inscricoes); }, [inscricoes]);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  useEffect(() => {
-    const fromUrl = searchParams.get(CHATWOOT_INBOX_QUERY_KEY) ?? '';
-    if (fromUrl) {
-      setChatwootInboxId(fromUrl);
-      window.localStorage.setItem(CHATWOOT_INBOX_STORAGE_KEY, fromUrl);
-      return;
-    }
-    const stored = window.localStorage.getItem(CHATWOOT_INBOX_STORAGE_KEY) ?? '';
-    if (stored) setChatwootInboxId(stored);
-  }, [searchParams]);
 
   const trainingById = useMemo(
     () => trainingOptions.reduce<Record<string, TrainingOption>>((acc, o) => { acc[o.id] = o; return acc; }, {}),
     [trainingOptions],
   );
 
-  const activeChatwootInboxId = useMemo(
-    () => chatwootInboxId && chatwootChannels.some((ch) => String(ch.id) === chatwootInboxId) ? chatwootInboxId : '',
-    [chatwootChannels, chatwootInboxId],
-  );
-
   function syncRecord(updated: InscricaoItem) {
     setRecords((prev) => prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)));
-    setSelectedInscricao((prev) => (prev?.id === updated.id ? { ...prev, ...updated } : prev));
   }
 
   const queryFromState = useMemo(() => new URLSearchParams(searchParams), [searchParams]);
@@ -122,13 +91,6 @@ export default function InscricoesTable({
     updateQuery({ page: String(Math.min(Math.max(1, p), totalPages)) });
   }
 
-  function handleChatwootInboxChange(value: string) {
-    setChatwootInboxId(value);
-    if (value) window.localStorage.setItem(CHATWOOT_INBOX_STORAGE_KEY, value);
-    else window.localStorage.removeItem(CHATWOOT_INBOX_STORAGE_KEY);
-    updateQuery({ [CHATWOOT_INBOX_QUERY_KEY]: value || null });
-  }
-
   function getTrainingLabel(inscricao: InscricaoItem): string | null {
     const info = inscricao.treinamentoId ? trainingById[inscricao.treinamentoId] : undefined;
     const rawDate = inscricao.treinamentoData ?? info?.startsAt ?? null;
@@ -147,23 +109,6 @@ export default function InscricoesTable({
         <span className="text-xs text-neutral-500">
           <span className="font-bold text-neutral-900">{total.toLocaleString()}</span> inscrições
         </span>
-        {chatwootChannels.length > 0 && (
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-neutral-400">Canal</span>
-            <select
-              value={activeChatwootInboxId}
-              onChange={(e) => handleChatwootInboxChange(e.target.value)}
-              className="h-7 rounded-lg border border-neutral-200 bg-white px-2.5 text-xs text-neutral-700 focus:border-cyan-400 focus:outline-none"
-            >
-              <option value="">Selecionar…</option>
-              {chatwootChannels.map((ch) => (
-                <option key={ch.id} value={ch.id}>
-                  {ch.name}{fmtEvolutionStatus(ch) ? ` · ${fmtEvolutionStatus(ch)}` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
       </div>
 
       {/* ── MOBILE CARDS ────────────────────── */}
@@ -190,12 +135,12 @@ export default function InscricoesTable({
               </div>
               <div className="mt-2.5 flex gap-2">
                 {ins.telefone && (
-                  <a href={buildChatwootOpenChatUrl(ins.id, activeChatwootInboxId)} target="_blank" rel="noopener noreferrer"
+                  <a href={buildWhatsAppWebUrl(ins.telefone)} target="_blank" rel="noopener noreferrer"
                     className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#25D366] text-xs font-semibold text-white">
                     {WA_ICON} WhatsApp
                   </a>
                 )}
-                <button type="button" onClick={() => setSelectedInscricao(ins)}
+                <button type="button" onClick={() => setSelectedLeadId(ins.id)}
                   className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-neutral-200 text-xs font-semibold text-neutral-700">
                   <Eye className="h-3.5 w-3.5" /> Ver detalhes
                 </button>
@@ -247,7 +192,7 @@ export default function InscricoesTable({
                 <tr
                   key={ins.id}
                   className={`cursor-pointer transition-colors hover:bg-cyan-50/40 ${index % 2 !== 0 ? 'bg-neutral-50/30' : ''}`}
-                  onClick={() => setSelectedInscricao(ins)}
+                  onClick={() => setSelectedLeadId(ins.id)}
                 >
                   {/* # */}
                   <td className={TD}>
@@ -260,17 +205,17 @@ export default function InscricoesTable({
                       <button
                         type="button"
                         className="block w-full truncate text-left text-sm font-semibold text-neutral-900 hover:text-cyan-700"
-                        onClick={() => setSelectedInscricao(ins)}
+                        onClick={() => setSelectedLeadId(ins.id)}
                       >
                         {humanizeName(ins.nome) ?? 'Indisponível'}
                       </button>
                       {ins.telefone && (
                         <a
-                          href={buildChatwootOpenChatUrl(ins.id, activeChatwootInboxId)}
+                          href={buildWhatsAppWebUrl(ins.telefone)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-[#25D366] hover:underline"
-                          title="Abrir no WhatsApp/Chatwoot"
+                          title="Abrir no WhatsApp"
                         >
                           {WA_ICON}
                           {ins.telefone}
@@ -343,7 +288,7 @@ export default function InscricoesTable({
                     <div className="inline-flex items-center gap-1.5">
                       {ins.telefone && (
                         <a
-                          href={buildChatwootOpenChatUrl(ins.id, activeChatwootInboxId)}
+                          href={buildWhatsAppWebUrl(ins.telefone)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#25D366] text-white transition hover:opacity-90"
@@ -354,7 +299,7 @@ export default function InscricoesTable({
                       )}
                       <button
                         type="button"
-                        onClick={() => setSelectedInscricao(ins)}
+                        onClick={() => setSelectedLeadId(ins.id)}
                         className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-neutral-200 bg-white text-neutral-500 transition hover:border-cyan-300 hover:text-cyan-700"
                         title="Ver detalhes"
                       >
@@ -389,19 +334,16 @@ export default function InscricoesTable({
         )}
       </div>
 
-      {/* ── DETAIL PANEL ────────────────────── */}
-      <InscricaoDetails
-        inscricao={selectedInscricao}
-        onClose={() => setSelectedInscricao(null)}
+      {/* ── DETAIL MODAL ────────────────────── */}
+      <LeadProfileModal
+        leadId={selectedLeadId}
+        onClose={() => setSelectedLeadId(null)}
         onUpdate={syncRecord}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
-        chatwootChannels={chatwootChannels}
-        selectedChatwootInboxId={activeChatwootInboxId}
-        onChatwootInboxIdChange={handleChatwootInboxChange}
         onDelete={(id) => {
           setRecords((prev) => prev.filter((r) => r.id !== id));
-          setSelectedInscricao(null);
+          setSelectedLeadId(null);
         }}
       />
     </div>

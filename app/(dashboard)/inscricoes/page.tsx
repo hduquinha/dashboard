@@ -4,7 +4,6 @@ import { ArrowLeft, Download, MessageCircle, UploadCloud, Users } from "lucide-r
 import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
-import { listChatwootChannelOptions } from "@/lib/chatwoot";
 import { isOnlineTraining } from "@/lib/participantTags";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 
@@ -126,10 +125,9 @@ export default async function CrmPage(props: CrmPageProps) {
     },
   });
 
-  const [recruiterOptions, result, chatwootChannels] = await Promise.all([
+  const [recruiterOptions, result] = await Promise.all([
     recruiterOptionsPromise,
     resultPromise,
-    listChatwootChannelOptions(),
   ]);
 
   const selectedTrainingOption = activeTreinamentoId.length
@@ -228,7 +226,7 @@ export default async function CrmPage(props: CrmPageProps) {
             className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
           >
             <MessageCircle className="h-4 w-4" />
-            CRM/Chatwoot
+            CRM
           </Link>
           <PrintButton className="inline-flex min-h-10 items-center justify-center gap-2 rounded-md border border-neutral-200 bg-white px-4 py-2 text-sm font-medium text-neutral-700 shadow-sm hover:bg-neutral-50" />
           <Link
@@ -446,7 +444,6 @@ export default async function CrmPage(props: CrmPageProps) {
             orderDirection={orderDirection}
             trainingOptions={trainingOptions}
             recruiterOptions={recruiterOptions}
-            chatwootChannels={chatwootChannels}
             showUpDayColumns={!useOnlineTrainingTable}
           />
         </div>

@@ -2,13 +2,11 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
   DASHBOARD_COOKIE_NAME,
-  DASHBOARD_MFA_COOKIE_NAME,
-  createChatwootSessionValue,
-  createMfaChallengeValue,
+  createDashboardSessionValue,
   getSessionCookieMaxAge,
-  readMfaChallengeValue,
+  type DashboardUser,
 } from "@/lib/auth";
-import { ChatwootAuthError, signInWithChatwoot } from "@/lib/chatwootAuth";
+import { authenticateTeamMember } from "@/lib/teamAuth";
 import {
   consumeRateLimit,
   getClientIp,
@@ -18,15 +16,8 @@ import {
 
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 5;
-const MFA_COOKIE_MAX_AGE_SECONDS = 5 * 60;
 
-type LoginErrorCode =
-  | "config"
-  | "forbidden"
-  | "invalid"
-  | "mfa_invalid"
-  | "rate_limited"
-  | "unavailable";
+type LoginErrorCode = "invalid" | "rate_limited" | "unavailable";
 
 function shouldUseSecureCookie() {
   return process.env.DASHBOARD_COOKIE_SECURE !== "false" && process.env.NODE_ENV === "production";
@@ -96,15 +87,6 @@ async function readRequestData(request: NextRequest): Promise<Record<string, str
   return entries;
 }
 
-function splitMfaCode(rawCode?: string | null): { otpCode?: string; backupCode?: string } {
-  const code = rawCode?.trim();
-  if (!code) {
-    return {};
-  }
-
-  return /^\d{6}$/.test(code) ? { otpCode: code } : { backupCode: code };
-}
-
 function consumeFailedAttempt(rateLimitKey: string) {
   return consumeRateLimit({
     key: rateLimitKey,
@@ -113,32 +95,9 @@ function consumeFailedAttempt(rateLimitKey: string) {
   });
 }
 
-function mapAuthError(error: unknown, hasMfaChallenge: boolean): LoginErrorCode {
-  if (!(error instanceof ChatwootAuthError)) {
-    return "unavailable";
-  }
-
-  switch (error.code) {
-    case "configuration":
-      return "config";
-    case "forbidden":
-      return "forbidden";
-    case "rate_limited":
-      return "rate_limited";
-    case "unavailable":
-      return "unavailable";
-    case "invalid":
-      return hasMfaChallenge ? "mfa_invalid" : "invalid";
-    case "mfa_required":
-      return "invalid";
-    default:
-      return "invalid";
-  }
-}
-
 export async function POST(request: NextRequest) {
   const clientIp = getClientIp(request);
-  const rateLimitKey = `chatwoot-login:${clientIp}`;
+  const rateLimitKey = `dashboard-login:${clientIp}`;
   const rateLimitStatus = peekRateLimit({
     key: rateLimitKey,
     maxHits: LOGIN_MAX_ATTEMPTS,
@@ -152,25 +111,34 @@ export async function POST(request: NextRequest) {
   }
 
   const data = await readRequestData(request);
-  const mfaChallenge = readMfaChallengeValue(
-    request.cookies.get(DASHBOARD_MFA_COOKIE_NAME)?.value
-  );
+  const email = data.email?.trim() ?? "";
+  const password = data.password ?? "";
 
   try {
-    const result = mfaChallenge
-      ? await signInWithChatwoot({
-          mfaToken: mfaChallenge.token,
-          ...splitMfaCode(data.code),
-        })
-      : await signInWithChatwoot({
-          email: data.email?.trim() ?? "",
-          password: data.password ?? "",
-        });
+    const member = await authenticateTeamMember(email, password);
+    if (!member) {
+      const failedAttempt = consumeFailedAttempt(rateLimitKey);
+      const errorCode: LoginErrorCode = !failedAttempt.allowed ? "rate_limited" : "invalid";
+      const response = buildErrorResponse(request, errorCode);
+      if (!failedAttempt.allowed) {
+        response.headers.set("Retry-After", String(failedAttempt.retryAfterSeconds));
+      }
+      return response;
+    }
 
-    const sessionValue = createChatwootSessionValue(result);
+    const user: DashboardUser = {
+      id: member.id,
+      email: member.email,
+      name: member.name,
+      role: member.role,
+      isSupervisor: member.role === "admin",
+      institutoUpOnly: member.institutoUpOnly,
+    };
+
+    const sessionValue = createDashboardSessionValue({ user });
     if (!sessionValue) {
-      console.error("Failed to create Chatwoot dashboard session");
-      return buildErrorResponse(request, "config");
+      console.error("Failed to create dashboard session");
+      return buildErrorResponse(request, "unavailable");
     }
 
     resetRateLimit(rateLimitKey);
@@ -184,47 +152,17 @@ export async function POST(request: NextRequest) {
       maxAge: getSessionCookieMaxAge(sessionValue),
       priority: "high",
     });
-    setExpiredCookie(response, DASHBOARD_MFA_COOKIE_NAME);
     response.headers.set("Cache-Control", "no-store");
 
     return response;
   } catch (error) {
-    if (error instanceof ChatwootAuthError && error.code === "mfa_required" && error.mfaToken) {
-      const challengeValue = createMfaChallengeValue(error.mfaToken, data.email?.trim());
-      if (!challengeValue) {
-        return buildErrorResponse(request, "config");
-      }
-
-      const response = buildRedirect(request, "/login?step=mfa");
-      response.cookies.set(DASHBOARD_MFA_COOKIE_NAME, challengeValue, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: shouldUseSecureCookie(),
-        path: "/",
-        maxAge: MFA_COOKIE_MAX_AGE_SECONDS,
-        priority: "high",
-      });
-      setExpiredCookie(response, DASHBOARD_COOKIE_NAME);
-      response.headers.set("Cache-Control", "no-store");
-      return response;
-    }
-
+    console.error("Login failed", error);
     const failedAttempt = consumeFailedAttempt(rateLimitKey);
-    const errorCode = !failedAttempt.allowed
-      ? "rate_limited"
-      : mapAuthError(error, Boolean(mfaChallenge));
-
+    const errorCode: LoginErrorCode = !failedAttempt.allowed ? "rate_limited" : "unavailable";
     const response = buildErrorResponse(request, errorCode);
-    if (error instanceof ChatwootAuthError && error.retryAfterSeconds) {
-      response.headers.set("Retry-After", String(error.retryAfterSeconds));
-    } else if (!failedAttempt.allowed) {
+    if (!failedAttempt.allowed) {
       response.headers.set("Retry-After", String(failedAttempt.retryAfterSeconds));
     }
-
-    if (!mfaChallenge) {
-      setExpiredCookie(response, DASHBOARD_MFA_COOKIE_NAME);
-    }
-
     return response;
   }
 }

@@ -78,7 +78,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const note = typeof record.note === "string" ? record.note : undefined;
   const session = getRequestDashboardSession(request);
   const author =
-    session?.user.displayName || session?.user.name || session?.user.email || null;
+    session?.user.name || session?.user.email || null;
 
   try {
     const inscricao = await setInscricaoStatus(id, status, {

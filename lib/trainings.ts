@@ -110,6 +110,19 @@ function isMalformedTrainingDateId(value: string): boolean {
   );
 }
 
+// Returns true for training IDs that are actually VozUP lead origins, not real Instituto UP trainings.
+// These come from treinamento_nome being set to the lead's origem (e.g. "Landing Page VozUP").
+function isVozupOriginId(value: string): boolean {
+  const normalized = normalizeComparable(value);
+  return (
+    normalized.includes("vozup") ||
+    normalized.includes("voz up") ||
+    normalized.startsWith("aula experimental") ||
+    normalized.startsWith("aula exclusiva") ||
+    normalized.startsWith("landing page")
+  );
+}
+
 export function isIgnoredTrainingId(value: string | null | undefined): boolean {
   const normalized = normalizeId(value);
   if (!normalized) {
@@ -120,7 +133,8 @@ export function isIgnoredTrainingId(value: string | null | undefined): boolean {
   return (
     IGNORED_TRAINING_IDS.has(normalizeComparable(normalized)) ||
     (formatted ? IGNORED_TRAINING_DATE_LABELS.has(formatted) : false) ||
-    isMalformedTrainingDateId(normalized)
+    isMalformedTrainingDateId(normalized) ||
+    isVozupOriginId(normalized)
   );
 }
 

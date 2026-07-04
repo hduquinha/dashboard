@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
+import { isProductivityManager } from "@/lib/productivity";
 import type { CommercialStage } from "@/types/inscricao";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,10 @@ const ACTIVE_STAGES: CommercialStage[] = [
   "perdido",
 ];
 
-const PAGE_SIZE = 25;
+// Alto o suficiente pra carregar a coluna inteira de uma vez: o
+// drag-and-drop precisa ver todos os cards pra reordenar corretamente,
+// nao so uma pagina. O indice (commercial_stage, position) mantem isso barato.
+const PAGE_SIZE = 200;
 
 export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
@@ -28,7 +32,8 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const produto = searchParams.get("produto") as "vozup" | "instituto" | null;
-  const assignedSellerEmail = session.user.isSupervisor
+  const isManager = isProductivityManager(session.user);
+  const assignedSellerEmail = isManager
     ? (searchParams.get("assignedSellerEmail") ?? undefined)
     : session.user.email;
 
@@ -37,8 +42,8 @@ export async function GET(request: NextRequest) {
       listInscricoes({
         page: 1,
         pageSize: PAGE_SIZE,
-        orderBy: "status_at",
-        orderDirection: "desc",
+        orderBy: "commercial_position",
+        orderDirection: "asc",
         filters: {
           commercialStage: stage,
           produto: produto ?? undefined,

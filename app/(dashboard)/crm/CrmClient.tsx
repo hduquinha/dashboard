@@ -1,25 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, RefreshCw, UserPlus, X } from "lucide-react";
-import { TagBadge } from "@/components/TagBadge";
+import { ChevronDown, UserPlus, X } from "lucide-react";
 import { ExportMenu } from "@/components/ExportMenu";
 import type { CommercialStage, InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
-import type {
-  ChatwootChannelOption,
-  ChatwootLeadSnapshot,
-  ChatwootMessageSnapshot,
-  ChatwootSnapshotMap,
-} from "@/types/chatwoot";
 import type { TrainingOption } from "@/types/training";
 import type { CommercialWorkspace } from "@/types/commercial";
-import { tagFromDashboardDisplay } from "@/lib/participantTags";
 import { formatTrainingDateLabel } from "@/lib/trainings";
-import { buildChatwootOpenChatUrl, humanizeName } from "@/lib/utils";
-import { FormHistoryView } from "@/components/FormHistoryView";
-import { EditLeadPanel } from "@/components/EditLeadPanel";
+import { humanizeName } from "@/lib/utils";
+import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { MergeLeadsModal } from "@/components/MergeLeadsModal";
+import { CreateLeadModal } from "@/components/CreateLeadModal";
 import { CrmKanbanView } from "@/components/CrmKanbanView";
 
 /* ───────── Types ───────── */
@@ -27,6 +19,11 @@ import { CrmKanbanView } from "@/components/CrmKanbanView";
 interface RecruiterOption {
   code: string;
   name: string;
+}
+
+interface CampaignTermOption {
+  value: string;
+  count: number;
 }
 
 interface Filters {
@@ -45,6 +42,7 @@ interface Filters {
   status?: string;
   campaignSource: string;
   campaignName: string;
+  campaignTerm?: string;
   commercialStage?: CommercialStage;
   assignedSellerEmail: string;
   unassignedOnly?: boolean;
@@ -54,8 +52,6 @@ interface Filters {
 
 interface LeadsClientProps {
   inscricoes: InscricaoItem[];
-  chatwootByInscricaoId: ChatwootSnapshotMap;
-  chatwootChannels: ChatwootChannelOption[];
   commercial: CommercialWorkspace;
   total: number;
   page: number;
@@ -64,6 +60,7 @@ interface LeadsClientProps {
   orderDirection: OrderDirection;
   trainingOptions: TrainingOption[];
   recruiterOptions: RecruiterOption[];
+  campaignTermOptions: CampaignTermOption[];
   filters: Filters;
 }
 
@@ -112,100 +109,6 @@ function pipelineFor(status?: InscricaoStatus) {
   return PIPELINE.find((p) => p.key === status) ?? PIPELINE[0];
 }
 
-/* ───────── Timeline helpers ───────── */
-
-interface TimelineEvent {
-  id: string;
-  type: "note" | "status" | "whatsapp" | "chatwoot" | "system";
-  content: string;
-  date: string;
-  icon: string;
-  color: string;
-  readStatus?: "sent" | "delivered" | "read" | "failed";
-  isOutgoing?: boolean;
-}
-
-function buildTimeline(inscricao: InscricaoItem, chatwoot?: ChatwootLeadSnapshot | null): TimelineEvent[] {
-  const events: TimelineEvent[] = [];
-
-  for (const message of chatwoot?.recentMessages ?? []) {
-    events.push({
-      id: `chatwoot-${message.id}`,
-      type: "chatwoot",
-      content: message.content,
-      date: message.createdAt,
-      icon: message.direction === "incoming" ? "↙" : message.direction === "outgoing" ? "↗" : "•",
-      color:
-        message.direction === "incoming"
-          ? "border-emerald-300 bg-emerald-50"
-          : "border-sky-300 bg-sky-50",
-      readStatus: message.readStatus,
-      isOutgoing: message.direction === "outgoing",
-    });
-  }
-
-  // Notes
-  for (const note of inscricao.notes ?? []) {
-    if (note.viaWhatsapp) {
-      events.push({
-        id: `whatsapp-${note.id}`,
-        type: "whatsapp",
-        content: note.content,
-        date: note.createdAt,
-        icon: "💬",
-        color: "border-emerald-300 bg-emerald-50",
-      });
-    } else {
-      events.push({
-        id: `note-${note.id}`,
-        type: "note",
-        content: note.content,
-        date: note.createdAt,
-        icon: "📝",
-        color: "border-blue-300 bg-blue-50",
-      });
-    }
-  }
-
-  // Status change
-  if (inscricao.statusUpdatedAt) {
-    const pipe = pipelineFor(inscricao.status);
-    events.push({
-      id: "status-change",
-      type: "status",
-      content: `Status alterado para ${pipe.label}`,
-      date: inscricao.statusUpdatedAt,
-      icon: pipe.icon,
-      color: `border-neutral-300 bg-neutral-50`,
-    });
-  }
-
-  // WhatsApp contacted
-  if (inscricao.statusWhatsappContacted && inscricao.statusUpdatedAt) {
-    events.push({
-      id: "whatsapp-contacted",
-      type: "whatsapp",
-      content: "Contato realizado via WhatsApp",
-      date: inscricao.statusUpdatedAt,
-      icon: "📱",
-      color: "border-green-300 bg-green-50",
-    });
-  }
-
-  // Creation
-  events.push({
-    id: "created",
-    type: "system",
-    content: "Lead cadastrado no sistema",
-    date: inscricao.criadoEm,
-    icon: "🆕",
-    color: "border-neutral-200 bg-neutral-50",
-  });
-
-  // Sort newest first
-  events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  return events;
-}
 
 /* ───────── Formatters ───────── */
 
@@ -237,53 +140,10 @@ function fmtRelative(value: string): string {
   return fmtDate(value);
 }
 
-function fmtChatwootStatus(value: ChatwootLeadSnapshot["conversationStatus"]): string {
-  switch (value) {
-    case "open":
-      return "Aberta";
-    case "pending":
-      return "Pendente";
-    case "resolved":
-      return "Resolvida";
-    case "snoozed":
-      return "Pausada";
-    default:
-      return "Sem conversa";
-  }
-}
-
-function fmtMessageDirection(value: ChatwootMessageSnapshot["direction"]): string {
-  switch (value) {
-    case "incoming":
-      return "Lead";
-    case "outgoing":
-      return "Equipe";
-    case "activity":
-      return "Sistema";
-    default:
-      return "Outro";
-  }
-}
-
-function cleanPhone(phone: string): string {
-  return phone.replace(/\D/g, "");
-}
-
-function fmtEvolutionStatus(channel?: ChatwootChannelOption | null): string {
-  if (!channel || channel.evolutionStatus === "unknown") return "";
-  if (channel.evolutionStatus === "open") return "online";
-  if (channel.evolutionStatus === "connecting") return "conectando";
-  return "offline";
-}
-
-const CHATWOOT_INBOX_STORAGE_KEY = "dashboard.chatwootInboxId";
-
 /* ───────── Component ───────── */
 
 export default function CrmClient({
   inscricoes,
-  chatwootByInscricaoId,
-  chatwootChannels,
   commercial,
   total,
   page,
@@ -292,6 +152,7 @@ export default function CrmClient({
   orderDirection,
   trainingOptions,
   recruiterOptions,
+  campaignTermOptions,
   filters,
 }: LeadsClientProps) {
   const router = useRouter();
@@ -300,27 +161,10 @@ export default function CrmClient({
   const [isPending, startTransition] = useTransition();
   const [records, setRecords] = useState(inscricoes);
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [noteText, setNoteText] = useState("");
-  const [noteType, setNoteType] = useState<"note" | "whatsapp" | "call" | "email">("note");
-  const [savingNote, setSavingNote] = useState(false);
-  const [savingStatus, setSavingStatus] = useState<string | null>(null);
-  const [savingStars, setSavingStars] = useState(false);
-  const [starsHover, setStarsHover] = useState(0);
   const [searchText, setSearchText] = useState(filters.q || filters.nome);
-  const [syncingChatwoot, setSyncingChatwoot] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
-  const [chatwootSnapshots, setChatwootSnapshots] = useState(chatwootByInscricaoId);
-  const [loadingChatwootSnapshots, setLoadingChatwootSnapshots] = useState(false);
-  const [chatwootInboxId, setChatwootInboxId] = useState<string>("");
-  const [loadingDetailId, setLoadingDetailId] = useState<number | null>(null);
-  const [commercialSaving, setCommercialSaving] = useState(false);
-  const [commercialMessage, setCommercialMessage] = useState<string | null>(null);
   const [activePopover, setActivePopover] = useState<string | null>(null);
-  const [detailTab, setDetailTab] = useState<"info" | "formularios">("info");
-  const [editMode, setEditMode] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
-  const [deletingLead, setDeletingLead] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   const [view, setView] = useState<"list" | "kanban">(() =>
     searchParams.get("view") === "kanban" ? "kanban" : "list"
   );
@@ -328,7 +172,7 @@ export default function CrmClient({
 
   useEffect(() => { setRecords(inscricoes); }, [inscricoes]);
   useEffect(() => { setSearchText(filters.q || filters.nome); }, [filters.q, filters.nome]);
-  useEffect(() => { setDetailTab("info"); setEditMode(false); setShowMergeModal(false); setDeleteConfirmId(null); }, [selectedId]);
+  useEffect(() => { setShowMergeModal(false); }, [selectedId]);
   useEffect(() => {
     if (!activePopover) return;
     function onMouseDown(e: MouseEvent) {
@@ -339,132 +183,12 @@ export default function CrmClient({
     document.addEventListener("mousedown", onMouseDown);
     return () => document.removeEventListener("mousedown", onMouseDown);
   }, [activePopover]);
-  useEffect(() => { setChatwootSnapshots(chatwootByInscricaoId); }, [chatwootByInscricaoId]);
-  useEffect(() => {
-    const storedInboxId = window.localStorage.getItem(CHATWOOT_INBOX_STORAGE_KEY) ?? "";
-    if (storedInboxId) {
-      setChatwootInboxId(storedInboxId);
-    }
-  }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const selected = useMemo(() => records.find((r) => r.id === selectedId) ?? null, [records, selectedId]);
-  const recordIdsKey = useMemo(() => records.map((record) => record.id).join(","), [records]);
   const syncRecord = useCallback((updated: InscricaoItem) => {
     setRecords((prev) => prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)));
   }, []);
-
-  useEffect(() => {
-    if (!selected || selected.payload !== undefined) {
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingDetailId(selected.id);
-
-    fetch(`/api/inscricoes/${selected.id}`)
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Falha ao carregar detalhes");
-        }
-        return response.json() as Promise<{ inscricao?: InscricaoItem }>;
-      })
-      .then((data) => {
-        if (!cancelled && data.inscricao) {
-          syncRecord(data.inscricao);
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error(error);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingDetailId(null);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selected, syncRecord]);
-
-  useEffect(() => {
-    const ids = recordIdsKey
-      .split(",")
-      .map((id) => Number(id))
-      .filter((id) => Number.isFinite(id) && id > 0);
-
-    if (ids.length === 0) {
-      setChatwootSnapshots({});
-      return;
-    }
-
-    let cancelled = false;
-    setLoadingChatwootSnapshots(true);
-
-    fetch("/api/chatwoot/lead-snapshots", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("Falha ao carregar Chatwoot");
-        }
-        return response.json() as Promise<{ snapshots?: ChatwootSnapshotMap }>;
-      })
-      .then((data) => {
-        if (!cancelled) {
-          setChatwootSnapshots(data.snapshots ?? {});
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          console.error(error);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingChatwootSnapshots(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [recordIdsKey]);
-
-  const selectedChatwoot = selected ? chatwootSnapshots[selected.id] ?? null : null;
-  const sharedFirstContactInboxId = commercial.sharedInboxId ? String(commercial.sharedInboxId) : "";
-  useEffect(() => {
-    if (sharedFirstContactInboxId) {
-      setChatwootInboxId(sharedFirstContactInboxId);
-      return;
-    }
-
-    const storedInboxId = window.localStorage.getItem(CHATWOOT_INBOX_STORAGE_KEY) ?? "";
-    if (storedInboxId) {
-      setChatwootInboxId(storedInboxId);
-      return;
-    }
-
-    setChatwootInboxId(selectedChatwoot?.inboxId ? String(selectedChatwoot.inboxId) : "");
-  }, [selected?.id, selectedChatwoot?.inboxId, sharedFirstContactInboxId]);
-  const activeChatwootInboxId = useMemo(() => {
-    if (sharedFirstContactInboxId) return sharedFirstContactInboxId;
-    if (chatwootInboxId) return chatwootInboxId;
-    if (selectedChatwoot?.inboxId) return String(selectedChatwoot.inboxId);
-    return chatwootChannels[0]?.id ? String(chatwootChannels[0].id) : "";
-  }, [chatwootChannels, chatwootInboxId, selectedChatwoot?.inboxId, sharedFirstContactInboxId]);
-  const selectedChatwootOpenUrl = selected
-    ? buildChatwootOpenChatUrl(selected.id, activeChatwootInboxId)
-    : "#";
-  const timeline = useMemo(
-    () => selected ? buildTimeline(selected, selectedChatwoot) : [],
-    [selected, selectedChatwoot]
-  );
 
   const trainingById = useMemo(() => {
     const map: Record<string, TrainingOption> = {};
@@ -491,205 +215,6 @@ export default function CrmClient({
   function handleSort(field: OrderableField) {
     const dir: OrderDirection = orderBy === field && orderDirection === "asc" ? "desc" : "asc";
     updateQuery({ orderBy: field, orderDirection: dir, page: "1" });
-  }
-
-  function handleChatwootInboxChange(value: string) {
-    setChatwootInboxId(value);
-    if (value) {
-      window.localStorage.setItem(CHATWOOT_INBOX_STORAGE_KEY, value);
-    } else {
-      window.localStorage.removeItem(CHATWOOT_INBOX_STORAGE_KEY);
-    }
-  }
-
-  /* ─── Actions ─── */
-
-  async function handleStatusChange(id: number, nextStatus: InscricaoStatus) {
-    setSavingStatus(nextStatus);
-    try {
-      const res = await fetch(`/api/inscricoes/${id}/status`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: nextStatus }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.inscricao) syncRecord(data.inscricao);
-      }
-    } catch (e) { console.error(e); }
-    finally { setSavingStatus(null); }
-  }
-
-  async function handleNoteSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!selected || !noteText.trim()) return;
-    setSavingNote(true);
-    try {
-      const res = await fetch(`/api/inscricoes/${selected.id}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          content: `[${noteType === "whatsapp" ? "WhatsApp" : noteType === "call" ? "Ligação" : noteType === "email" ? "E-mail" : "Nota"}] ${noteText}`,
-          viaWhatsapp: noteType === "whatsapp",
-        }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.inscricao) syncRecord(data.inscricao);
-        setNoteText("");
-      }
-    } catch (e) { console.error(e); }
-    finally { setSavingNote(false); }
-  }
-
-  async function handleStarClick(value: number) {
-    if (!selected || savingStars) return;
-    const next = selected.stars === value ? 0 : value;
-    setSavingStars(true);
-    try {
-      const res = await fetch(`/api/inscricoes/${selected.id}/stars`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stars: next }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.inscricao) syncRecord(data.inscricao);
-      }
-    } catch (e) { console.error(e); }
-    finally { setSavingStars(false); }
-  }
-
-  async function handleChatwootSync() {
-    if (syncingChatwoot) return;
-    setSyncingChatwoot(true);
-    setSyncMessage(null);
-    try {
-      const res = await fetch("/api/chatwoot/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 1000, createMissing: true }),
-      });
-      const data = await res.json().catch(() => null) as {
-        ok?: boolean;
-        sync?: {
-          configured: boolean;
-          processed: number;
-          matched: number;
-          created: number;
-          updated: number;
-          duplicateDashboardGroups: number;
-          duplicateChatwootContacts: number;
-          errors?: Array<{ id: number; message: string }>;
-        };
-        error?: string;
-      } | null;
-
-      if (!res.ok || !data?.sync?.configured) {
-        throw new Error(data?.error ?? "Configure CHATWOOT_DATABASE_URL para habilitar a sincronização.");
-      }
-
-      const sync = data.sync;
-      setSyncMessage(
-        `${sync.processed} analisados • ${sync.matched} vinculados • ${sync.created} criados • ${sync.updated} atualizados`
-      );
-      router.refresh();
-    } catch (error) {
-      setSyncMessage(error instanceof Error ? error.message : "Falha ao sincronizar Chatwoot.");
-    } finally {
-      setSyncingChatwoot(false);
-    }
-  }
-
-  async function refreshSelectedLead(id: number) {
-    const res = await fetch(`/api/inscricoes/${id}`);
-    if (res.ok) {
-      const data = await res.json() as { inscricao?: InscricaoItem };
-      if (data.inscricao) syncRecord(data.inscricao);
-    }
-  }
-
-  async function handleCommercialStageChange(stage: CommercialStage) {
-    if (!selected || commercialSaving) return;
-    setCommercialSaving(true);
-    setCommercialMessage(null);
-    try {
-      const res = await fetch(`/api/commercial/leads/${selected.id}/stage`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stage }),
-      });
-      const data = await res.json().catch(() => null) as { error?: string } | null;
-      if (!res.ok) throw new Error(data?.error ?? "Falha ao atualizar etapa.");
-      await refreshSelectedLead(selected.id);
-      setCommercialMessage("Etapa comercial atualizada.");
-    } catch (error) {
-      setCommercialMessage(error instanceof Error ? error.message : "Falha ao atualizar etapa.");
-    } finally {
-      setCommercialSaving(false);
-    }
-  }
-
-  async function handleCommercialAssign(sellerId: string) {
-    if (!selected || !sellerId || commercialSaving) return;
-    setCommercialSaving(true);
-    setCommercialMessage(null);
-    try {
-      const res = await fetch(`/api/commercial/leads/${selected.id}/assign`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sellerId: Number(sellerId) }),
-      });
-      const data = await res.json().catch(() => null) as { error?: string } | null;
-      if (!res.ok) throw new Error(data?.error ?? "Falha ao repassar lead.");
-      await refreshSelectedLead(selected.id);
-      setCommercialMessage("Lead repassado.");
-    } catch (error) {
-      setCommercialMessage(error instanceof Error ? error.message : "Falha ao repassar lead.");
-    } finally {
-      setCommercialSaving(false);
-    }
-  }
-
-  async function handleOpenClosing(inboxId: string) {
-    if (!selected || !inboxId || commercialSaving) return;
-    setCommercialSaving(true);
-    setCommercialMessage(null);
-    try {
-      const res = await fetch(`/api/commercial/leads/${selected.id}/closing`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ inboxId: Number(inboxId) }),
-      });
-      const data = await res.json().catch(() => null) as { conversationUrl?: string; error?: string } | null;
-      if (!res.ok) throw new Error(data?.error ?? "Falha ao abrir fechamento.");
-      await refreshSelectedLead(selected.id);
-      setCommercialMessage("Conversa de fechamento pronta.");
-      if (data?.conversationUrl) window.open(data.conversationUrl, "_blank", "noopener,noreferrer");
-    } catch (error) {
-      setCommercialMessage(error instanceof Error ? error.message : "Falha ao abrir fechamento.");
-    } finally {
-      setCommercialSaving(false);
-    }
-  }
-
-  async function handleDeleteLead(id: number) {
-    if (deleteConfirmId !== id) {
-      setDeleteConfirmId(id);
-      return;
-    }
-    setDeleteConfirmId(null);
-    setDeletingLead(true);
-    try {
-      const res = await fetch(`/api/inscricoes/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Falha ao excluir");
-      setRecords((prev) => prev.filter((r) => r.id !== id));
-      setSelectedId(null);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setDeletingLead(false);
-    }
   }
 
   function getTrainingDisplay(inscricao: InscricaoItem) {
@@ -776,6 +301,7 @@ export default function CrmClient({
     filters.indicacao,
     filters.campaignSource,
     filters.campaignName,
+    filters.campaignTerm,
     filters.commercialStage,
     filters.assignedSellerEmail,
     filters.unassignedOnly,
@@ -796,7 +322,6 @@ export default function CrmClient({
             <span className="text-xs text-neutral-400">
               {view === "list" ? `${total.toLocaleString()} registros · p. ${page}/${totalPages}` : "Kanban"}
             </span>
-            {syncMessage && <span className="text-xs text-cyan-600">{syncMessage}</span>}
             {/* View toggle */}
             <div className="flex overflow-hidden rounded-lg border border-neutral-200 bg-neutral-50">
               <button
@@ -824,21 +349,19 @@ export default function CrmClient({
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCreateModal(true)}
+              className="flex h-8 items-center gap-1.5 rounded-lg bg-cyan-600 px-3 text-xs font-semibold text-white hover:bg-cyan-700"
+            >
+              <UserPlus className="h-3.5 w-3.5" /> Novo lead
+            </button>
             <ExportMenu
               exportUrl={exportUrl}
               printUrl={printUrl}
               distribuirUrl={distribuirUrl}
               total={total}
             />
-            <button
-              type="button"
-              onClick={handleChatwootSync}
-              disabled={syncingChatwoot}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-500 transition hover:border-neutral-300 hover:text-neutral-700 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${syncingChatwoot ? "animate-spin" : ""}`} />
-              Sincronizar
-            </button>
           </div>
         </div>
 
@@ -1214,6 +737,55 @@ export default function CrmClient({
             </div>
           )}
 
+          {/* Criativo (Meta Ads / tráfego pago) */}
+          {campaignTermOptions.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setActivePopover(activePopover === "criativo" ? null : "criativo")}
+                className={`inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-medium transition ${
+                  filters.campaignTerm
+                    ? "border-neutral-800 bg-neutral-900 text-white"
+                    : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50"
+                }`}
+              >
+                <span className="max-w-[140px] truncate">
+                  {filters.campaignTerm || "Criativo"}
+                </span>
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </button>
+
+              {activePopover === "criativo" && (
+                <div className="absolute left-0 top-full z-50 mt-1.5 max-h-72 w-72 overflow-y-auto rounded-xl border border-neutral-200 bg-white shadow-xl">
+                  <button
+                    type="button"
+                    onClick={() => { updateQuery({ campaignTerm: null, page: "1" }); setActivePopover(null); }}
+                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-xs transition hover:bg-neutral-50 ${
+                      !filters.campaignTerm ? "bg-neutral-900 font-semibold text-white" : "text-neutral-700"
+                    }`}
+                  >
+                    Qualquer
+                  </button>
+                  {campaignTermOptions.map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => { updateQuery({ campaignTerm: opt.value, page: "1" }); setActivePopover(null); }}
+                      className={`flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs transition hover:bg-neutral-50 ${
+                        filters.campaignTerm === opt.value ? "bg-neutral-900 font-semibold text-white" : "text-neutral-700"
+                      }`}
+                    >
+                      <span className="truncate">{opt.value}</span>
+                      <span className={`flex-shrink-0 text-[10px] ${filters.campaignTerm === opt.value ? "text-neutral-300" : "text-neutral-400"}`}>
+                        {opt.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Etapa comercial */}
           {commercial.stages.length > 0 && (
             <div className="relative">
@@ -1345,7 +917,7 @@ export default function CrmClient({
           {activeFiltersCount > 0 && (
             <button
               type="button"
-              onClick={() => updateQuery({ kind: null, treinamentos: null, presenca: null, tag: null, indicacao: null, campaignSource: null, campaignName: null, commercialStage: null, assignedSellerEmail: null, unassignedOnly: null, stars: null, produto: null, page: "1" })}
+              onClick={() => updateQuery({ kind: null, treinamentos: null, presenca: null, tag: null, indicacao: null, campaignSource: null, campaignName: null, campaignTerm: null, commercialStage: null, assignedSellerEmail: null, unassignedOnly: null, stars: null, produto: null, page: "1" })}
               className="inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-medium text-neutral-400 transition hover:bg-neutral-100 hover:text-rose-500"
             >
               <X className="h-3.5 w-3.5" />
@@ -1394,7 +966,7 @@ export default function CrmClient({
         )}
 
         {/* ── TABLE PANE ─────────────────────────────────── */}
-        <div className={`${view === "kanban" ? "hidden" : ""} flex flex-col border-r border-neutral-200 transition-all ${selected ? "hidden lg:flex lg:w-[55%]" : "w-full"}`}>
+        <div className={`${view === "kanban" ? "hidden" : ""} flex w-full flex-col border-r border-neutral-200`}>
 
           {/* Mobile cards */}
           <div className="flex-1 overflow-y-auto p-3 md:hidden">
@@ -1404,7 +976,7 @@ export default function CrmClient({
               </div>
             ) : records.map((lead) => {
               const pipe = pipelineFor(lead.status);
-              const chatwoot = chatwootSnapshots[lead.id] ?? null;
+              const lastNote = lead.notes && lead.notes.length > 0 ? lead.notes[lead.notes.length - 1] : null;
               const isSelected = selectedId === lead.id;
               return (
                 <button
@@ -1430,10 +1002,12 @@ export default function CrmClient({
                           <span className="rounded-md bg-neutral-900 px-2 py-0.5 text-[10px] font-semibold text-white">{getTrainingDisplay(lead)}</span>
                         )}
                         <span className="rounded-md bg-neutral-100 px-2 py-0.5 text-[10px] font-semibold text-neutral-500">{fmtRelative(lead.criadoEm)}</span>
-                        {chatwoot && <span className="rounded-md bg-cyan-50 px-2 py-0.5 text-[10px] font-semibold text-cyan-700">{chatwoot.messageCount} msg</span>}
+                        {lead.notes && lead.notes.length > 0 && (
+                          <span className="rounded-md bg-cyan-50 px-2 py-0.5 text-[10px] font-semibold text-cyan-700">{lead.notes.length} obs.</span>
+                        )}
                       </div>
-                      {chatwoot?.lastMessagePreview && (
-                        <p className="mt-1.5 line-clamp-1 text-xs text-neutral-400">{chatwoot.lastMessagePreview}</p>
+                      {lastNote && (
+                        <p className="mt-1.5 line-clamp-1 text-xs text-neutral-400">{lastNote.content}</p>
                       )}
                     </div>
                   </div>
@@ -1462,7 +1036,7 @@ export default function CrmClient({
                       {orderBy === col.key && <span className="ml-1 text-cyan-500">{orderDirection === "asc" ? "↑" : "↓"}</span>}
                     </th>
                   ))}
-                  <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest text-neutral-400">Chatwoot</th>
+                  <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest text-neutral-400">Observações</th>
                   <th className="px-4 py-2.5 text-left text-[10px] font-bold uppercase tracking-widest text-neutral-400">Etapa</th>
                   <th className="px-4 py-2.5 text-center text-[10px] font-bold uppercase tracking-widest text-neutral-400">Temp</th>
                 </tr>
@@ -1476,7 +1050,7 @@ export default function CrmClient({
                   </tr>
                 ) : records.map((lead) => {
                   const isSelected = selectedId === lead.id;
-                  const chatwoot = chatwootSnapshots[lead.id] ?? null;
+                  const lastNote = lead.notes && lead.notes.length > 0 ? lead.notes[lead.notes.length - 1] : null;
                   const pipe = pipelineFor(lead.status);
                   const avatarBg = pipe.key === "aprovado" ? "bg-emerald-100 text-emerald-700" : pipe.key === "rejeitado" ? "bg-rose-100 text-rose-600" : "bg-neutral-100 text-neutral-600";
                   return (
@@ -1526,23 +1100,19 @@ export default function CrmClient({
                           <p className="truncate text-[10px] text-neutral-400">{lead.commercial.campaignName}</p>
                         )}
                       </td>
-                      {/* Chatwoot */}
+                      {/* Observações */}
                       <td className="px-4 py-3">
-                        {chatwoot ? (
+                        {lastNote ? (
                           <div>
                             <span className="inline-flex items-center gap-1 rounded-md bg-cyan-50 px-2 py-0.5 text-[10px] font-bold text-cyan-700">
-                              {chatwoot.messageCount} MSG
+                              {lead.notes!.length} OBS.
                             </span>
-                            {chatwoot.lastMessagePreview && (
-                              <p className="mt-0.5 max-w-[160px] truncate text-[10px] text-neutral-400">
-                                {chatwoot.lastMessagePreview}
-                              </p>
-                            )}
+                            <p className="mt-0.5 max-w-[160px] truncate text-[10px] text-neutral-400">
+                              {lastNote.content}
+                            </p>
                           </div>
-                        ) : loadingChatwootSnapshots ? (
-                          <span className="text-[10px] text-neutral-300">—</span>
                         ) : (
-                          <span className="text-[10px] text-neutral-300">Sem conversa</span>
+                          <span className="text-[10px] text-neutral-300">Sem observação</span>
                         )}
                       </td>
                       {/* Stage */}
@@ -1584,424 +1154,21 @@ export default function CrmClient({
           )}
         </div>
 
-        {/* ── DETAIL PANE ──────────────────────────────────── */}
-        {selected && (
-          <div className="flex w-full flex-1 flex-col overflow-hidden bg-white lg:w-[45%]">
-
-            {/* Detail header */}
-            <div className="flex-shrink-0 border-b border-neutral-100">
-              <div className="flex items-center gap-3 px-5 py-3">
-                <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold ${
-                  selected.status === "aprovado" ? "bg-emerald-100 text-emerald-700"
-                  : selected.status === "rejeitado" ? "bg-rose-100 text-rose-600"
-                  : "bg-amber-100 text-amber-700"
-                }`}>
-                  {(humanizeName(selected.nome) ?? "?")[0].toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-bold text-neutral-900">{humanizeName(selected.nome) ?? "Sem nome"}</p>
-                  <p className="text-[10px] text-neutral-400">#{selected.id} · {fmtDate(selected.criadoEm)}</p>
-                </div>
-                <button
-                  type="button"
-                  title="Editar lead"
-                  onClick={() => { setEditMode((v) => !v); setDetailTab("info"); }}
-                  className={`flex h-7 w-7 items-center justify-center rounded-lg transition ${editMode ? "bg-cyan-100 text-cyan-700" : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"}`}
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 13l6.586-6.586a2 2 0 012.828 2.828L11.828 15.828a2 2 0 01-1.414.586H7v-3.414a2 2 0 01.586-1.414z" /></svg>
-                </button>
-                <button
-                  type="button"
-                  title="Mesclar com outro lead"
-                  onClick={() => setShowMergeModal(true)}
-                  className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-violet-50 hover:text-violet-600"
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                </button>
-                <button
-                  type="button"
-                  title={deleteConfirmId === selected.id ? "Clique para confirmar a exclusão" : "Excluir lead"}
-                  disabled={deletingLead}
-                  onClick={() => void handleDeleteLead(selected.id)}
-                  className={`flex h-7 items-center justify-center gap-1 rounded-lg px-2 text-[11px] font-semibold transition disabled:opacity-40 ${
-                    deleteConfirmId === selected.id
-                      ? "bg-rose-600 text-white hover:bg-rose-700"
-                      : "text-neutral-400 hover:bg-rose-50 hover:text-rose-600"
-                  }`}
-                >
-                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  {deleteConfirmId === selected.id && <span>Confirmar</span>}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedId(null)}
-                  className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                </button>
-              </div>
-              {/* Abas */}
-              <div className="flex border-t border-neutral-100 px-5">
-                {([
-                  { key: "info", label: "Informações" },
-                  { key: "formularios", label: `Formulários${selected.allEnrollments && selected.allEnrollments.length > 0 ? ` (${selected.allEnrollments.length})` : ""}` },
-                ] as const).map((tab) => (
-                  <button
-                    key={tab.key}
-                    type="button"
-                    onClick={() => setDetailTab(tab.key)}
-                    className={`border-b-2 px-4 py-2 text-xs font-semibold transition ${
-                      detailTab === tab.key
-                        ? "border-cyan-500 text-cyan-700"
-                        : "border-transparent text-neutral-400 hover:text-neutral-700"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Scrollable detail content */}
-            <div className="flex-1 overflow-y-auto">
-
-              {loadingDetailId === selected.id && (
-                <div className="px-5 pt-3">
-                  <p className="rounded-lg bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700">Carregando detalhes...</p>
-                </div>
-              )}
-
-              {/* ─ Edit mode ─ */}
-              {editMode && (
-                <EditLeadPanel
-                  inscricao={selected}
-                  onSaved={(updated) => {
-                    setRecords((prev) => prev.map((r) => r.id === updated.id ? { ...r, ...updated } : r));
-                    setEditMode(false);
-                  }}
-                  onCancel={() => setEditMode(false)}
-                />
-              )}
-
-              {/* ─ Aba Formulários ─ */}
-              {!editMode && detailTab === "formularios" && (
-                <div className="px-5 py-4">
-                  <FormHistoryView inscricao={selected} />
-                </div>
-              )}
-
-              {!editMode && detailTab === "info" && (
-              <>
-
-              {/* ─ WhatsApp + actions ─ */}
-              <div className="border-b border-neutral-100 px-5 py-4">
-                <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-neutral-400">Contato</p>
-                {selected.telefone ? (
-                  <div className="space-y-2">
-                    {chatwootChannels.length > 0 && (
-                      <select
-                        value={activeChatwootInboxId}
-                        onChange={(e) => handleChatwootInboxChange(e.target.value)}
-                        disabled={Boolean(sharedFirstContactInboxId)}
-                        className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-xs text-neutral-700 focus:border-cyan-400 focus:outline-none"
-                      >
-                        {chatwootChannels.map((ch) => (
-                          <option key={ch.id} value={ch.id}>
-                            {ch.name}{fmtEvolutionStatus(ch) ? ` · ${fmtEvolutionStatus(ch)}` : ""}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <div className="flex gap-2">
-                      <a
-                        href={selectedChatwootOpenUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#25D366] py-2 text-xs font-bold text-white transition hover:bg-[#1ebe5c]"
-                      >
-                        <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z"/></svg>
-                        {selected.telefone}
-                      </a>
-                      <a
-                        href={`tel:+55${cleanPhone(selected.telefone)}`}
-                        className="flex items-center gap-1.5 rounded-lg bg-neutral-100 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-200"
-                      >
-                        📞 Ligar
-                      </a>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-neutral-400">Sem telefone</p>
-                )}
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <InfoCard label="Cidade" value={selected.cidade ?? "—"} />
-                  <InfoCard label="Indicador" value={humanizeName(selected.recrutadorNome) ?? "—"} sub={selected.recrutadorCodigo ?? undefined} />
-                </div>
-              </div>
-
-              {/* ─ Pipeline + Stars ─ */}
-              <div className="flex items-center gap-4 border-b border-neutral-100 px-5 py-3">
-                <div className="flex gap-1">
-                  {PIPELINE.map((p) => {
-                    const active = selected.status === p.key || (!selected.status && p.key === "aguardando");
-                    return (
-                      <button
-                        key={p.key}
-                        type="button"
-                        disabled={savingStatus !== null}
-                        onClick={() => handleStatusChange(selected.id, p.key as InscricaoStatus)}
-                        className={`h-7 rounded-lg px-2.5 text-[11px] font-semibold transition ${
-                          active ? `${p.bg} ${p.color} ring-2 ring-inset ring-current/30` : "bg-neutral-100 text-neutral-400 hover:bg-neutral-200"
-                        } ${savingStatus === p.key ? "animate-pulse" : ""} disabled:opacity-50`}
-                      >
-                        {p.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="ml-auto flex gap-0.5" onMouseLeave={() => setStarsHover(0)}>
-                  {[1, 2, 3, 4, 5].map((star) => {
-                    const filled = starsHover > 0 ? star <= starsHover : star <= (selected.stars ?? 0);
-                    return (
-                      <button
-                        key={star}
-                        type="button"
-                        disabled={savingStars}
-                        onMouseEnter={() => setStarsHover(star)}
-                        onClick={() => handleStarClick(star)}
-                        className={`text-lg leading-none transition-transform hover:scale-110 disabled:opacity-40 ${filled ? "text-amber-400" : "text-neutral-200"}`}
-                      >★</button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ─ Comercial ─ */}
-              <div className="border-b border-neutral-100 px-5 py-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">Comercial</p>
-                  <span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${COMMERCIAL_STAGE_STYLE[selected.commercial?.stage ?? "novo"].className}`}>
-                    {COMMERCIAL_STAGE_STYLE[selected.commercial?.stage ?? "novo"].label}
-                  </span>
-                </div>
-                {commercialMessage && (
-                  <p className="mb-2 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600">{commercialMessage}</p>
-                )}
-                <div className="space-y-2">
-                  <select
-                    value={selected.commercial?.stage ?? "novo"}
-                    onChange={(e) => handleCommercialStageChange(e.target.value as CommercialStage)}
-                    disabled={commercialSaving}
-                    className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-                  >
-                    {commercial.stages.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
-                  </select>
-                  {commercial.isSupervisor && (
-                    <select
-                      value={selected.commercial?.assignedSellerId ?? ""}
-                      onChange={(e) => handleCommercialAssign(e.target.value)}
-                      disabled={commercialSaving}
-                      className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-                    >
-                      <option value="">Repassar para vendedor</option>
-                      {commercial.sellers.map((s) => <option key={s.chatwootUserId} value={s.chatwootUserId}>{s.name}{s.isSupervisor ? " (supervisor)" : ""}</option>)}
-                    </select>
-                  )}
-                  <div className="flex gap-2">
-                    <select
-                      value={selected.commercial?.closingInboxId ?? ""}
-                      onChange={(e) => { if (e.target.value) void handleOpenClosing(e.target.value); }}
-                      disabled={commercialSaving}
-                      className="flex-1 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-                    >
-                      <option value="">Abrir fechamento em canal privado</option>
-                      {chatwootChannels.map((ch) => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
-                    </select>
-                    {selected.commercial?.closingConversationUrl && (
-                      <a href={selected.commercial.closingConversationUrl} target="_blank" rel="noopener noreferrer"
-                        className="flex items-center rounded-lg bg-neutral-900 px-3 text-xs font-bold text-white hover:bg-neutral-700">
-                        Abrir
-                      </a>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <InfoCard label="Vendedor" value={selected.commercial?.assignedSellerName ?? "Sem responsável"} />
-                  <InfoCard label="Campanha" value={selected.commercial?.campaignSource || "—"} sub={selected.commercial?.campaignName ?? undefined} />
-                </div>
-              </div>
-
-              {/* ─ Chatwoot ─ */}
-              <div className="border-b border-neutral-100 px-5 py-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">Chatwoot</p>
-                  {selectedChatwoot?.conversationUrl ? (
-                    <a href={selectedChatwoot.conversationUrl} target="_blank" rel="noopener noreferrer"
-                      className="rounded-md bg-cyan-600 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-cyan-700">
-                      Abrir conversa
-                    </a>
-                  ) : null}
-                </div>
-                {selectedChatwoot ? (
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-2">
-                      <InfoCard label="Mensagens" value={String(selectedChatwoot.messageCount)} />
-                      <InfoCard label="Recebidas" value={String(selectedChatwoot.incomingCount)} />
-                      <InfoCard label="Enviadas" value={String(selectedChatwoot.outgoingCount)} />
-                    </div>
-                    {selectedChatwoot.lastMessagePreview && (
-                      <div className="rounded-lg bg-neutral-50 px-3 py-2.5 ring-1 ring-neutral-100">
-                        <p className="text-[10px] font-semibold uppercase text-neutral-400">Última mensagem · {fmtRelative(selectedChatwoot.lastMessageAt ?? "")}</p>
-                        <p className="mt-1 text-sm text-neutral-800">{selectedChatwoot.lastMessagePreview}</p>
-                      </div>
-                    )}
-                    {selectedChatwoot.organization.displayTags.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {selectedChatwoot.organization.displayTags.slice(0, 8).map((tag) => (
-                          <TagBadge key={tag} tag={tagFromDashboardDisplay(tag)} size="xs" />
-                        ))}
-                      </div>
-                    )}
-                    {selectedChatwoot.recentMessages.slice(0, 3).map((msg) => (
-                      <div key={msg.id} className={`rounded-lg p-2.5 text-xs ${msg.direction === "incoming" ? "bg-emerald-50 text-emerald-900" : "bg-sky-50 text-sky-900"}`}>
-                        <div className="mb-0.5 flex justify-between">
-                          <span className="font-semibold">{fmtMessageDirection(msg.direction)}</span>
-                          <span className="text-[10px] opacity-60">{fmtRelative(msg.createdAt)}</span>
-                        </div>
-                        <p className="line-clamp-2">{msg.content}</p>
-                        {msg.direction === "outgoing" && msg.readStatus && (
-                          <div className="mt-1">
-                            {msg.readStatus === "read" ? (
-                              <span className="text-[10px] font-semibold text-blue-600">✓✓ Lida</span>
-                            ) : msg.readStatus === "delivered" ? (
-                              <span className="text-[10px] opacity-60">✓✓ Entregue</span>
-                            ) : msg.readStatus === "sent" ? (
-                              <span className="text-[10px] opacity-60">✓ Enviada</span>
-                            ) : msg.readStatus === "failed" ? (
-                              <span className="text-[10px] font-semibold text-rose-600">✗ Falha</span>
-                            ) : null}
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div>
-                    <p className="mb-2 text-xs text-neutral-400">Nenhum contato vinculado por telefone/e-mail.</p>
-                    <button type="button" onClick={handleChatwootSync} disabled={syncingChatwoot}
-                      className="w-full rounded-lg border border-cyan-200 bg-cyan-50 py-2 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 disabled:opacity-60">
-                      {syncingChatwoot ? "Sincronizando..." : "Sincronizar contato"}
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* ─ Registrar atividade ─ */}
-              <div className="border-b border-neutral-100 px-5 py-4">
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-neutral-400">Registrar Atividade</p>
-                <form onSubmit={handleNoteSubmit} className="space-y-2">
-                  <div className="flex gap-1">
-                    {([
-                      { key: "note", label: "Nota" },
-                      { key: "whatsapp", label: "WhatsApp" },
-                      { key: "call", label: "Ligação" },
-                      { key: "email", label: "E-mail" },
-                    ] as const).map((t) => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => setNoteType(t.key)}
-                        className={`h-7 rounded-lg px-2.5 text-[11px] font-semibold transition ${
-                          noteType === t.key ? "bg-neutral-900 text-white" : "bg-neutral-100 text-neutral-500 hover:bg-neutral-200"
-                        }`}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                  <textarea
-                    value={noteText}
-                    onChange={(e) => setNoteText(e.target.value)}
-                    placeholder="Descreva a atividade..."
-                    rows={2}
-                    disabled={savingNote}
-                    required
-                    className="w-full resize-none rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-sm placeholder:text-neutral-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-cyan-100"
-                  />
-                  <button
-                    type="submit"
-                    disabled={savingNote || !noteText.trim()}
-                    className="w-full rounded-lg bg-neutral-900 py-2 text-xs font-bold text-white hover:bg-neutral-700 disabled:opacity-40"
-                  >
-                    {savingNote ? "Salvando..." : "Registrar"}
-                  </button>
-                </form>
-              </div>
-
-              {/* ─ Timeline ─ */}
-              <div className="px-5 py-4">
-                <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-neutral-400">Histórico</p>
-                {timeline.length === 0 ? (
-                  <p className="py-4 text-center text-xs text-neutral-400">Nenhuma atividade registrada.</p>
-                ) : (
-                  <div className="relative space-y-0">
-                    <div className="absolute bottom-0 left-3.5 top-0 w-px bg-neutral-100" />
-                    {timeline.map((event) => (
-                      <div key={event.id} className="relative flex gap-3 pb-3">
-                        <div className="relative z-10 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white text-sm ring-1 ring-neutral-200">
-                          {event.icon}
-                        </div>
-                        <div className={`min-w-0 flex-1 rounded-lg border px-3 py-2 ${event.color}`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
-                              {event.type === "chatwoot" ? "Chatwoot" : event.type === "whatsapp" ? "WhatsApp" : event.type === "note" ? "Nota" : event.type === "status" ? "Status" : "Sistema"}
-                            </span>
-                            <span className="whitespace-nowrap text-[10px] text-neutral-400">{fmtRelative(event.date)}</span>
-                          </div>
-                          <p className="mt-0.5 text-xs text-neutral-800">{event.content}</p>
-                          {event.isOutgoing && event.readStatus && (
-                            <div className="mt-1 flex items-center gap-1">
-                              {event.readStatus === "read" ? (
-                                <span className="text-[10px] font-semibold text-blue-600" title="Lida pelo contato">✓✓ Lida</span>
-                              ) : event.readStatus === "delivered" ? (
-                                <span className="text-[10px] text-neutral-400" title="Entregue">✓✓ Entregue</span>
-                              ) : event.readStatus === "sent" ? (
-                                <span className="text-[10px] text-neutral-400" title="Enviada">✓ Enviada</span>
-                              ) : event.readStatus === "failed" ? (
-                                <span className="text-[10px] font-semibold text-rose-600" title="Falha no envio">✗ Falha</span>
-                              ) : null}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Presence */}
-              {selected.presencaValidada && (
-                <div className="border-t border-neutral-100 px-5 py-4">
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-neutral-400">Presença</p>
-                  <div className="flex items-center gap-2">
-                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${selected.presencaAprovada ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                      {selected.presencaAprovada ? "✓ Presente" : "⚠ Insuficiente"}
-                    </span>
-                    {selected.presencaParticipanteNome && (
-                      <span className="text-xs text-neutral-500">como {selected.presencaParticipanteNome}</span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="h-4" />
-
-              </>
-              )}
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* ─ Perfil do lead (pop-up centralizado) ─ */}
+      <LeadProfileModal
+        leadId={selectedId}
+        onClose={() => setSelectedId(null)}
+        onUpdate={syncRecord}
+        onDelete={(id: number) => {
+          setRecords((prev) => prev.filter((r) => r.id !== id));
+          setSelectedId(null);
+        }}
+        trainingOptions={trainingOptions}
+        recruiterOptions={recruiterOptions}
+        commercial={commercial}
+      />
 
       {/* ─ Merge modal (fora do layout) ─ */}
       {showMergeModal && selected && (
@@ -2014,6 +1181,22 @@ export default function CrmClient({
           onClose={() => setShowMergeModal(false)}
         />
       )}
+
+      {/* ─ Create lead modal (fora do layout) ─ */}
+      {showCreateModal && (
+        <CreateLeadModal
+          onCreated={({ inscricao }) => {
+            setRecords((prev) =>
+              prev.some((r) => r.id === inscricao.id)
+                ? prev.map((r) => (r.id === inscricao.id ? { ...r, ...inscricao } : r))
+                : [inscricao, ...prev]
+            );
+            setSelectedId(inscricao.id);
+            setShowCreateModal(false);
+          }}
+          onClose={() => setShowCreateModal(false)}
+        />
+      )}
     </div>
   );
 }
@@ -2022,12 +1205,4 @@ export default function CrmClient({
 
 const filterSelectClass = "h-8 w-full rounded-lg border border-neutral-200 bg-white px-2.5 text-xs text-neutral-700 focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-100";
 
-function InfoCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="rounded-lg bg-neutral-50 px-3 py-2 ring-1 ring-neutral-100">
-      <p className="text-[9px] font-bold uppercase tracking-widest text-neutral-400">{label}</p>
-      <p className="mt-0.5 truncate text-xs font-semibold text-neutral-800">{value}</p>
-      {sub && <p className="truncate text-[10px] text-neutral-400">{sub}</p>}
-    </div>
-  );
-}
+

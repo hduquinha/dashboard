@@ -1,5 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
-import { getPool } from "@/lib/db";
+import { ingestVozupLead } from "@/lib/vozupLeadIngest";
 
 export const dynamic = "force-dynamic";
 
@@ -8,9 +8,8 @@ const ALLOWED_ORIGINS = new Set([
   "https://escolavozup.com",
   "https://vozup-workshop.vercel.app",
   "https://aula-experimental.vercel.app",
+  "https://landingpage-vozup.vercel.app",
 ]);
-
-const NOTIFY_NUMBER = "5511988874277";
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, "");
@@ -24,7 +23,8 @@ function corsHeaders(origin: string | null) {
   const allowed = origin && (
     ALLOWED_ORIGINS.has(origin) ||
     /^https:\/\/vozup-workshop-.*\.vercel\.app$/.test(origin) ||
-    /^https:\/\/aula-experimental-.*\.vercel\.app$/.test(origin)
+    /^https:\/\/aula-experimental-.*\.vercel\.app$/.test(origin) ||
+    /^https:\/\/landingpage-vozup-.*\.vercel\.app$/.test(origin)
   );
   return {
     "Access-Control-Allow-Origin": allowed ? origin! : "",
@@ -48,44 +48,6 @@ async function parseBody(req: NextRequest): Promise<Record<string, unknown>> {
   }
 }
 
-function buildNotifyMessage(payload: Record<string, unknown>): string {
-  const nome = String(payload.nome || payload.name || "—");
-  const tel = String(payload.telefone || payload.whatsapp || payload.phone || "—");
-  const objetivo = String(payload.objetivo || payload.interesse_workshop || "—");
-  const origem = String(payload.origem || "VozUP");
-  const hora = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo" });
-
-  return [
-    "🎤 *Novo lead VozUP*",
-    `Nome: ${nome}`,
-    `WhatsApp: ${tel}`,
-    `Objetivo: ${objetivo}`,
-    `Origem: ${origem}`,
-    `Recebido: ${hora}`,
-  ].join("\n");
-}
-
-async function sendWhatsApp(text: string): Promise<void> {
-  const baseUrl = (process.env.UAZAPI_SERVER_URL ?? "https://vozup.uazapi.com").replace(/\/+$/, "");
-  const token = process.env.UAZAPI_INSTANCE_TOKEN?.trim();
-  if (!token) {
-    console.warn("[vozup/lead] UAZAPI_INSTANCE_TOKEN não configurado — WhatsApp ignorado.");
-    return;
-  }
-
-  const res = await fetch(`${baseUrl}/send/text`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", token },
-    body: JSON.stringify({ number: NOTIFY_NUMBER, text, readchat: false }),
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    console.error("[vozup/lead] Falha UazAPI:", res.status, body.slice(0, 200));
-  }
-}
-
 export async function OPTIONS(req: NextRequest) {
   const origin = req.headers.get("origin");
   return new NextResponse(null, { status: 204, headers: corsHeaders(origin) });
@@ -103,7 +65,9 @@ export async function POST(req: NextRequest) {
   const metaFinal = (raw._meta as Record<string, unknown> | undefined)?.final;
   const isFinal = raw._final === true || raw._final === "true" || metaFinal === true;
 
-  const origemValor = String(raw.origem || "VozUP Landing");
+  // Origem dinâmica: preserva o valor enviado pela landing page.
+  // O padrão é "Landing Page VozUP" para compatibilidade com os filtros da Dashboard.
+  const origemValor = String(raw.origem || "Landing Page VozUP").trim();
   const isLandingPage = origemValor.toLowerCase().includes("landing");
 
   const payload = {
@@ -113,32 +77,19 @@ export async function POST(req: NextRequest) {
     objetivo,
     unidade_negocio: "Voz UP",
     origem: origemValor,
+    // treinamento_nome = origemValor garante que o sistema de etiquetas
+    // gere "Entrada: <nome da landing page>" automaticamente.
+    treinamento_nome: origemValor,
     _final: "true",
     aguarda_distribuicao: isLandingPage ? "true" : undefined,
   };
 
-  // Salvar no banco
-  let savedId: number | null = null;
-  try {
-    const pool = getPool();
-    const result = await pool.query<{ id: number }>(
-      "INSERT INTO inscricoes.inscricoes (payload) VALUES ($1) RETURNING id",
-      [JSON.stringify(payload)]
-    );
-    savedId = result.rows[0]?.id ?? null;
-  } catch (err) {
-    console.error("[vozup/lead] Erro ao salvar no banco:", err);
+  const savedId = await ingestVozupLead(payload, { notify: isFinal || Boolean(nome) });
+  if (savedId === null) {
     return NextResponse.json(
       { ok: false, error: "Erro ao salvar cadastro." },
       { status: 500, headers }
     );
-  }
-
-  // Notificar WhatsApp (fire and forget)
-  if (isFinal || nome) {
-    sendWhatsApp(buildNotifyMessage(payload)).catch((err) => {
-      console.error("[vozup/lead] Erro ao enviar WhatsApp:", err);
-    });
   }
 
   return NextResponse.json({ ok: true, id: savedId }, { headers });

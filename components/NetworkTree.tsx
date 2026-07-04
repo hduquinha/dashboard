@@ -2,11 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useState, type ReactElement } from "react";
-import InscricaoDetails from "@/components/InscricaoDetails";
+import { LeadProfileModal } from "@/components/LeadProfileModal";
 import type { NetworkNode, NetworkTreeFocus, NetworkTreeStats } from "@/lib/network";
 import type { TrainingOption } from "@/types/training";
 import type { Recruiter } from "@/lib/recruiters";
-import type { InscricaoItem } from "@/types/inscricao";
 import { humanizeName } from "@/lib/utils";
 
 interface NetworkTreeProps {
@@ -53,9 +52,7 @@ function NetworkTreeInner({
 }: NetworkTreeInnerProps) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set(initialExpandedIds));
-  const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
-  const [isDetailsLoading, setIsDetailsLoading] = useState(false);
-  const [pendingNodeId, setPendingNodeId] = useState<number | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
 
   const displayedRoots = useMemo(() => {
@@ -79,42 +76,21 @@ function NetworkTreeInner({
   }
 
   const loadInscricaoDetails = useCallback(
-    async (node: NetworkNode) => {
+    (node: NetworkNode) => {
       if (node.id <= 0) {
         setDetailsError("Perfis virtuais não podem ser editados diretamente.");
-        setSelectedInscricao(null);
+        setSelectedLeadId(null);
         return;
       }
-
       setDetailsError(null);
-      setPendingNodeId(node.id);
-      setIsDetailsLoading(true);
-
-      try {
-        const response = await fetch(`/api/inscricoes/${node.id}`);
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-          setDetailsError(payload?.error ?? "Não foi possível carregar o cadastro.");
-          setSelectedInscricao(null);
-          return;
-        }
-
-        const data = (await response.json()) as { inscricao?: InscricaoItem };
-        setSelectedInscricao(data.inscricao ?? null);
-      } catch (error) {
-        console.error("Failed to load inscrição", error);
-        setDetailsError("Erro inesperado ao abrir o cadastro.");
-      } finally {
-        setIsDetailsLoading(false);
-        setPendingNodeId(null);
-      }
+      setSelectedLeadId(node.id);
     },
     []
   );
 
   const handleNodeCardClick = useCallback(
     (node: NetworkNode) => {
-      void loadInscricaoDetails(node);
+      loadInscricaoDetails(node);
     },
     [loadInscricaoDetails]
   );
@@ -123,7 +99,6 @@ function NetworkTreeInner({
     const hasChildren = node.children.length > 0;
     const isExpanded = hasChildren && expanded.has(node.id);
     const isFocus = focus?.nodeId === node.id;
-    const isLoadingNode = pendingNodeId === node.id && isDetailsLoading;
 
     return (
       <div className="flex flex-col items-center">
@@ -139,9 +114,8 @@ function NetworkTreeInner({
           }}
           className={`relative flex cursor-pointer flex-col items-center rounded-2xl border-2 px-4 py-3 text-center shadow-md transition hover:-translate-y-1 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-sky-500 ${
             isFocus ? "border-sky-600 bg-sky-50" : "border-neutral-200 bg-white"
-          } ${isLoadingNode ? "opacity-70" : ""}`}
+          }`}
           aria-pressed={isFocus}
-          aria-busy={isLoadingNode}
         >
           <span
             className={`mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full text-lg ${
@@ -302,10 +276,9 @@ function NetworkTreeInner({
         ) : null}
       </div>
 
-      <InscricaoDetails
-        inscricao={selectedInscricao}
-        onClose={() => setSelectedInscricao(null)}
-        onUpdate={(updated) => setSelectedInscricao(updated)}
+      <LeadProfileModal
+        leadId={selectedLeadId}
+        onClose={() => setSelectedLeadId(null)}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
       />

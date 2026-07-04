@@ -102,7 +102,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
           <p className="text-sm text-[rgb(var(--slate-11))]">
             {treinamentoSelecionado && selectedTrainingLabel
               ? `Visualizando: ${selectedTrainingLabel}`
-              : "Resumo comercial da operação integrada ao Chatwoot."}
+              : "Resumo comercial da operação."}
           </p>
         </div>
         <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
@@ -124,7 +124,7 @@ export default async function DashboardPage(props: DashboardPageProps) {
             className="flex h-10 items-center justify-center gap-2 rounded-lg border border-[rgb(var(--border-strong))] bg-[rgb(var(--surface-1))] px-4 text-sm font-medium text-[rgb(var(--slate-11))] shadow-[0_1px_2px_rgba(28,32,36,0.04)] transition hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
           >
             <CalendarDays className="h-4 w-4" />
-            Ver Produtos
+            Ver Instituto UP
           </Link>
         </div>
       </header>

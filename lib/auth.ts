@@ -10,58 +10,28 @@ import {
 const AUTHORIZATION_PREFIX = "Bearer ";
 const SESSION_VALUE_SEPARATOR = ".";
 const SESSION_VERSION = "v1";
-const CHATWOOT_SESSION_VERSION = "cw1";
-const CHATWOOT_SESSION_PREFIX = "cw1";
-const MFA_CHALLENGE_VERSION = "mfa1";
-const MFA_CHALLENGE_PREFIX = "mfa1";
+const DASHBOARD_SESSION_VERSION = "ds1";
+const DASHBOARD_SESSION_PREFIX = "ds1";
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30;
 const SESSION_CLOCK_SKEW_SECONDS = 60;
-const MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
 
 export const DASHBOARD_COOKIE_NAME = "dashboardToken";
-export const DASHBOARD_MFA_COOKIE_NAME = "dashboardChatwootMfa";
-
-export interface DashboardUserAccount {
-  id: number;
-  name?: string | null;
-  status?: string | null;
-  role?: string | null;
-  permissions?: string[] | null;
-}
 
 export interface DashboardUser {
   id: number;
   email: string;
   name: string;
-  displayName?: string | null;
-  avatarUrl?: string | null;
-  role?: string | null;
-  accountId?: number | null;
-  accounts?: DashboardUserAccount[];
-}
-
-export interface DashboardChatwootAuthHeaders {
-  accessToken: string;
-  tokenType: string;
-  client: string;
-  expiry: string;
-  uid: string;
+  role: "admin" | "member";
+  isSupervisor: boolean;
+  /** Quando true, a secao "Leads VozUP" fica oculta e /vozup bloqueado. */
+  institutoUpOnly: boolean;
 }
 
 export interface DashboardSession {
-  version: typeof CHATWOOT_SESSION_VERSION;
+  version: typeof DASHBOARD_SESSION_VERSION;
   issuedAtSeconds: number;
   expiresAtSeconds: number;
-  auth: DashboardChatwootAuthHeaders;
   user: DashboardUser;
-}
-
-export interface MfaChallenge {
-  version: typeof MFA_CHALLENGE_VERSION;
-  issuedAtSeconds: number;
-  expiresAtSeconds: number;
-  token: string;
-  email?: string | null;
 }
 
 export class UnauthorizedError extends Error {
@@ -235,34 +205,14 @@ function isDashboardSessionPayload(value: unknown): value is DashboardSession {
 
   const session = value as DashboardSession;
   return (
-    session.version === CHATWOOT_SESSION_VERSION &&
+    session.version === DASHBOARD_SESSION_VERSION &&
     typeof session.issuedAtSeconds === "number" &&
     typeof session.expiresAtSeconds === "number" &&
-    Boolean(session.auth) &&
-    typeof session.auth.accessToken === "string" &&
-    typeof session.auth.tokenType === "string" &&
-    typeof session.auth.client === "string" &&
-    typeof session.auth.expiry === "string" &&
-    typeof session.auth.uid === "string" &&
     Boolean(session.user) &&
     typeof session.user.id === "number" &&
     typeof session.user.email === "string" &&
-    typeof session.user.name === "string"
-  );
-}
-
-function isMfaChallengePayload(value: unknown): value is MfaChallenge {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const challenge = value as MfaChallenge;
-  return (
-    challenge.version === MFA_CHALLENGE_VERSION &&
-    typeof challenge.issuedAtSeconds === "number" &&
-    typeof challenge.expiresAtSeconds === "number" &&
-    typeof challenge.token === "string" &&
-    challenge.token.length > 0
+    typeof session.user.name === "string" &&
+    (session.user.role === "admin" || session.user.role === "member")
   );
 }
 
@@ -309,34 +259,23 @@ export function createSessionValue(now = Date.now()): string | null {
   return `${payload}${SESSION_VALUE_SEPARATOR}${signature}`;
 }
 
-export function createChatwootSessionValue(
-  input: {
-    auth: DashboardChatwootAuthHeaders;
-    user: DashboardUser;
-  },
+export function createDashboardSessionValue(
+  input: { user: DashboardUser },
   now = Date.now()
 ): string | null {
   const issuedAtSeconds = Math.floor(now / 1000);
-  const headerExpirySeconds = Number.parseInt(input.auth.expiry, 10);
-  const expiresAtSeconds = Number.isFinite(headerExpirySeconds)
-    ? headerExpirySeconds
-    : issuedAtSeconds + SESSION_TTL_SECONDS;
+  const expiresAtSeconds = issuedAtSeconds + SESSION_TTL_SECONDS;
 
-  if (expiresAtSeconds <= issuedAtSeconds) {
-    return null;
-  }
-
-  return encodeEncryptedPayload(CHATWOOT_SESSION_PREFIX, {
-    version: CHATWOOT_SESSION_VERSION,
+  return encodeEncryptedPayload(DASHBOARD_SESSION_PREFIX, {
+    version: DASHBOARD_SESSION_VERSION,
     issuedAtSeconds,
     expiresAtSeconds,
-    auth: input.auth,
     user: input.user,
   } satisfies DashboardSession);
 }
 
 export function getDashboardSession(candidate?: string | null, now = Date.now()): DashboardSession | null {
-  const session = decodeEncryptedPayload<DashboardSession>(CHATWOOT_SESSION_PREFIX, candidate);
+  const session = decodeEncryptedPayload<DashboardSession>(DASHBOARD_SESSION_PREFIX, candidate);
   if (!isDashboardSessionPayload(session)) {
     return null;
   }
@@ -346,38 +285,6 @@ export function getDashboardSession(candidate?: string | null, now = Date.now())
   }
 
   return session;
-}
-
-export function createMfaChallengeValue(
-  token: string,
-  email?: string | null,
-  now = Date.now()
-): string | null {
-  if (!token.trim()) {
-    return null;
-  }
-
-  const issuedAtSeconds = Math.floor(now / 1000);
-  return encodeEncryptedPayload(MFA_CHALLENGE_PREFIX, {
-    version: MFA_CHALLENGE_VERSION,
-    issuedAtSeconds,
-    expiresAtSeconds: issuedAtSeconds + MFA_CHALLENGE_TTL_SECONDS,
-    token,
-    email: email ?? null,
-  } satisfies MfaChallenge);
-}
-
-export function readMfaChallengeValue(candidate?: string | null, now = Date.now()): MfaChallenge | null {
-  const challenge = decodeEncryptedPayload<MfaChallenge>(MFA_CHALLENGE_PREFIX, candidate);
-  if (!isMfaChallengePayload(challenge)) {
-    return null;
-  }
-
-  if (!isWithinWindow(challenge.issuedAtSeconds, challenge.expiresAtSeconds, now)) {
-    return null;
-  }
-
-  return challenge;
 }
 
 export function isValidToken(candidate?: string | null, now = Date.now()): boolean {

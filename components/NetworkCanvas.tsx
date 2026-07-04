@@ -17,8 +17,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 import dagre from "dagre";
 import { NetworkNode } from "@/lib/network";
-import InscricaoDetails from "@/components/InscricaoDetails";
-import { InscricaoItem } from "@/types/inscricao";
+import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { TrainingOption } from "@/types/training";
 import { Recruiter } from "@/lib/recruiters";
 
@@ -306,7 +305,7 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [limits, setLimits] = useState<Record<string, number>>({});
-  const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [groupLeads, setGroupLeads] = useState<NetworkNode[] | null>(null);
   
   // Initialize expanded state: roots expanded by default
@@ -340,16 +339,8 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
     setGroupLeads(null);
   }, [roots]);
 
-  const handleDetails = useCallback(async (id: number) => {
-    try {
-      const res = await fetch(`/api/inscricoes/${id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setSelectedInscricao(data.inscricao);
-      }
-    } catch (error) {
-      console.error("Failed to load details", error);
-    }
+  const handleDetails = useCallback((id: number) => {
+    setSelectedLeadId(id);
   }, []);
 
   const handleLoadMore = useCallback((parentId: string) => {
@@ -446,10 +437,9 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
         </div>
       )}
 
-      <InscricaoDetails
-        inscricao={selectedInscricao}
-        onClose={() => setSelectedInscricao(null)}
-        onUpdate={(updated) => setSelectedInscricao(updated)}
+      <LeadProfileModal
+        leadId={selectedLeadId}
+        onClose={() => setSelectedLeadId(null)}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
       />

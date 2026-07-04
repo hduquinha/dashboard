@@ -9,14 +9,12 @@ import type { DashboardUser } from "@/lib/auth";
 
 interface DashboardLayoutClientProps {
   children: React.ReactNode;
-  chatwootUrl?: string | null;
   currentUser?: DashboardUser | null;
   duplicateCount: number;
 }
 
 export default function DashboardLayoutClient({
   children,
-  chatwootUrl,
   currentUser,
   duplicateCount,
 }: DashboardLayoutClientProps) {
@@ -37,16 +35,15 @@ export default function DashboardLayoutClient({
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2">
-            <Image src="/chatwoot-logo-thumbnail.svg" alt="Chatwoot" width={24} height={24} />
+            <Image src="/logo-up.svg" alt="Instituto UP" width={24} height={24} />
             <span className="text-sm font-semibold text-[rgb(var(--slate-12))]">
-              CRM Chatwoot
+              CRM
             </span>
           </div>
         </div>
       </div>
 
       <ModernSidebar
-        chatwootUrl={chatwootUrl}
         currentUser={currentUser}
         duplicateCount={duplicateCount}
         isCollapsed={isCollapsed}

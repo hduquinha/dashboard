@@ -9,11 +9,9 @@ import {
   CalendarDays,
   ChevronDown,
   ClipboardList,
-  ExternalLink,
   FileText,
   LayoutDashboard,
   LogOut,
-  MessageCircle,
   MoreHorizontal,
   Network,
   PanelLeftClose,
@@ -43,7 +41,6 @@ const ICON_MAP: Record<string, typeof LayoutDashboard> = {
 };
 
 interface ModernSidebarProps {
-  chatwootUrl?: string | null;
   currentUser?: DashboardUser | null;
   duplicateCount?: number;
   isCollapsed: boolean;
@@ -53,17 +50,16 @@ interface ModernSidebarProps {
 }
 
 function getInitials(user?: DashboardUser | null) {
-  const source = user?.displayName || user?.name || user?.email || "CW";
+  const source = user?.name || user?.email || "U";
   return source
     .split(/\s+/)
     .filter(Boolean)
     .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase())
+    .map((part: string) => part[0]?.toUpperCase())
     .join("");
 }
 
 export default function ModernSidebar({
-  chatwootUrl,
   currentUser,
   duplicateCount = 0,
   isCollapsed,
@@ -176,8 +172,8 @@ export default function ModernSidebar({
             <div className="flex min-w-0 items-center gap-2">
               <div className="grid size-8 flex-shrink-0 place-content-center">
                 <Image
-                  src="/chatwoot-logo-thumbnail.svg"
-                  alt="Chatwoot"
+                  src="/logo-up.svg"
+                  alt="Instituto UP"
                   width={24}
                   height={24}
                   className="size-6"
@@ -188,7 +184,7 @@ export default function ModernSidebar({
                   <div className="h-3 w-px flex-shrink-0 bg-[rgb(var(--border-strong))]" />
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold leading-5 text-[rgb(var(--slate-12))]">
-                      CRM Chatwoot
+                      CRM
                     </p>
                     <p className="truncate text-xs text-[rgb(var(--slate-10))]">
                       Pipeline comercial
@@ -214,35 +210,6 @@ export default function ModernSidebar({
             >
               <X size={18} />
             </button>
-          </div>
-
-          <div className={cn("flex gap-2", showFullContent ? "" : "justify-center")}>
-            {chatwootUrl ? (
-              <a
-                href={chatwootUrl}
-                target="_blank"
-                rel="noreferrer"
-                className={cn(
-                  "flex h-8 items-center justify-center gap-2 rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--button-color))] text-sm font-medium text-[rgb(var(--slate-11))] transition hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]",
-                  showFullContent ? "w-full px-2" : "size-8"
-                )}
-                title="Abrir Chatwoot"
-              >
-                <MessageCircle size={16} />
-                {showFullContent ? <span className="truncate">Abrir Chatwoot</span> : null}
-                {showFullContent ? <ExternalLink size={14} /> : null}
-              </a>
-            ) : (
-              <div
-                className={cn(
-                  "flex h-8 items-center justify-center rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--button-color))] text-[rgb(var(--slate-10))]",
-                  showFullContent ? "w-full px-2" : "size-8"
-                )}
-                title="Chatwoot nao configurado"
-              >
-                <MessageCircle size={16} />
-              </div>
-            )}
           </div>
         </div>
 
@@ -284,23 +251,25 @@ export default function ModernSidebar({
           ) : null}
 
           {/* ── VozUP ─────────────────────────────────────────── */}
-          <div className="mt-4 border-t border-[rgb(var(--border-weak))] pt-4">
-            {showFullContent ? (
-              <div className="mb-1 flex items-center gap-1.5 px-2">
-                <span className="text-base leading-none">🎤</span>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-[#a78bfa]">
-                  VozUP
-                </p>
-              </div>
-            ) : (
-              <div className="mb-1 flex justify-center">
-                <span className="text-base leading-none" title="VozUP">🎤</span>
-              </div>
-            )}
-            <ul className={cn("m-0 flex list-none flex-col gap-1", !showFullContent ? "items-center" : "")}>
-              {VOZUP_NAV_LINKS.map((link) => renderNavLinkVozup(link))}
-            </ul>
-          </div>
+          {!currentUser?.institutoUpOnly && (
+            <div className="mt-4 border-t border-[rgb(var(--border-weak))] pt-4">
+              {showFullContent ? (
+                <div className="mb-1 flex items-center gap-1.5 px-2">
+                  <span className="text-base leading-none">🎤</span>
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-[#a78bfa]">
+                    VozUP
+                  </p>
+                </div>
+              ) : (
+                <div className="mb-1 flex justify-center">
+                  <span className="text-base leading-none" title="VozUP">🎤</span>
+                </div>
+              )}
+              <ul className={cn("m-0 flex list-none flex-col gap-1", !showFullContent ? "items-center" : "")}>
+                {VOZUP_NAV_LINKS.map((link) => renderNavLinkVozup(link))}
+              </ul>
+            </div>
+          )}
         </nav>
 
         <section className="relative flex flex-shrink-0 flex-col gap-1 border-t border-[rgb(var(--border-weak))] px-1.5 py-1.5 shadow-[0_-2px_4px_rgba(27,28,29,0.02)]">
@@ -316,7 +285,7 @@ export default function ModernSidebar({
             {showFullContent ? (
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium leading-5 text-[rgb(var(--slate-12))]">
-                  {currentUser?.displayName || currentUser?.name || "Usuario Chatwoot"}
+                  {currentUser?.name || "Usuário"}
                 </p>
                 <p className="truncate text-xs text-[rgb(var(--slate-10))]">
                   {currentUser?.email || "Sessao autenticada"}

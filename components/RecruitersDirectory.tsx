@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import InscricaoDetails from "@/components/InscricaoDetails";
+import { LeadProfileModal } from "@/components/LeadProfileModal";
 import type { RecruiterDirectoryEntry } from "@/app/(dashboard)/recrutadores/page";
 import type { InscricaoItem } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -99,9 +99,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [selectedInscricao, setSelectedInscricao] = useState<InscricaoItem | null>(null);
-  const [isDetailsLoading, setIsDetailsLoading] = useState(false);
-  const [pendingEditId, setPendingEditId] = useState<number | null>(null);
+  const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [existingSearchTerm, setExistingSearchTerm] = useState('');
   const [existingSuggestions, setExistingSuggestions] = useState<InscricaoLike[]>([]);
@@ -382,34 +380,14 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
   }
 
   const openInscricaoDetails = useCallback(
-    async (inscricaoId: number | null) => {
+    (inscricaoId: number | null) => {
       if (!inscricaoId) {
         setDetailsError('Este cluster ainda não está vinculado a uma inscrição editável.');
-        setSelectedInscricao(null);
+        setSelectedLeadId(null);
         return;
       }
-
       setDetailsError(null);
-      setIsDetailsLoading(true);
-      setPendingEditId(inscricaoId);
-
-      try {
-        const response = await fetch(`/api/inscricoes/${inscricaoId}`);
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-          setDetailsError(payload?.error ?? 'Não foi possível carregar o cadastro.');
-          setSelectedInscricao(null);
-          return;
-        }
-        const data = (await response.json()) as { inscricao?: InscricaoItem };
-        setSelectedInscricao(data.inscricao ?? null);
-      } catch (error) {
-        console.error('Failed to open inscrição', error);
-        setDetailsError('Erro inesperado ao abrir o cadastro.');
-      } finally {
-        setIsDetailsLoading(false);
-        setPendingEditId(null);
-      }
+      setSelectedLeadId(inscricaoId);
     },
     []
   );
@@ -815,8 +793,7 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
                         <button
                           type="button"
                           onClick={() => openInscricaoDetails(recruiter.inscricaoId)}
-                          className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={isDetailsLoading && pendingEditId === recruiter.inscricaoId}
+                          className="rounded-md border border-neutral-300 px-3 py-1 text-xs font-semibold text-neutral-700 transition hover:border-neutral-400 hover:text-neutral-900"
                         >
                           Editar cadastro
                         </button>
@@ -837,11 +814,10 @@ export default function RecruitersDirectory({ recruiters, trainingOptions, recru
         </div>
       </section>
 
-      <InscricaoDetails
-        inscricao={selectedInscricao}
-        onClose={() => setSelectedInscricao(null)}
+      <LeadProfileModal
+        leadId={selectedLeadId}
+        onClose={() => setSelectedLeadId(null)}
         onUpdate={(updated) => {
-          setSelectedInscricao(updated);
           setEntries((previous) =>
             previous.map((entry) =>
               entry.inscricaoId === updated.id
