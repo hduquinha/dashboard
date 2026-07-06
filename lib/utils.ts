@@ -28,10 +28,35 @@ export function humanizeName(raw: string | null | undefined): string {
     .join(" ");
 }
 
-export function buildWhatsAppWebUrl(phone: string | null | undefined): string {
+function normalizeWhatsAppPhone(phone: string | null | undefined): string {
   const digits = phone?.replace(/\D/g, "") ?? "";
-  if (!digits) return "#";
+  if (!digits) return "";
+  return digits.startsWith("55") ? digits : `55${digits}`;
+}
 
-  const phoneWithCountryCode = digits.startsWith("55") ? digits : `55${digits}`;
-  return `https://web.whatsapp.com/send?phone=${phoneWithCountryCode}`;
+export function buildWhatsAppWebUrl(phone: string | null | undefined): string {
+  const normalized = normalizeWhatsAppPhone(phone);
+  if (!normalized) return "#";
+  return `https://web.whatsapp.com/send?phone=${normalized}`;
+}
+
+export function isMobileUserAgent(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+/**
+ * onClick para os links de WhatsApp: no celular troca o web.whatsapp.com (que
+ * abriria o navegador) por wa.me, que abre direto o app instalado — WhatsApp
+ * Business inclusive. O href continua sendo a URL web (estável no SSR, sem
+ * mismatch de hidratação) e segue valendo no desktop.
+ */
+export function openWhatsAppOnMobile(
+  event: { preventDefault: () => void },
+  phone: string | null | undefined
+): void {
+  const normalized = normalizeWhatsAppPhone(phone);
+  if (!normalized || !isMobileUserAgent()) return;
+  event.preventDefault();
+  window.location.href = `https://wa.me/${normalized}`;
 }

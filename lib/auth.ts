@@ -6,6 +6,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
+import type { PermissionKey, TeamRole } from "@/lib/permissions";
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const SESSION_VALUE_SEPARATOR = ".";
@@ -21,8 +22,10 @@ export interface DashboardUser {
   id: number;
   email: string;
   name: string;
-  role: "admin" | "member";
+  role: TeamRole;
   isSupervisor: boolean;
+  priorityLevel: number;
+  permissions: PermissionKey[];
   /** Quando true, a secao "Leads VozUP" fica oculta e /vozup bloqueado. */
   institutoUpOnly: boolean;
 }
@@ -212,7 +215,8 @@ function isDashboardSessionPayload(value: unknown): value is DashboardSession {
     typeof session.user.id === "number" &&
     typeof session.user.email === "string" &&
     typeof session.user.name === "string" &&
-    (session.user.role === "admin" || session.user.role === "member")
+    (session.user.role === "super_master" || session.user.role === "admin" || session.user.role === "member") &&
+    (session.user.permissions === undefined || Array.isArray(session.user.permissions))
   );
 }
 

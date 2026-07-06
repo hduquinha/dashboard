@@ -61,6 +61,10 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <main className="flex min-h-screen items-center justify-center bg-[rgb(var(--background-color))] px-4 py-10 text-[rgb(var(--slate-12))]">
       <section className="w-full max-w-[420px] rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-7 shadow-[0_18px_60px_rgba(28,32,36,0.08)]">
         <div className="mb-7">
+          <div className="mb-5 flex items-center justify-center rounded-xl bg-[linear-gradient(180deg,#001b31_0%,#00111f_100%)] px-4 py-5">
+            {/* eslint-disable-next-line @next/next/no-img-element -- SVG estatico da marca */}
+            <img src="/vozup-logo-dark.svg" alt="VozUP" className="h-12 w-auto" />
+          </div>
           <h1 className="text-lg font-semibold leading-6 text-[rgb(var(--slate-12))]">
             Dashboard
           </h1>

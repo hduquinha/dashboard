@@ -12,8 +12,8 @@ import { listTrainingFilterOptions } from "@/lib/db";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Distribuicao de leads - CRM",
-  description: "Distribuicao manual de leads para a equipe.",
+  title: "Chegada de Leads - CRM",
+  description: "Novos leads do Meta e das landing pages, prontos para distribuir.",
 };
 
 interface DistributionPageProps {
@@ -69,6 +69,9 @@ export default async function DistributionPage(props: DistributionPageProps) {
       sellers={sellers}
       trainingOptions={trainingOptions}
       isSupervisor={commercial.isSupervisor}
+      currentUser={
+        session ? { email: session.user.email, isSupervisor: commercial.isSupervisor } : null
+      }
     />
   );
 }

@@ -5,6 +5,8 @@ import {
   UnauthorizedError,
 } from "@/lib/auth";
 import { setInscricaoStatus } from "@/lib/db";
+import { maskInscricaoForUser } from "@/lib/leadPermissions";
+import { hasPermission } from "@/lib/permissions";
 import type { InscricaoStatus } from "@/types/inscricao";
 
 type RouteParams = {
@@ -77,6 +79,9 @@ export async function PATCH(request: Request, context: RouteContext) {
     typeof record.whatsappContacted === "boolean" ? record.whatsappContacted : undefined;
   const note = typeof record.note === "string" ? record.note : undefined;
   const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "crm.update_stage")) {
+    return NextResponse.json({ error: "Sem permissao para mover etapas." }, { status: 403 });
+  }
   const author =
     session?.user.name || session?.user.email || null;
 
@@ -86,7 +91,7 @@ export async function PATCH(request: Request, context: RouteContext) {
       note,
       author,
     });
-    return NextResponse.json({ inscricao });
+    return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });

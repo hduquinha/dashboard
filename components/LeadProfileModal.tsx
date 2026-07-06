@@ -2,9 +2,26 @@
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import {
+  BriefcaseBusiness,
+  Building2,
+  CalendarDays,
+  Clock3,
+  FileText,
+  Flag,
+  Globe2,
+  Mail,
+  MapPin,
+  Phone,
+  Route,
+  UserRound,
+} from "lucide-react";
+import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import { TagBadge } from "@/components/TagBadge";
 import { LeadEditForm } from "@/components/LeadEditForm";
 import { FormHistoryView } from "@/components/FormHistoryView";
+import { LeadTimeline } from "@/components/LeadTimeline";
+import { LeadVinculosSection } from "@/components/LeadVinculosSection";
 import { EncontroChatView } from "@/components/EncontroChatView";
 import type { CommercialStage, InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -12,8 +29,9 @@ import type { CommercialWorkspace } from "@/types/commercial";
 import type { AnamneseResposta } from "@/lib/anamnese";
 import { formatFormValue, UP_DAY_DISPLAY_FIELDS } from "@/lib/inscricaoForm";
 import { buildOperationalTags, groupParticipantTags, isOnlineTraining } from "@/lib/participantTags";
-import { buildWhatsAppWebUrl, humanizeName } from "@/lib/utils";
+import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import { describeLeadSource } from "@/lib/leadFields";
+import { hasPermission, type PermissionUser } from "@/lib/permissions";
 
 const COMMERCIAL_STAGE_LABELS: Record<CommercialStage, { label: string; className: string }> = {
   novo: { label: "Novo", className: "bg-slate-100 text-slate-700" },
@@ -45,6 +63,8 @@ interface LeadProfileModalProps {
    * atribuicao de vendedor interativos. Ausente = mostra so o resumo.
    */
   commercial?: CommercialWorkspace;
+  currentUser?: PermissionUser | null;
+  variant?: "modal" | "panel";
 }
 
 function formatTrainingDate(value: string | null | undefined): string | null {
@@ -101,8 +121,11 @@ export function LeadProfileModal({
   trainingOptions,
   recruiterOptions,
   commercial,
+  currentUser,
+  variant = "modal",
 }: LeadProfileModalProps) {
   const router = useRouter();
+  const isPanel = variant === "panel";
   const [inscricao, setInscricao] = useState<InscricaoItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -222,6 +245,14 @@ export function LeadProfileModal({
       default: return { label: "Aguardando", color: "amber" };
     }
   }, [inscricao]);
+  const canEditLead = !currentUser || hasPermission(currentUser, "crm.edit_leads");
+  const canDeleteLead = !currentUser || hasPermission(currentUser, "crm.delete_leads");
+  const canMoveStage = !currentUser || hasPermission(currentUser, "crm.update_stage");
+  const canManageStars = !currentUser || hasPermission(currentUser, "crm.manage_temperature");
+  const canManageLinks = !currentUser || hasPermission(currentUser, "crm.manage_links");
+  const canManageNotes = !currentUser || hasPermission(currentUser, "crm.manage_notes");
+  const canViewNotes = !currentUser || hasPermission(currentUser, "field.view.notes");
+  const canViewHistory = !currentUser || hasPermission(currentUser, "field.view.history");
 
   const avatarColor = useMemo(() => {
     const map: Record<string, string> = {
@@ -241,7 +272,22 @@ export function LeadProfileModal({
   const autoTags = useMemo(() => (inscricao ? buildOperationalTags(inscricao) : []), [inscricao]);
   const groupedAutoTags = useMemo(() => groupParticipantTags(autoTags), [autoTags]);
 
-  if (leadId === null) return null;
+  if (leadId === null) {
+    if (!isPanel) return null;
+    return (
+      <div className="flex h-full min-h-[620px] items-center justify-center rounded-[24px] border border-[#dce8f2] bg-white shadow-[var(--dashboard-card-shadow)]">
+        <div className="max-w-sm px-6 text-center">
+          <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-[#e5f8ff] text-[#0086b8]">
+            <UserRound size={30} />
+          </div>
+          <h2 className="mt-5 text-lg font-bold text-slate-950">Selecione um lead</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            Escolha um contato na lista para visualizar as informações, origem, respostas e ações comerciais.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   function updateInscricao(updated: InscricaoItem) {
     setInscricao(updated);
@@ -249,7 +295,7 @@ export function LeadProfileModal({
   }
 
   async function handleDelete() {
-    if (!inscricao || isDeleting) return;
+    if (!inscricao || isDeleting || !canDeleteLead) return;
     if (!deleteConfirm) {
       setDeleteConfirm(true);
       return;
@@ -293,7 +339,7 @@ export function LeadProfileModal({
   }
 
   async function handleStatusChange(nextStatus: InscricaoStatus) {
-    if (!inscricao || statusUpdating === nextStatus || inscricao.tipo === "recrutador") return;
+    if (!inscricao || statusUpdating === nextStatus || inscricao.tipo === "recrutador" || !canMoveStage) return;
     let whatsappContacted: boolean | undefined;
     if (nextStatus === "aprovado" || nextStatus === "rejeitado") {
       whatsappContacted = window.confirm("Você já entrou em contato no WhatsApp?");
@@ -323,7 +369,7 @@ export function LeadProfileModal({
 
   async function handleNoteSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!inscricao || !noteContent.trim() || isSavingNote) return;
+    if (!inscricao || !noteContent.trim() || isSavingNote || !canManageNotes) return;
     setIsSavingNote(true);
     setErrorMessage(null);
     try {
@@ -349,7 +395,7 @@ export function LeadProfileModal({
   }
 
   async function handleStarClick(value: number) {
-    if (!inscricao || starsSaving) return;
+    if (!inscricao || starsSaving || !canManageStars) return;
     const nextValue = inscricao.stars === value ? 0 : value;
     setStarsSaving(true);
     try {
@@ -423,19 +469,22 @@ export function LeadProfileModal({
   }
 
   async function handleCommercialAssign(sellerId: string) {
-    if (!inscricao || !sellerId || commercialSaving) return;
+    if (!inscricao || commercialSaving) return;
+    // Vazio = "Repassar para vendedor": remove a associação com o vendedor atual.
+    const removing = sellerId === "";
+    if (removing && inscricao.commercial?.assignedSellerId == null) return;
     setCommercialSaving(true);
     setCommercialMessage(null);
     try {
       const res = await fetch(`/api/commercial/leads/${inscricao.id}/assign`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sellerId: Number(sellerId) }),
+        body: JSON.stringify({ sellerId: removing ? null : Number(sellerId) }),
       });
       const data = (await res.json().catch(() => null)) as { error?: string } | null;
       if (!res.ok) throw new Error(data?.error ?? "Falha ao repassar lead.");
       await refreshLead();
-      setCommercialMessage("Lead repassado.");
+      setCommercialMessage(removing ? "Atribuição removida. Lead sem vendedor responsável." : "Lead repassado.");
     } catch (error) {
       setCommercialMessage(error instanceof Error ? error.message : "Falha ao repassar lead.");
     } finally {
@@ -457,8 +506,18 @@ export function LeadProfileModal({
     : [];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <div
+      className={isPanel ? "h-full" : "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-0 backdrop-blur-[3px] sm:p-5"}
+      role={isPanel ? undefined : "dialog"}
+      aria-modal={isPanel ? undefined : true}
+    >
+      <div
+        className={
+          isPanel
+            ? "flex h-full min-h-[720px] w-full flex-col overflow-hidden rounded-[24px] border border-[#dce8f2] bg-white shadow-[var(--dashboard-card-shadow)]"
+            : "flex h-dvh max-h-dvh w-full flex-col overflow-hidden bg-white shadow-[0_30px_90px_rgba(15,23,42,0.22)] sm:h-auto sm:max-h-[91vh] sm:max-w-[1180px] sm:rounded-[22px] sm:border sm:border-slate-200"
+        }
+      >
         {loading && !inscricao ? (
           <div className="flex h-64 items-center justify-center">
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-200 border-t-neutral-600" />
@@ -473,55 +532,57 @@ export function LeadProfileModal({
         ) : !inscricao ? null : (
           <>
             {/* ── HEADER ─────────────────────────────── */}
-            <div className="flex flex-shrink-0 flex-col border-b border-neutral-100 bg-white">
-              <div className="flex items-center gap-3 px-5 py-4">
-                <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${avatarColor}`}>
+            <div className="flex flex-shrink-0 flex-col border-b border-slate-200 bg-white">
+              <div className={isPanel ? "flex items-center gap-5 px-8 py-8" : "flex flex-wrap items-center gap-3 px-4 py-4 sm:flex-nowrap sm:gap-5 sm:px-9 sm:py-7"}>
+                <div className={`flex flex-shrink-0 items-center justify-center rounded-full font-black text-white shadow-[0_12px_28px_rgba(8,134,184,0.18)] ${isPanel ? "size-20 text-xl" : "size-12 text-base sm:size-16 sm:text-xl"} ${avatarColor}`}>
                   {getInitials(inscricao.nome)}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h2 className="truncate text-[15px] font-bold leading-tight text-neutral-900">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <h2 className={isPanel ? "break-words text-2xl font-bold leading-tight text-slate-950" : "break-words text-lg font-black leading-tight text-slate-950 sm:text-2xl"}>
                       {humanizeName(inscricao.nome) ?? "Sem nome"}
                     </h2>
-                    <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${statusBadgeClass}`}>
+                    <span className={`flex-shrink-0 rounded-full px-3 py-1 text-xs font-bold ${statusBadgeClass}`}>
                       {statusInfo.label}
                     </span>
                   </div>
-                  <p className="mt-0.5 text-xs text-neutral-400">#{inscricao.id} · {formatDateTime(inscricao.criadoEm)}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500 sm:mt-2 sm:text-sm">#{inscricao.id} · Criado em {formatDateTime(inscricao.criadoEm)}</p>
                 </div>
-                <div className="flex flex-shrink-0 items-center gap-1.5">
+                <div className="flex w-full flex-shrink-0 items-center justify-end gap-2 sm:w-auto">
                   {isEditing ? (
                     <button
                       type="button"
                       onClick={() => setIsEditing(false)}
-                      className="h-8 rounded-lg border border-neutral-200 px-3 text-xs font-semibold text-neutral-600 hover:bg-neutral-50"
+                      className="h-10 rounded-lg border border-[#dce8f2] px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
                     >
                       Cancelar
                     </button>
-                  ) : (
+                  ) : canEditLead ? (
                     <button
                       type="button"
                       onClick={() => { setIsEditing(true); setErrorMessage(null); setSuccessMessage(null); }}
-                      className="h-8 rounded-lg border border-neutral-200 px-3 text-xs font-semibold text-neutral-600 hover:bg-neutral-50"
+                      className="h-10 rounded-lg border border-[#54c4ed] px-4 text-sm font-bold text-[#0086b8] transition hover:bg-[#e5f8ff]"
                     >
-                      Editar
+                      Editar lead
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    disabled={isDeleting}
-                    className={`h-8 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50 ${
-                      deleteConfirm ? "border-rose-600 bg-rose-600 text-white hover:bg-rose-700" : "border-red-100 bg-red-50 text-red-600 hover:bg-red-100"
-                    }`}
-                  >
-                    {isDeleting ? "..." : deleteConfirm ? "Confirmar" : "Excluir"}
-                  </button>
+                  ) : null}
+                  {canDeleteLead ? (
+                    <button
+                      type="button"
+                      onClick={handleDelete}
+                      disabled={isDeleting}
+                      className={`h-10 rounded-lg border px-4 text-sm font-bold transition disabled:opacity-50 ${
+                        deleteConfirm ? "border-rose-600 bg-rose-600 text-white hover:bg-rose-700" : "border-red-200 bg-white text-red-600 hover:bg-red-50"
+                      }`}
+                    >
+                      {isDeleting ? "..." : deleteConfirm ? "Confirmar" : "Excluir"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={onClose}
                     aria-label="Fechar"
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700"
+                    className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
                   >
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -532,7 +593,7 @@ export function LeadProfileModal({
 
               {/* Sugestões de nome/e-mail vindas de merges por telefone */}
               {(nomeSugestoes.length > 0 || emailSugestoes.length > 0) && (
-                <div className="flex flex-wrap items-center gap-1.5 border-t border-amber-100 bg-amber-50 px-5 py-2">
+                <div className="flex flex-wrap items-center gap-2 border-t border-amber-100 bg-amber-50 px-6 py-3">
                   {nomeSugestoes.map((s) => (
                     <button
                       key={`nome-${s}`}
@@ -560,8 +621,8 @@ export function LeadProfileModal({
 
               {/* Status + Stars */}
               {inscricao.tipo !== "recrutador" && (
-                <div className="flex items-center justify-between gap-4 border-t border-neutral-100 px-5 py-2.5">
-                  <div className="flex gap-1">
+                <div className="flex flex-wrap items-center justify-between gap-4 border-t border-[#e3edf5] px-6 py-4">
+                  <div className="flex flex-wrap gap-2">
                     {(["aguardando", "aprovado", "rejeitado"] as const).map((s) => {
                       const active = (inscricao.status ?? "aguardando") === s;
                       const labels = { aguardando: "Aguardando", aprovado: "Qualificado", rejeitado: "Descartado" };
@@ -574,9 +635,9 @@ export function LeadProfileModal({
                         <button
                           key={s}
                           type="button"
-                          disabled={statusUpdating !== null}
+                          disabled={statusUpdating !== null || !canMoveStage}
                           onClick={() => handleStatusChange(s)}
-                          className={`h-7 rounded-lg border px-2.5 text-[11px] font-semibold transition ${colors[s]} disabled:opacity-50`}
+                          className={`h-8 rounded-lg border px-3 text-xs font-bold transition ${colors[s]} disabled:opacity-50`}
                         >
                           {statusUpdating === s ? "..." : labels[s]}
                         </button>
@@ -590,7 +651,7 @@ export function LeadProfileModal({
                         <button
                           key={star}
                           type="button"
-                          disabled={starsSaving}
+                          disabled={starsSaving || !canManageStars}
                           onMouseEnter={() => setStarsHover(star)}
                           onClick={() => handleStarClick(star)}
                           title={`${star} estrela${star > 1 ? "s" : ""}`}
@@ -606,7 +667,7 @@ export function LeadProfileModal({
             </div>
 
             {/* ── SCROLLABLE BODY ───────────────────────── */}
-            <div className="flex-1 overflow-y-auto">
+            <div className="flex-1 overflow-y-auto bg-[#f8fbfe] pb-6">
               {(errorMessage || successMessage) && (
                 <div className="px-5 pt-4">
                   {errorMessage && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 ring-1 ring-red-200">{errorMessage}</p>}
@@ -614,7 +675,7 @@ export function LeadProfileModal({
                 </div>
               )}
 
-              {isEditing ? (
+              {isEditing && canEditLead ? (
                 <LeadEditForm
                   inscricao={inscricao}
                   trainingOptions={trainingOptions}
@@ -628,12 +689,13 @@ export function LeadProfileModal({
                   <Section label="Informações Padrão do Lead">
                     <div className="space-y-4">
                       {inscricao.telefone ? (
-                        <div className="flex gap-2">
+                        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
                           <a
                             href={buildWhatsAppWebUrl(inscricao.telefone)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#25D366] py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#1ebe5c] active:scale-[0.98]"
+                            onClick={(e) => openWhatsAppOnMobile(e, inscricao.telefone)}
+                            className="flex items-center justify-center gap-2 rounded-xl bg-[#25D366] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#1ebe5c] active:scale-[0.98]"
                           >
                             <svg className="h-4 w-4 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
@@ -642,16 +704,23 @@ export function LeadProfileModal({
                           </a>
                           <a
                             href={`tel:+55${inscricao.telefone.replace(/\D/g, "")}`}
-                            className="flex items-center gap-1.5 rounded-lg bg-neutral-100 px-3 py-2 text-xs font-semibold text-neutral-700 hover:bg-neutral-200"
+                            className="flex items-center justify-center gap-1.5 rounded-xl border border-[#dce8f2] bg-white px-4 py-3 text-xs font-bold text-slate-700 hover:bg-slate-50"
                           >
-                            📞 Ligar
+                            <Phone size={14} />
+                            Ligar
                           </a>
+                          <CopyPhoneButton
+                            phone={inscricao.telefone}
+                            size={14}
+                            withLabel
+                            className="justify-center rounded-xl border border-[#dce8f2] bg-white px-4 py-3 text-slate-700 hover:bg-slate-50"
+                          />
                         </div>
                       ) : (
                         <p className="rounded-lg bg-neutral-50 px-3 py-2 text-sm text-neutral-400 ring-1 ring-neutral-100">Sem telefone cadastrado</p>
                       )}
 
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="grid gap-2 sm:grid-cols-2">
                         <InfoCard label="Nome completo" value={humanizeName(inscricao.nome) ?? "—"} />
                         <InfoCard label="E-mail" value={inscricao.parsedPayload.email || "—"} />
                         <InfoCard label="Telefone / WhatsApp" value={inscricao.telefone || "—"} />
@@ -662,6 +731,13 @@ export function LeadProfileModal({
                         <InfoCard label="Cargo / Profissão" value={inscricao.profissao || inscricao.parsedPayload.cargo || "—"} />
                         <InfoCard label="Data de cadastro" value={formatDateOnly(inscricao.criadoEm)} />
                         <InfoCard label="Hora de cadastro" value={formatTimeOnly(inscricao.criadoEm)} />
+                        <InfoCard
+                          label="Última alteração"
+                          value={formatDateTime(
+                            String((inscricao.payload as Record<string, unknown> | undefined)?.dashboard_ultima_interacao ?? "") ||
+                              inscricao.criadoEm
+                          )}
+                        />
                       </div>
                     </div>
                   </Section>
@@ -671,7 +747,7 @@ export function LeadProfileModal({
                     {(() => {
                       const source = describeLeadSource(inscricao.payload as Record<string, unknown> | undefined);
                       return (
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid gap-2 sm:grid-cols-2">
                           <InfoCard label="Origem do lead" value={source.origem || "—"} sub={source.comoConheceu ?? undefined} />
                           <InfoCard label="Nome do formulário" value={source.formName || "—"} />
                           <InfoCard label="Rota de origem" value={source.paginaOrigem || "—"} />
@@ -688,13 +764,35 @@ export function LeadProfileModal({
                     })()}
                   </Section>
 
-                  {/* ── RESPOSTAS DO FORMULÁRIO ──────────── */}
-                  <Section label="Respostas do Formulário">
-                    <FormHistoryView inscricao={inscricao} />
+                  {/* ── LINHA DO TEMPO ───────────────────── */}
+                  <Section label="Linha do tempo do lead">
+                    <LeadTimeline leadId={inscricao.id} />
                   </Section>
 
+                  {/* ── VÍNCULOS (ATRIBUTOS DO LEAD) ─────── */}
+                  {canManageLinks ? (
+                    <Section label="Vínculos · aulas, treinamentos e origens">
+                      <LeadVinculosSection
+                        leadId={inscricao.id}
+                        onChanged={() => {
+                          void refreshLead();
+                          router.refresh();
+                        }}
+                      />
+                    </Section>
+                  ) : null}
+
+                  {/* ── RESPOSTAS DO FORMULÁRIO ──────────── */}
+                  {canViewHistory ? (
+                    <Section label="Respostas do Formulário">
+                      <FormHistoryView inscricao={inscricao} />
+                    </Section>
+                  ) : null}
+
                   {/* ── OBSERVAÇÕES INTERNAS ─────────────── */}
+                  {canViewNotes ? (
                   <Section label={`Observações internas · ${(inscricao.notes ?? []).length}`}>
+                    {canManageNotes ? (
                     <form onSubmit={handleNoteSubmit} className="mb-3 rounded-xl bg-neutral-50 p-3 ring-1 ring-neutral-100">
                       <textarea
                         rows={2}
@@ -715,6 +813,7 @@ export function LeadProfileModal({
                         </button>
                       </div>
                     </form>
+                    ) : null}
                     {(inscricao.notes ?? []).length > 0 && (
                       <div className="space-y-2">
                         {[...(inscricao.notes ?? [])].reverse().map((note) => (
@@ -730,6 +829,7 @@ export function LeadProfileModal({
                       </div>
                     )}
                   </Section>
+                  ) : null}
 
                   {/* ── TREINAMENTO ──────────────────────── */}
                   {(treinamentoDisplay.text || inscricao.recrutadorNome || inscricao.recrutadorCodigo) && (
@@ -820,7 +920,7 @@ export function LeadProfileModal({
                           </span>
                         </div>
                       )}
-                      <div className="mt-3 grid grid-cols-2 gap-2">
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         <InfoCard label="Vendedor" value={inscricao.commercial.assignedSellerName ?? "Sem responsável"} />
                         <InfoCard label="Campanha" value={inscricao.commercial.campaignSource || "—"} sub={inscricao.commercial.campaignName ?? undefined} />
                         {inscricao.commercial.campaignTerm && (
@@ -977,38 +1077,66 @@ export function LeadProfileModal({
 
 // ── Local helpers ────────────────────────────────────────
 
+function renderIconForLabel(label: string, size: number) {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("origem")) return <Globe2 size={size} />;
+  if (normalized.includes("nome") || normalized.includes("lead") || normalized.includes("vendedor")) return <UserRound size={size} />;
+  if (normalized.includes("e-mail") || normalized.includes("email")) return <Mail size={size} />;
+  if (normalized.includes("telefone") || normalized.includes("whatsapp")) return <Phone size={size} />;
+  if (normalized.includes("cidade") || normalized.includes("estado")) return <MapPin size={size} />;
+  if (normalized.includes("empresa")) return <Building2 size={size} />;
+  if (normalized.includes("cargo") || normalized.includes("profissão")) return <BriefcaseBusiness size={size} />;
+  if (normalized.includes("data")) return <CalendarDays size={size} />;
+  if (normalized.includes("hora")) return <Clock3 size={size} />;
+  if (normalized.includes("rota")) return <Route size={size} />;
+  if (normalized.includes("campanha")) return <Flag size={size} />;
+  return <FileText size={size} />;
+}
+
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="border-b border-neutral-100 px-5 py-4">
-      <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-neutral-400">{label}</p>
-      {children}
-    </div>
+    <section className="mx-3 mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.035)] sm:mx-7 sm:mt-5">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-[#e5f8ff] text-[#0086b8]">
+            {renderIconForLabel(label, 17)}
+          </span>
+          <h3 className="break-words text-base font-bold leading-tight text-slate-950">{label}</h3>
+        </div>
+      </div>
+      <div className="p-4 sm:p-5">{children}</div>
+    </section>
   );
 }
 
 function Collapsible({ label, badge, children }: { label: string; badge?: string; children: React.ReactNode }) {
   return (
-    <details className="group border-b border-neutral-100">
-      <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-3 hover:bg-neutral-50">
-        <div className="flex items-center gap-2">
-          <svg className="h-3.5 w-3.5 flex-shrink-0 rotate-0 text-neutral-400 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <details className="group mx-3 mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_10px_30px_rgba(15,23,42,0.035)] sm:mx-7 sm:mt-5">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 hover:bg-[#f8fbfe] sm:px-5">
+        <div className="flex min-w-0 items-center gap-2">
+          <svg className="h-3.5 w-3.5 flex-shrink-0 rotate-0 text-[#0086b8] transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
           </svg>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-neutral-500">{label}</span>
+          <span className="break-words text-base font-bold leading-tight text-slate-950">{label}</span>
         </div>
-        {badge !== undefined && <span className="rounded-full bg-neutral-100 px-2 py-0.5 text-[10px] font-bold text-neutral-500">{badge}</span>}
+        {badge !== undefined && <span className="rounded-full bg-[#e5f8ff] px-2.5 py-1 text-[11px] font-bold text-[#0086b8]">{badge}</span>}
       </summary>
-      <div className="px-5 pb-4 pt-1">{children}</div>
+      <div className="p-4 sm:p-5">{children}</div>
     </details>
   );
 }
 
 function InfoCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <div className="rounded-lg bg-neutral-50 p-2.5 ring-1 ring-neutral-100">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
-      <p className="mt-0.5 truncate text-sm font-medium text-neutral-800">{value}</p>
-      {sub && <p className="truncate text-xs text-neutral-400">{sub}</p>}
+    <div className="flex min-w-0 gap-3 rounded-xl bg-white p-3 ring-1 ring-[#e5eef6]">
+      <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-[#e5f8ff] text-[#0086b8]">
+        {renderIconForLabel(label, 18)}
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-semibold text-slate-500">{label}</p>
+        <p className="mt-1 whitespace-pre-wrap break-words text-sm font-bold leading-snug text-slate-950">{value}</p>
+        {sub && <p className="mt-0.5 whitespace-pre-wrap break-words text-xs font-medium leading-snug text-slate-400">{sub}</p>}
+      </div>
     </div>
   );
 }
@@ -1016,27 +1144,26 @@ function InfoCard({ label, value, sub }: { label: string; value: string; sub?: s
 function PresenceCell({ label, value }: { label: string; value: string | null | undefined }) {
   return (
     <div>
-      <p className="text-[10px] font-semibold uppercase text-neutral-400">{label}</p>
-      <p className="mt-0.5 text-xs font-medium text-neutral-800">{value ?? "—"}</p>
+      <p className="text-[10px] font-semibold uppercase text-slate-400">{label}</p>
+      <p className="mt-0.5 break-words text-xs font-semibold text-slate-800">{value ?? "—"}</p>
     </div>
   );
 }
 
 function AnamneseField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-white p-2.5 ring-1 ring-neutral-100">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
-      <p className="mt-0.5 text-sm text-neutral-800">{value}</p>
+    <div className="rounded-xl bg-white p-3 ring-1 ring-[#e5eef6]">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">{value}</p>
     </div>
   );
 }
 
 function DetailField({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg bg-neutral-50 p-2.5 ring-1 ring-neutral-100">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">{label}</p>
-      <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-neutral-800">{value}</p>
+    <div className="rounded-xl bg-white p-3 ring-1 ring-[#e5eef6]">
+      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-800">{value}</p>
     </div>
   );
 }
-

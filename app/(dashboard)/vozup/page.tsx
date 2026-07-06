@@ -2,41 +2,45 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { ArrowRight, Users } from "lucide-react";
-import { getPool, listRecruitersWithDbNames, listTrainingFilterOptions } from "@/lib/db";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bell,
+  ChevronDown,
+  Command,
+  Folder,
+  FolderOpen,
+  Search,
+  Users,
+} from "lucide-react";
+import { listRecruitersWithDbNames, listTrainingFilterOptions } from "@/lib/db";
+import { listCommercialSellers } from "@/lib/commercial";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
+import {
+  getVozupFolder,
+  listMetaCreativeOptions,
+  listVozupBlockStats,
+  listVozupLeadsByBlock,
+  META_FALLBACK_BLOCK,
+  SEM_ORIGEM_BLOCK,
+  VOZUP_FOLDERS,
+  VOZUP_PAGE_SIZE,
+  type VozupBlockStats,
+  type VozupFolderDef,
+} from "@/lib/vozupFolders";
+import { aulaBlockToLeadFields } from "@/lib/aulaBlocks";
+import type { CreateLeadContext } from "@/components/CreateLeadModal";
 import VozupLeadsTable from "./VozupLeadsTable";
+
+export type { VozupLead } from "@/lib/vozupFolders";
 
 export const metadata: Metadata = {
   title: "VozUP — Leads",
-  description: "Leads captados pelas páginas da VozUP.",
+  description: "Leads captados pelas páginas da VozUP, organizados por pasta e formulário.",
 };
 
 export const dynamic = "force-dynamic";
-
-const PAGE_SIZE = 50;
-
-export interface VozupLead {
-  id: number;
-  nome: string;
-  telefone: string;
-  email: string;
-  objetivo: string;
-  origem: string;
-  cidade: string;
-  criado_em: string;
-}
-
-export interface VozupSource {
-  key: string;
-  label: string;
-  emoji: string;
-  origens: string[];
-  dataTreinamento?: string;
-  total: number;
-  semana: number;
-  mes: number;
-}
 
 interface PageProps {
   searchParams:
@@ -48,359 +52,140 @@ function pick(v: string | string[] | undefined): string {
   return (Array.isArray(v) ? v[0] : v) ?? "";
 }
 
-// Sub-filtros disponíveis dentro do bloco "Landing Page VozUP".
-// Cada entrada representa uma landing page específica identificada por sua origem.
-// Para adicionar uma nova LP: acrescente uma entrada aqui e em landingpage-vozup/src/lib/landingPages.ts.
-const LANDING_SUB_SOURCES = [
-  { key: "all", label: "Todos os Leads", origemExata: null },
-  { key: "principal", label: "Landing Page Principal", origemExata: "Landing Page VozUP" },
-  { key: "advogados", label: "Landing Page Advogados", origemExata: "Vozup Landing Page Advogados" },
-  { key: "empresarios", label: "Landing Page Empresários", origemExata: "Vozup Landing Page Empresários" },
-  { key: "corretores", label: "Landing Page Corretores de Imóveis", origemExata: "Vozup Landing Page Corretores de Imóveis" },
-  { key: "autoridade-digital", label: "Landing Page Autoridade Digital", origemExata: "Vozup Landing Page Autoridade Digital" },
-] as const;
-
-type LandingSubKey = (typeof LANDING_SUB_SOURCES)[number]["key"];
-
-// VozUP sources (static — Aula Experimental is loaded dynamically per turma)
-const VOZUP_SOURCES: Pick<VozupSource, "key" | "label" | "emoji" | "origens" | "dataTreinamento">[] = [
-  {
-    key: "workshop",
-    label: "Workshop VozUP",
-    emoji: "🎙️",
-    origens: ["Workshop VozUP", "workshop vozup", "vozup workshop"],
-  },
-  {
-    key: "landing",
-    label: "Landing Page VozUP",
-    emoji: "🌐",
-    // Inclui todas as origens das landing pages — principal + por perfil.
-    // Ao criar uma nova LP, adicione a origem aqui e em LANDING_SUB_SOURCES acima.
-    origens: [
-      "Landing Page VozUP",
-      "landing page vozup",
-      "VozUP Landing",
-      "vozup landing",
-      "Vozup Landing Page Advogados",
-      "Vozup Landing Page Empresários",
-      "Vozup Landing Page Corretores de Imóveis",
-      "Vozup Landing Page Autoridade Digital",
-    ],
-  },
-  {
-    key: "meta-ads",
-    label: "Formulário Meta (Tráfego Pago)",
-    emoji: "📣",
-    // Origens agrupadas neste card.
-    origens: ["Facebook Lead Ads"],
-  },
-];
-
-// Sub-filtro por criativo dentro do bloco "Formulário Meta (Tráfego Pago)".
-// Ao contrário das LPs (fixas), os criativos mudam com frequência — por isso
-// essa lista vem do banco (payload->>'ad_name') em vez de ser hardcoded aqui.
-async function getMetaAdsCreativeOptions(): Promise<{ value: string; count: number }[]> {
-  const pool = getPool();
-  const result = await pool.query<{ ad_name: string; count: string }>(`
-    SELECT
-      COALESCE(NULLIF(TRIM(payload->>'ad_name'), ''), 'Sem criativo identificado') AS ad_name,
-      COUNT(*)::text AS count
-    FROM inscricoes.inscricoes
-    WHERE LOWER(TRIM(COALESCE(payload->>'origem', ''))) = 'facebook lead ads'
-      AND LOWER(TRIM(COALESCE(payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
-      AND COALESCE(payload->>'dashboard_excluido', '') != 'true'
-    GROUP BY ad_name
-    ORDER BY count DESC
-  `);
-  return result.rows.map((r) => ({ value: r.ad_name, count: Number(r.count) }));
+function dateLabel(value: string | null): string {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
-const AULA_EXPERIMENTAL_ORIGENS = [
-  "Aula Experimental", "aula experimental", "aula-experimental",
-  "Aula Exclusiva", "aula exclusiva", "aula-exclusiva",
-];
-
-const BASE_VOZUP_WHERE = `(
-  LOWER(COALESCE(payload->>'unidade_negocio', '')) LIKE '%voz%'
-  OR LOWER(COALESCE(payload->>'origem', '')) LIKE '%vozup%'
-  OR LOWER(COALESCE(payload->>'origem', '')) LIKE '%voz up%'
-  OR LOWER(COALESCE(payload->>'lead_setor', '')) LIKE '%voz%'
-)
-AND LOWER(TRIM(COALESCE(payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
-AND COALESCE(payload->>'dashboard_merged_into', '') = ''
-AND COALESCE(payload->>'dashboard_excluido', '') != 'true'`;
-
-const BASE_VOZUP_WHERE_TURMA = `(
-  LOWER(COALESCE(payload->>'unidade_negocio', '')) LIKE '%voz%'
-  OR LOWER(COALESCE(payload->>'origem', '')) LIKE '%vozup%'
-  OR LOWER(COALESCE(payload->>'origem', '')) LIKE '%voz up%'
-  OR LOWER(COALESCE(payload->>'lead_setor', '')) LIKE '%voz%'
-)
-AND LOWER(TRIM(COALESCE(payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
-AND COALESCE(payload->>'dashboard_excluido', '') != 'true'`;
-
-async function getAulaExperimentalTurmas(): Promise<VozupSource[]> {
-  const pool = getPool();
-  const origensLike = AULA_EXPERIMENTAL_ORIGENS.map(
-    (o) => `LOWER(COALESCE(payload->>'origem', '')) = LOWER('${o.replace(/'/g, "''")}')`
-  ).join(" OR ");
-
-  const result = await pool.query<{ turma: string; total: string; semana: string; mes: string }>(`
-    WITH base AS (
-      SELECT
-        COALESCE(NULLIF(TRIM(payload->>'data_treinamento'), ''), 'Sem turma') AS turma,
-        CASE
-          WHEN LENGTH(REGEXP_REPLACE(
-            COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-            '\\D', '', 'g'
-          )) >= 10
-            THEN 'phone:' || REGEXP_REPLACE(
-              COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-              '\\D', '', 'g'
-            )
-          WHEN LOWER(TRIM(COALESCE(payload->>'email', ''))) LIKE '%@%'
-            THEN 'email:' || LOWER(TRIM(payload->>'email'))
-          ELSE 'row:' || id::text
-        END AS person_key,
-        criado_em
-      FROM inscricoes.inscricoes
-      WHERE (${origensLike})
-        AND LOWER(TRIM(COALESCE(payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
-        AND COALESCE(payload->>'dashboard_excluido', '') != 'true'
-    ),
-    unique_leads AS (
-      SELECT DISTINCT ON (person_key, turma) turma, criado_em
-      FROM base
-      ORDER BY person_key, turma, criado_em DESC
-    )
-    SELECT
-      turma,
-      COUNT(*)::text AS total,
-      COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '7 days')::text AS semana,
-      COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '30 days')::text AS mes
-    FROM unique_leads
-    WHERE turma LIKE 'Aula Experimental %' OR turma LIKE 'Aula Exclusiva %'
-    GROUP BY turma
-    ORDER BY turma DESC
-  `);
-
-  return result.rows.map((row) => ({
-    key: `aula-experimental::${row.turma}`,
-    label: row.turma,
-    emoji: "🧪",
-    origens: AULA_EXPERIMENTAL_ORIGENS,
-    dataTreinamento: row.turma,
-    total: Number(row.total),
-    semana: Number(row.semana),
-    mes: Number(row.mes),
-  }));
-}
-
-async function getSourceStats(): Promise<VozupSource[]> {
-  const pool = getPool();
-
-  // Deduplicate by person (same logic as CRM): phone > email > row id.
-  // This ensures the count here matches what the CRM shows.
-  const result = await pool.query<{
-    origem: string;
-    total: string;
-    semana: string;
-    mes: string;
-  }>(`
-    WITH unique_leads AS (
-      SELECT DISTINCT ON (
-        CASE
-          WHEN LENGTH(REGEXP_REPLACE(
-            COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-            '\\D', '', 'g'
-          )) >= 10
-            THEN 'phone:' || REGEXP_REPLACE(
-              COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-              '\\D', '', 'g'
-            )
-          WHEN LOWER(TRIM(COALESCE(payload->>'email', ''))) LIKE '%@%'
-            THEN 'email:' || LOWER(TRIM(payload->>'email'))
-          ELSE 'row:' || id::text
-        END,
-        LOWER(TRIM(COALESCE(payload->>'origem', '')))
-      )
-      id,
-      COALESCE(NULLIF(TRIM(payload->>'origem'), ''), 'Sem origem') AS origem,
-      criado_em
-      FROM inscricoes.inscricoes
-      WHERE ${BASE_VOZUP_WHERE}
-      ORDER BY
-        CASE
-          WHEN LENGTH(REGEXP_REPLACE(
-            COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-            '\\D', '', 'g'
-          )) >= 10
-            THEN 'phone:' || REGEXP_REPLACE(
-              COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), '')),
-              '\\D', '', 'g'
-            )
-          WHEN LOWER(TRIM(COALESCE(payload->>'email', ''))) LIKE '%@%'
-            THEN 'email:' || LOWER(TRIM(payload->>'email'))
-          ELSE 'row:' || id::text
-        END,
-        LOWER(TRIM(COALESCE(payload->>'origem', ''))),
-        criado_em DESC
-    )
-    SELECT
-      origem,
-      COUNT(*) AS total,
-      COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '7 days') AS semana,
-      COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '30 days') AS mes
-    FROM unique_leads
-    GROUP BY origem
-  `);
-
-  return VOZUP_SOURCES.map((src) => {
-    const matching = result.rows.filter((r) =>
-      src.origens.some((o) => r.origem.toLowerCase() === o.toLowerCase())
-    );
+// Contexto do cadastro manual: o lead criado recebe a origem do bloco para
+// aparecer na mesma listagem, como qualquer lead vindo do formulário.
+function buildCreateContext(folder: VozupFolderDef, bloco: string): CreateLeadContext {
+  if (folder.blockKind === "meta-form") {
     return {
-      ...src,
-      total: matching.reduce((s, r) => s + Number(r.total), 0),
-      semana: matching.reduce((s, r) => s + Number(r.semana), 0),
-      mes: matching.reduce((s, r) => s + Number(r.mes), 0),
+      produto: "vozup",
+      origem: "Facebook Lead Ads",
+      label: `${folder.label} · ${bloco}`,
+      extraFields: bloco !== META_FALLBACK_BLOCK ? { campaign_name: bloco } : undefined,
     };
-  });
-}
-
-const SORT_COLUMNS: Record<string, string> = {
-  nome: "LOWER(COALESCE(NULLIF(TRIM(payload->>'nome'), ''), NULLIF(TRIM(payload->>'name'), ''), 'zzz'))",
-  telefone: "COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), '')",
-  cidade: "LOWER(COALESCE(NULLIF(TRIM(payload->>'cidade'), ''), 'zzz'))",
-  criado_em: "criado_em",
-};
-
-async function listLeadsBySource(
-  sourceKey: string,
-  opts: {
-    search?: string;
-    page?: number;
-    dataTreinamento?: string;
-    sort?: string;
-    dir?: string;
-    subOrigem?: string | null;
-    subCriativo?: string | null;
-  },
-  allSources?: VozupSource[]
-): Promise<{ leads: VozupLead[]; total: number }> {
-  const pool = getPool();
-  const src = (allSources ?? []).find((s) => s.key === sourceKey)
-    ?? VOZUP_SOURCES.find((s) => s.key === sourceKey);
-  if (!src) return { leads: [], total: 0 };
-
-  const page = Math.max(1, opts.page ?? 1);
-  const offset = (page - 1) * PAGE_SIZE;
-
-  // Quando um sub-filtro está ativo (ex: "Advogados"), restringe pela origem exata.
-  // Caso contrário usa todas as origens do source.
-  const origensParaFiltrar = opts.subOrigem
-    ? [opts.subOrigem]
-    : src.origens;
-
-  const originConditions = origensParaFiltrar
-    .map((o) => `LOWER(COALESCE(payload->>'origem', '')) = LOWER('${o.replace(/'/g, "''")}')`)
-    .join(" OR ");
-
-  // Verifica também origens acumuladas de mesclagens anteriores.
-  // Ex: um lead que entrou pelo Workshop e depois pela Landing Page ainda
-  // aparece na aba "Landing Page VozUP" via dashboard_origens_adicionais.
-  const extraOriginsConditions = origensParaFiltrar
-    .map((o) => `COALESCE(payload->>'dashboard_origens_adicionais', '') ILIKE '%${o.replace(/'/g, "''")}%'`)
-    .join(" OR ");
-
-  const dataTreinamento = opts.dataTreinamento ?? src.dataTreinamento;
-  const treinamentoClause = dataTreinamento
-    ? `AND TRIM(COALESCE(payload->>'data_treinamento', '')) = '${dataTreinamento.replace(/'/g, "''")}'`
-    : "";
-
-  // Sub-filtro por criativo, disponível apenas no card "Formulário Meta (Tráfego Pago)".
-  const criativoClause = opts.subCriativo
-    ? `AND COALESCE(NULLIF(TRIM(payload->>'ad_name'), ''), 'Sem criativo identificado') = '${opts.subCriativo.replace(/'/g, "''")}'`
-    : "";
-
-  const params: unknown[] = [];
-  let searchClause = "";
-  if (opts.search) {
-    params.push(`%${opts.search.toLowerCase()}%`);
-    searchClause = `AND (LOWER(COALESCE(payload->>'nome', '')) LIKE $1 OR LOWER(COALESCE(payload->>'telefone', '')) LIKE $1)`;
   }
-
-  const result = await pool.query<VozupLead & { total: string }>(
-    `SELECT
-      id,
-      COALESCE(NULLIF(TRIM(payload->>'nome'), ''), NULLIF(TRIM(payload->>'name'), ''), 'Sem nome') AS nome,
-      COALESCE(NULLIF(TRIM(payload->>'telefone'), ''), NULLIF(TRIM(payload->>'whatsapp'), ''), '') AS telefone,
-      COALESCE(NULLIF(TRIM(payload->>'email'), ''), '') AS email,
-      COALESCE(NULLIF(TRIM(payload->>'objetivo'), ''), NULLIF(TRIM(payload->>'interesse_workshop'), ''), '') AS objetivo,
-      COALESCE(NULLIF(TRIM(payload->>'origem'), ''), '') AS origem,
-      COALESCE(NULLIF(TRIM(payload->>'cidade'), ''), '') AS cidade,
-      COALESCE(payload->>'timestamp', criado_em::text) AS criado_em,
-      COUNT(*) OVER () AS total
-    FROM inscricoes.inscricoes
-    WHERE ${dataTreinamento ? BASE_VOZUP_WHERE_TURMA : BASE_VOZUP_WHERE}
-      AND ((${originConditions}) OR (${extraOriginsConditions}))
-      ${treinamentoClause}
-      ${criativoClause}
-      ${searchClause}
-    ORDER BY ${SORT_COLUMNS[opts.sort ?? ""] ?? SORT_COLUMNS.criado_em} ${opts.dir === "asc" ? "ASC" : "DESC"}, id DESC
-    LIMIT ${PAGE_SIZE} OFFSET ${offset}`,
-    params
-  );
-
+  if (folder.blockKind === "aula") {
+    // O bloco é uma aula específica: grava origem + data_treinamento para o
+    // lead cair exatamente nessa aula.
+    const aulaFields = aulaBlockToLeadFields(bloco);
+    return {
+      produto: "vozup",
+      origem: aulaFields.origem,
+      label: bloco,
+      extraFields: aulaFields.data_treinamento
+        ? { data_treinamento: aulaFields.data_treinamento }
+        : undefined,
+    };
+  }
   return {
-    leads: result.rows.map(({ total: _t, ...row }) => row),
-    total: result.rows[0] ? Number(result.rows[0].total) : 0,
+    produto: "vozup",
+    origem: bloco === SEM_ORIGEM_BLOCK ? "Cadastro manual" : bloco,
+    label: bloco,
   };
 }
 
-// ── Overview: cards per source ──────────────────────────────────────────────
+// ── Cards ───────────────────────────────────────────────────────────────────
 
-function SourceCard({ src }: { src: VozupSource }) {
+function StatsRow({ total, mes, semana }: { total: number; mes: number; semana: number }) {
   return (
-    <div className="group rounded-2xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-6 shadow-[0_1px_3px_rgba(28,32,36,0.06)] transition hover:border-[#a78bfa]/50 hover:shadow-md">
+    <div className="mt-5 grid grid-cols-3 gap-3 border-t border-[#e4edf5] pt-4">
+      <div className="text-center">
+        <p className="text-2xl font-bold text-slate-950">{total}</p>
+        <p className="text-[11px] font-medium text-slate-500">Total</p>
+      </div>
+      <div className="text-center">
+        <p className="text-2xl font-bold text-[#0086b8]">{mes}</p>
+        <p className="text-[11px] font-medium text-slate-500">30 dias</p>
+      </div>
+      <div className="text-center">
+        <p className="text-2xl font-bold text-slate-950">{semana}</p>
+        <p className="text-[11px] font-medium text-slate-500">7 dias</p>
+      </div>
+    </div>
+  );
+}
+
+function FolderCard({
+  folder,
+  blocks,
+}: {
+  folder: VozupFolderDef;
+  blocks: VozupBlockStats[];
+}) {
+  const total = blocks.reduce((s, b) => s + b.total, 0);
+  const mes = blocks.reduce((s, b) => s + b.mes, 0);
+  const semana = blocks.reduce((s, b) => s + b.semana, 0);
+
+  return (
+    <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#3b1d8a]/10 text-2xl">
-            {src.emoji}
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e5f8ff] text-xl">
+            {folder.emoji}
           </div>
           <div>
-            <h3 className="text-base font-semibold text-[rgb(var(--slate-12))]">{src.label}</h3>
-            {src.total === 0 && (
-              <p className="text-xs text-[rgb(var(--slate-9))]">Nenhum lead ainda</p>
-            )}
+            <h3 className="text-base font-bold text-slate-950">{folder.label}</h3>
+            <p className="text-xs font-medium text-slate-400">{folder.description}</p>
           </div>
         </div>
-        {src.mes > 0 && (
-          <span className="inline-flex items-center rounded-full bg-[#3b1d8a]/10 px-2.5 py-0.5 text-xs font-semibold text-[#a78bfa]">
-            +{src.mes} este mês
+        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[#e5f8ff] px-2.5 py-1 text-xs font-bold text-[#0086b8]">
+          <Folder size={12} />
+          {folder.blockKind === "aula"
+            ? `${blocks.length} ${blocks.length === 1 ? "aula" : "aulas"}`
+            : `${blocks.length} ${blocks.length === 1 ? "formulário" : "formulários"}`}
+        </span>
+      </div>
+
+      <StatsRow total={total} mes={mes} semana={semana} />
+
+      <div className="mt-4">
+        <Link
+          href={`/vozup?pasta=${encodeURIComponent(folder.key)}`}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0086b8] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#006f99]"
+        >
+          <FolderOpen size={15} />
+          Abrir pasta
+          <ArrowRight size={15} />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function BlockCard({ folder, block }: { folder: VozupFolderDef; block: VozupBlockStats }) {
+  return (
+    <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e5f8ff] text-[#0086b8]">
+            <Users size={22} />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-950">{block.bloco}</h3>
+            <p className="text-xs font-medium text-slate-400">
+              Última conversão: {dateLabel(block.ultimaConversao)}
+            </p>
+          </div>
+        </div>
+        {block.mes > 0 && (
+          <span className="inline-flex flex-shrink-0 items-center rounded-full bg-[#e5f8ff] px-2.5 py-1 text-xs font-bold text-[#0086b8]">
+            +{block.mes} este mês
           </span>
         )}
       </div>
 
-      <div className="mt-5 grid grid-cols-3 gap-3 border-t border-[rgb(var(--border-weak))] pt-4">
-        <div className="text-center">
-          <p className="text-2xl font-bold text-[rgb(var(--slate-12))]">{src.total}</p>
-          <p className="text-[11px] text-[rgb(var(--slate-10))]">Total</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-[#a78bfa]">{src.mes}</p>
-          <p className="text-[11px] text-[rgb(var(--slate-10))]">30 dias</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold text-[rgb(var(--slate-12))]">{src.semana}</p>
-          <p className="text-[11px] text-[rgb(var(--slate-10))]">7 dias</p>
-        </div>
-      </div>
+      <StatsRow total={block.total} mes={block.mes} semana={block.semana} />
 
       <div className="mt-4">
         <Link
-          href={`/vozup?fonte=${encodeURIComponent(src.key)}`}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#6d28d9] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#5b21b6]"
+          href={`/vozup?pasta=${encodeURIComponent(folder.key)}&bloco=${encodeURIComponent(block.bloco)}`}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0086b8] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#006f99]"
         >
           <Users size={15} />
           Ver leads
@@ -413,6 +198,13 @@ function SourceCard({ src }: { src: VozupSource }) {
 
 // ── Page ────────────────────────────────────────────────────────────────────
 
+// Compatibilidade com links antigos (?fonte=...) da estrutura anterior.
+const LEGACY_FONTE_TO_PASTA: Record<string, string> = {
+  workshop: "workshop",
+  landing: "landing-pages",
+  "meta-ads": "meta",
+};
+
 export default async function VozupPage({ searchParams }: PageProps) {
   const cookieStore = await cookies();
   const session = getDashboardSession(cookieStore.get(DASHBOARD_COOKIE_NAME)?.value);
@@ -421,179 +213,262 @@ export default async function VozupPage({ searchParams }: PageProps) {
   }
 
   const resolved = await Promise.resolve(searchParams);
-  const fonte = pick(resolved.fonte);
+
+  const legacyFonte = pick(resolved.fonte);
+  if (legacyFonte) {
+    const pasta = legacyFonte.startsWith("aula-experimental")
+      ? "aula-experimental"
+      : LEGACY_FONTE_TO_PASTA[legacyFonte];
+    redirect(pasta ? `/vozup?pasta=${encodeURIComponent(pasta)}` : "/vozup");
+  }
+
+  const pastaKey = pick(resolved.pasta);
+  const bloco = pick(resolved.bloco);
   const search = pick(resolved.q) || undefined;
   const page = Number(pick(resolved.page)) || 1;
   const sort = pick(resolved.sort) || undefined;
   const dir = pick(resolved.dir) === "asc" ? "asc" : "desc";
-  const rawSub = pick(resolved.sub);
-  const activeSub = (LANDING_SUB_SOURCES.find((s) => s.key === rawSub)?.key ?? "all") as LandingSubKey;
-  const activeSubSource = LANDING_SUB_SOURCES.find((s) => s.key === activeSub)!;
   const activeCriativo = pick(resolved.criativo) || undefined;
 
-  const aulaExperimentalTurmas = await getAulaExperimentalTurmas();
-  const allSources = [...VOZUP_SOURCES.map((s) => ({ ...s, total: 0, semana: 0, mes: 0 })), ...aulaExperimentalTurmas];
+  const folder = getVozupFolder(pastaKey);
 
-  const activeSource = allSources.find((s) => s.key === fonte);
+  // ── Nível 3: listagem de leads de um bloco (formulário) ──────────────────
+  if (folder && bloco) {
+    const [{ leads, total }, trainingOptions, recruiterOptions, sellers, creativeOptions] =
+      await Promise.all([
+        listVozupLeadsByBlock(folder.key, bloco, {
+          search,
+          page,
+          sort,
+          dir,
+          criativo: folder.blockKind === "meta-form" ? activeCriativo ?? null : null,
+        }),
+        listTrainingFilterOptions(),
+        listRecruitersWithDbNames(),
+        listCommercialSellers(),
+        folder.blockKind === "meta-form" ? listMetaCreativeOptions(bloco) : Promise.resolve([]),
+      ]);
+    const visibleLeads = leads.map((lead) => ({
+      ...lead,
+      telefone:
+        session && !hasPermission(session.user, "field.view.phone")
+          ? ""
+          : lead.telefone,
+      email:
+        session && !hasPermission(session.user, "field.view.email")
+          ? ""
+          : lead.email,
+    }));
+    const totalPages = Math.ceil(total / VOZUP_PAGE_SIZE);
 
-  // Table view (fonte selected)
-  if (activeSource) {
-    const subOrigem = activeSource.key === "landing" && activeSubSource.origemExata
-      ? activeSubSource.origemExata
-      : null;
-    const subCriativo = activeSource.key === "meta-ads" ? activeCriativo ?? null : null;
-    const [{ leads, total }, trainingOptions, recruiterOptions, creativeOptions] = await Promise.all([
-      listLeadsBySource(activeSource.key, { search, page, sort, dir, subOrigem, subCriativo }, allSources),
-      listTrainingFilterOptions(),
-      listRecruitersWithDbNames(),
-      activeSource.key === "meta-ads" ? getMetaAdsCreativeOptions() : Promise.resolve([]),
-    ]);
-    const totalPages = Math.ceil(total / PAGE_SIZE);
+    const blockHref = (params: Record<string, string | undefined>) => {
+      const u = new URLSearchParams({ pasta: folder.key, bloco });
+      for (const [k, v] of Object.entries(params)) if (v) u.set(k, v);
+      return `/vozup?${u.toString()}`;
+    };
 
     return (
-      <main className="space-y-6">
-        <header className="flex items-center gap-3">
-          <Link
-            href="/vozup"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-10))] transition hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
-          >
-            ←
-          </Link>
-          <div>
-            <div className="mb-1 inline-flex items-center gap-1.5 rounded-full border border-[#3b1d8a]/30 bg-[#3b1d8a]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#a78bfa]">
-              🎤 VozUP
+      <main className="min-h-full bg-[#f3f6fa]">
+        <div className="flex min-h-[76px] items-center justify-between gap-4 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur sm:px-8">
+          <div className="flex min-w-0 items-center gap-3">
+            <Link
+              href={`/vozup?pasta=${encodeURIComponent(folder.key)}`}
+              className="flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-cyan-50 hover:text-cyan-700"
+              aria-label={`Voltar para a pasta ${folder.label}`}
+            >
+              <ArrowLeft size={17} />
+            </Link>
+            <div className="flex size-10 items-center justify-center rounded-full border border-cyan-100 bg-cyan-50 text-cyan-700">
+              <Users size={20} />
             </div>
-            <h1 className="text-xl font-bold text-[rgb(var(--slate-12))]">
-              {activeSource.emoji} {activeSource.label}
-            </h1>
-            <p className="mt-0.5 text-sm text-[rgb(var(--slate-10))]">
-              {total} lead(s) captado(s)
-            </p>
+            <div className="min-w-0">
+              <h1 className="truncate text-2xl font-black text-slate-950">{bloco}</h1>
+              <p className="truncate text-xs font-semibold text-slate-500">
+                VozUP · Leads · {folder.label} · {total} leads
+              </p>
+            </div>
           </div>
-        </header>
 
-        {/* Sub-filtro por Landing Page (visível apenas no fonte=landing) */}
-        {activeSource.key === "landing" && (
-          <div className="flex flex-wrap gap-2">
-            {LANDING_SUB_SOURCES.map((sub) => {
-              const isActive = activeSub === sub.key;
-              const href = `/vozup?fonte=landing${sub.key !== "all" ? `&sub=${sub.key}` : ""}`;
-              return (
-                <a
-                  key={sub.key}
-                  href={href}
-                  className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-semibold transition ${
-                    isActive
-                      ? "bg-[#6d28d9] text-white"
-                      : "border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-10))] hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
-                  }`}
-                >
-                  {sub.label}
-                </a>
-              );
-            })}
+          <div className="hidden min-w-0 flex-1 justify-end gap-5 lg:flex">
+            <label className="relative block w-full max-w-[390px]">
+              <Search className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              <input
+                type="search"
+                placeholder="Buscar no CRM..."
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white/70 pl-11 pr-14 text-sm font-medium text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-cyan-300 focus:bg-white focus:ring-4 focus:ring-cyan-100/70"
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 inline-flex -translate-y-1/2 items-center gap-1 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-500">
+                <Command size={11} /> K
+              </span>
+            </label>
+            <button type="button" className="relative flex size-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-800">
+              <Bell size={20} />
+              <span className="absolute right-1.5 top-1.5 grid size-5 place-content-center rounded-full bg-cyan-700 text-[10px] font-black text-white">
+                2
+              </span>
+            </button>
+            <button type="button" className="flex size-11 items-center justify-center rounded-lg text-slate-500 transition hover:bg-white hover:text-slate-800">
+              <ChevronDown size={18} />
+            </button>
           </div>
-        )}
+        </div>
 
-        {/* Sub-filtro por Criativo (visível apenas no fonte=meta-ads) */}
-        {activeSource.key === "meta-ads" && creativeOptions.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            <a
-              href="/vozup?fonte=meta-ads"
-              className={`inline-flex h-8 items-center rounded-full px-3 text-xs font-semibold transition ${
-                !activeCriativo
-                  ? "bg-[#6d28d9] text-white"
-                  : "border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-10))] hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
-              }`}
-            >
-              Todos os criativos
-            </a>
-            {creativeOptions.map((opt) => {
-              const isActive = activeCriativo === opt.value;
-              return (
-                <a
-                  key={opt.value}
-                  href={`/vozup?fonte=meta-ads&criativo=${encodeURIComponent(opt.value)}`}
-                  className={`inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-semibold transition ${
-                    isActive
-                      ? "bg-[#6d28d9] text-white"
-                      : "border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-10))] hover:bg-[rgba(var(--alpha-2))] hover:text-[rgb(var(--slate-12))]"
-                  }`}
-                >
-                  {opt.value}
-                  <span className={isActive ? "text-white/70" : "text-[rgb(var(--slate-9))]"}>
-                    {opt.count}
-                  </span>
-                </a>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Search */}
-        <form method="GET" className="flex flex-wrap items-center gap-2">
-          <input type="hidden" name="fonte" value={activeSource.key} />
-          {activeSource.key === "landing" && activeSub !== "all" && (
-            <input type="hidden" name="sub" value={activeSub} />
+        <div className="space-y-4 p-4 sm:p-8">
+          {folder.blockKind === "meta-form" && creativeOptions.length > 0 && (
+            <div className="flex min-w-0 flex-wrap gap-2">
+              <a
+                href={blockHref({})}
+                className={`inline-flex h-9 items-center rounded-lg px-3 text-xs font-bold shadow-sm transition ${
+                  !activeCriativo
+                    ? "border border-cyan-200 bg-cyan-50 text-cyan-700"
+                    : "border border-slate-200 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-800"
+                }`}
+              >
+                Todos os criativos
+              </a>
+              {creativeOptions.map((opt) => {
+                const isActive = activeCriativo === opt.value;
+                return (
+                  <a
+                    key={opt.value}
+                    href={blockHref({ criativo: opt.value })}
+                    className={`inline-flex h-9 items-center gap-1.5 rounded-lg px-3 text-xs font-bold shadow-sm transition ${
+                      isActive
+                        ? "border border-cyan-200 bg-cyan-50 text-cyan-700"
+                        : "border border-slate-200 bg-white/70 text-slate-500 hover:bg-white hover:text-slate-800"
+                    }`}
+                  >
+                    {opt.value}
+                    <span className={isActive ? "text-cyan-600" : "text-slate-400"}>
+                      {opt.count}
+                    </span>
+                  </a>
+                );
+              })}
+            </div>
           )}
-          {activeSource.key === "meta-ads" && activeCriativo && (
-            <input type="hidden" name="criativo" value={activeCriativo} />
-          )}
-          <input
-            type="text"
-            name="q"
-            defaultValue={search}
-            placeholder="Buscar por nome ou telefone…"
-            className="h-9 min-w-48 flex-1 rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-3 text-sm text-[rgb(var(--slate-12))] placeholder:text-[rgb(var(--slate-9))] focus:outline-none focus:ring-2 focus:ring-[#a78bfa]/40"
+
+          <VozupLeadsTable
+            leads={visibleLeads}
+            total={total}
+            page={page}
+            totalPages={totalPages}
+            pasta={folder.key}
+            bloco={bloco}
+            search={search}
+            sort={sort}
+            dir={dir}
+            trainingOptions={trainingOptions}
+            recruiterOptions={recruiterOptions}
+            sourceLabel={bloco}
+            criativo={folder.blockKind === "meta-form" ? activeCriativo : undefined}
+            responsibleName={session?.user.name || "Henrique"}
+            sellers={sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
+            currentUser={
+              session
+                ? {
+                    email: session.user.email,
+                    isSupervisor: session.user.isSupervisor,
+                    role: session.user.role,
+                    permissions: session.user.permissions,
+                    institutoUpOnly: session.user.institutoUpOnly,
+                  }
+                : null
+            }
+            createContext={buildCreateContext(folder, bloco)}
           />
-          <button
-            type="submit"
-            className="h-9 rounded-lg bg-[#6d28d9] px-4 text-sm font-semibold text-white transition hover:bg-[#5b21b6]"
-          >
-            Buscar
-          </button>
-          {search && (
-            <a
-              href={`/vozup?fonte=${activeSource.key}${activeSource.key === "landing" && activeSub !== "all" ? `&sub=${activeSub}` : ""}${activeSource.key === "meta-ads" && activeCriativo ? `&criativo=${encodeURIComponent(activeCriativo)}` : ""}`}
-              className="h-9 content-center rounded-lg px-3 text-sm text-[rgb(var(--slate-10))] hover:text-[rgb(var(--slate-12))]"
-            >
-              Limpar
-            </a>
-          )}
-        </form>
-
-        <VozupLeadsTable
-          leads={leads}
-          total={total}
-          page={page}
-          totalPages={totalPages}
-          sourceKey={activeSource.key}
-          search={search}
-          sort={sort}
-          dir={dir}
-          trainingOptions={trainingOptions}
-          recruiterOptions={recruiterOptions}
-        />
+        </div>
       </main>
     );
   }
 
-  // Overview cards
-  const staticSources = await getSourceStats();
-  const sources = [...staticSources, ...aulaExperimentalTurmas];
-  const grandTotal = sources.reduce((s, src) => s + src.total, 0);
-  const grandMes = sources.reduce((s, src) => s + src.mes, 0);
-  const grandSemana = sources.reduce((s, src) => s + src.semana, 0);
+  const allBlocks = await listVozupBlockStats();
+
+  // ── Nível 2: blocos (formulários) de uma pasta ────────────────────────────
+  if (folder) {
+    const blocks = allBlocks.filter((b) => b.folderKey === folder.key);
+    const total = blocks.reduce((s, b) => s + b.total, 0);
+    const mes = blocks.reduce((s, b) => s + b.mes, 0);
+    const semana = blocks.reduce((s, b) => s + b.semana, 0);
+
+    return (
+      <main className="min-h-full space-y-6 bg-[#f5f8fb] p-4 sm:p-6">
+        <header>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/vozup"
+              className="flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-cyan-50 hover:text-cyan-700"
+              aria-label="Voltar para as pastas"
+            >
+              <ArrowLeft size={17} />
+            </Link>
+            <div className="inline-flex items-center gap-2 rounded-full border border-[#b8e8f8] bg-[#e5f8ff] px-3 py-1 text-[11px] font-bold text-[#0086b8]">
+              <FolderOpen size={13} />
+              VozUP · Leads
+            </div>
+          </div>
+          <h1 className="mt-3 text-3xl font-bold text-slate-950">
+            {folder.emoji} {folder.label}
+          </h1>
+          <p className="mt-1 text-sm font-medium text-slate-500">
+            {folder.description} Escolha {folder.blockKind === "aula" ? "uma aula" : "um formulário"} para ver os leads.
+          </p>
+        </header>
+
+        {/* Aggregate stats */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "Total na pasta", value: total },
+            { label: "Último mês", value: mes },
+            { label: "Última semana", value: semana },
+          ].map((s) => (
+            <div
+              key={s.label}
+              className="rounded-[18px] border border-[#dce8f2] bg-white p-5 shadow-[var(--dashboard-card-shadow)]"
+            >
+              <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{s.label}</p>
+              <p className="mt-2 text-3xl font-bold text-slate-950">{s.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Block cards */}
+        {blocks.length === 0 ? (
+          <div className="rounded-[20px] border border-[#dce8f2] bg-white p-10 text-center shadow-[var(--dashboard-card-shadow)]">
+            <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-cyan-50 text-cyan-700">
+              <Folder size={24} />
+            </div>
+            <p className="mt-4 text-sm font-bold text-slate-700">Nenhum formulário nesta pasta ainda</p>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              Assim que um lead chegar por um formulário desta categoria, o bloco aparece aqui automaticamente.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {blocks.map((block) => (
+              <BlockCard key={block.bloco} folder={folder} block={block} />
+            ))}
+          </div>
+        )}
+      </main>
+    );
+  }
+
+  // ── Nível 1: pastas ────────────────────────────────────────────────────────
+  const grandTotal = allBlocks.reduce((s, b) => s + b.total, 0);
+  const grandMes = allBlocks.reduce((s, b) => s + b.mes, 0);
+  const grandSemana = allBlocks.reduce((s, b) => s + b.semana, 0);
 
   return (
-    <main className="space-y-6">
+    <main className="min-h-full space-y-6 bg-[#f5f8fb] p-4 sm:p-6">
       <header>
-        <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-[#3b1d8a]/30 bg-[#3b1d8a]/10 px-2.5 py-0.5 text-[11px] font-semibold text-[#a78bfa]">
-          🎤 VozUP
+        <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[#b8e8f8] bg-[#e5f8ff] px-3 py-1 text-[11px] font-bold text-[#0086b8]">
+          <Users size={13} />
+          VozUP
         </div>
-        <h1 className="text-2xl font-bold text-[rgb(var(--slate-12))]">VozUP</h1>
-        <p className="mt-0.5 text-sm text-[rgb(var(--slate-10))]">
-          Leads captados pelas páginas da VozUP, divididos por origem
+        <h1 className="text-3xl font-bold text-slate-950">Leads</h1>
+        <p className="mt-1 text-sm font-medium text-slate-500">
+          Escolha uma pasta, depois um formulário, para ver os leads correspondentes.
         </p>
       </header>
 
@@ -606,18 +481,18 @@ export default async function VozupPage({ searchParams }: PageProps) {
         ].map((s) => (
           <div
             key={s.label}
-            className="rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-4 shadow-[0_1px_3px_rgba(28,32,36,0.06)]"
+            className="rounded-[18px] border border-[#dce8f2] bg-white p-5 shadow-[var(--dashboard-card-shadow)]"
           >
-            <p className="text-xs font-medium text-[rgb(var(--slate-10))]">{s.label}</p>
-            <p className="mt-1 text-3xl font-bold text-[rgb(var(--slate-12))]">{s.value}</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-400">{s.label}</p>
+            <p className="mt-2 text-3xl font-bold text-slate-950">{s.value}</p>
           </div>
         ))}
       </div>
 
-      {/* Source cards */}
+      {/* Folder cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {sources.map((src) => (
-          <SourceCard key={src.key} src={src} />
+        {VOZUP_FOLDERS.map((f) => (
+          <FolderCard key={f.key} folder={f} blocks={allBlocks.filter((b) => b.folderKey === f.key)} />
         ))}
       </div>
     </main>

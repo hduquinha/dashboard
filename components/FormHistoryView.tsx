@@ -79,8 +79,75 @@ function enrollmentLabel(e: EnrollmentSummary): string {
 
 function payloadFields(payload: Record<string, unknown>): { key: string; label: string; value: string }[] {
   return Object.entries(payload)
-    .filter(([key, value]) => !isInternalKey(key) && formatValue(value) !== null)
+    .filter(([key, value]) => key !== "facebook_field_data" && !isInternalKey(key) && formatValue(value) !== null)
     .map(([key, value]) => ({ key, label: leadFieldLabel(key), value: formatValue(value)! }));
+}
+
+/* ─── Facebook Lead Ads: perguntas e respostas do formulário ─── */
+
+interface FormQA {
+  question: string;
+  answer: string;
+}
+
+/** "-_quero_perder_o_medo_de_falar_em_público" → "Quero perder o medo de falar em público" */
+function cleanFacebookText(raw: string): string {
+  const text = raw
+    .replace(/^[-_\s]+/, "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * As respostas do formulário do Meta chegam em `facebook_field_data` como
+ * [{ name: "pergunta_com_underscores?", values: ["-_resposta"] }, ...] — é a
+ * informação mais valiosa pro vendedor (objetivo, disponibilidade, quando quer
+ * começar), então vira um bloco de destaque em vez de JSON cru.
+ */
+function parseFacebookQA(payload: Record<string, unknown>): FormQA[] {
+  const raw = payload.facebook_field_data;
+  if (!Array.isArray(raw)) return [];
+  const result: FormQA[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const { name, values } = entry as { name?: unknown; values?: unknown };
+    if (typeof name !== "string" || !name.trim()) continue;
+    const answer = (Array.isArray(values) ? values : [values])
+      .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+      .map(cleanFacebookText)
+      .filter(Boolean)
+      .join(", ");
+    if (!answer) continue;
+    result.push({ question: cleanFacebookText(name), answer });
+  }
+  return result;
+}
+
+function FacebookQABlock({ qa }: { qa: FormQA[] }) {
+  if (qa.length === 0) return null;
+  return (
+    <div className="border-b border-cyan-100 bg-cyan-50/60 px-4 py-3">
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-cyan-700">
+        Respostas do formulário
+      </p>
+      <div className="space-y-1.5">
+        {qa.map((item, index) => (
+          <div
+            key={`${item.question}-${index}`}
+            className="rounded-lg border border-cyan-100 border-l-4 border-l-cyan-500 bg-white px-3 py-2 shadow-sm"
+          >
+            <p className="text-[11px] leading-snug text-neutral-500">{item.question}</p>
+            <p className="mt-0.5 break-words text-[13px] font-bold leading-snug text-neutral-900">
+              {item.answer}
+            </p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /* ─── Sub-components ─── */
@@ -92,6 +159,7 @@ function EnrollmentCard({ e, index, total }: { e: EnrollmentSummary; index: numb
     ? formatTrainingDateLabel(e.treinamentoData) ?? fmtDate(e.treinamentoData)
     : null;
   const fields = e.payload ? payloadFields(e.payload) : [];
+  const facebookQA = e.payload ? parseFacebookQA(e.payload) : [];
 
   return (
     <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
@@ -118,6 +186,9 @@ function EnrollmentCard({ e, index, total }: { e: EnrollmentSummary; index: numb
           ) : null}
         </div>
       </div>
+
+      {/* Respostas do formulário do Meta em destaque */}
+      <FacebookQABlock qa={facebookQA} />
 
       {/* Form fields */}
       {fields.length > 0 && (
@@ -165,8 +236,14 @@ export function FormHistoryView({ inscricao }: FormHistoryViewProps) {
 
   // Fallback: show current lead's payload (allEnrollments null or empty)
   const fields = payloadFields(currentPayload);
+  const facebookQA = parseFacebookQA(currentPayload);
   return (
     <div className="space-y-5">
+      {facebookQA.length > 0 && (
+        <section className="overflow-hidden rounded-xl border border-cyan-100">
+          <FacebookQABlock qa={facebookQA} />
+        </section>
+      )}
       {fields.length > 0 ? (
         <section>
           <p className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-neutral-400">

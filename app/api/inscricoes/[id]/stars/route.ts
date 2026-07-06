@@ -1,6 +1,12 @@
 import { NextResponse } from "next/server";
-import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
+import {
+  assertAuthenticatedRequest,
+  getRequestDashboardSession,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { setInscricaoStars } from "@/lib/db";
+import { maskInscricaoForUser } from "@/lib/leadPermissions";
+import { hasPermission } from "@/lib/permissions";
 
 type RouteParams = {
   id: string;
@@ -31,6 +37,11 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     throw error;
+  }
+
+  const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "crm.manage_temperature")) {
+    return NextResponse.json({ error: "Sem permissao para alterar temperatura." }, { status: 403 });
   }
 
   const id = await resolveInscricaoId(context);
@@ -71,7 +82,7 @@ export async function PATCH(request: Request, context: RouteContext) {
 
   try {
     const inscricao = await setInscricaoStars(id, stars);
-    return NextResponse.json({ inscricao });
+    return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });

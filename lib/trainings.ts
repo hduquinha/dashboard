@@ -218,6 +218,44 @@ export function buildAutoTrainingLabel(id: string, kind: TrainingKind = "online"
   return formatted ? `Encontro Online ${formatted}` : trimmed;
 }
 
+/**
+ * Classifica um treinamento nos dois únicos produtos do Instituto UP.
+ * Retorna `null` para qualquer outro tipo de cadastro (esses pertencem à
+ * operação da VozUP e não devem aparecer na aba Instituto UP).
+ */
+export function classifyTrainingProduct(
+  id: string | null | undefined,
+  opts: { isUpDay?: boolean } = {}
+): TrainingKind | null {
+  const normalized = normalizeId(id);
+  if (!normalized || isIgnoredTrainingId(normalized)) {
+    return null;
+  }
+
+  const configured = findConfiguredTraining(normalized);
+  const comparable = normalizeComparable(normalized);
+
+  if (
+    opts.isUpDay ||
+    configured?.kind === "up-day-plus" ||
+    comparable.includes("up day") ||
+    comparable.includes("up-day") ||
+    /^\d{1,2}\s*e\s*\d{1,2}\//.test(comparable)
+  ) {
+    return "up-day-plus";
+  }
+
+  if (
+    configured?.kind === "online" ||
+    comparable.includes("encontro online") ||
+    formatTrainingDateLabel(normalized) !== null
+  ) {
+    return "online";
+  }
+
+  return null;
+}
+
 function parseEntry(value: unknown): TrainingOption | null {
   if (!value || typeof value !== "object") {
     return null;

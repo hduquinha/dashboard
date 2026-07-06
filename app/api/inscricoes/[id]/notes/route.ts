@@ -5,6 +5,8 @@ import {
   UnauthorizedError,
 } from "@/lib/auth";
 import { addInscricaoNote } from "@/lib/db";
+import { maskInscricaoForUser } from "@/lib/leadPermissions";
+import { hasPermission } from "@/lib/permissions";
 
 type RouteParams = {
   id: string;
@@ -61,12 +63,15 @@ export async function POST(request: Request, context: RouteContext) {
 
   const viaWhatsapp = typeof record.viaWhatsapp === "boolean" ? record.viaWhatsapp : undefined;
   const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "crm.manage_notes")) {
+    return NextResponse.json({ error: "Sem permissao para criar observacoes." }, { status: 403 });
+  }
   const author =
     session?.user.name || session?.user.email || null;
 
   try {
     const inscricao = await addInscricaoNote(id, content, { viaWhatsapp, author });
-    return NextResponse.json({ inscricao });
+    return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {
       return NextResponse.json({ error: error.message }, { status: 404 });

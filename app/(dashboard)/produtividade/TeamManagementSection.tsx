@@ -12,10 +12,6 @@ export interface TeamMemberRow {
   institutoUpOnly: boolean;
 }
 
-interface TeamManagementSectionProps {
-  initialMembers: TeamMemberRow[];
-}
-
 function NewMemberForm({ onCreated }: { onCreated: (member: TeamMemberRow) => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");

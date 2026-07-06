@@ -6,6 +6,7 @@ import {
   getSessionCookieMaxAge,
   type DashboardUser,
 } from "@/lib/auth";
+import { hasPermission } from "@/lib/permissions";
 import { authenticateTeamMember } from "@/lib/teamAuth";
 import {
   consumeRateLimit,
@@ -131,7 +132,12 @@ export async function POST(request: NextRequest) {
       email: member.email,
       name: member.name,
       role: member.role,
-      isSupervisor: member.role === "admin",
+      isSupervisor:
+        member.role === "super_master" ||
+        member.role === "admin" ||
+        hasPermission(member, "crm.view_all_leads"),
+      priorityLevel: member.priorityLevel,
+      permissions: member.permissions,
       institutoUpOnly: member.institutoUpOnly,
     };
 

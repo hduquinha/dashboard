@@ -53,24 +53,28 @@ export async function getCommercialProductivitySnapshot(params: {
       sellerParamsLeads
     ),
     pool.query<{ total: string; unassigned: string }>(
-      `SELECT COUNT(*)::text AS total,
+      `SELECT COUNT(*) FILTER (WHERE assigned_seller_id IS NOT NULL)::text AS total,
               COUNT(*) FILTER (WHERE assigned_seller_id IS NULL)::text AS unassigned
        FROM ${SCHEMA}.commercial_leads
        WHERE true ${sellerClauseLeads}`,
       sellerParamsLeads
     ),
+    // COUNT(DISTINCT inscricao_id): mover o mesmo lead pra la e pra ca varias
+    // vezes conta UMA vez por etapa — senao as metricas inflam a cada arrasto.
+    // from = to (reordenacao dentro da coluna) tambem fica de fora.
     pool.query<{ to_stage: string; actor_email: string; actor_name: string; total: string }>(
-      `SELECT to_stage, actor_email, actor_name, COUNT(*)::text AS total
+      `SELECT to_stage, actor_email, actor_name, COUNT(DISTINCT inscricao_id)::text AS total
        FROM ${SCHEMA}.commercial_events
        WHERE event_type = 'stage_changed'
          AND created_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
          ${sellerClauseEvents}
          AND to_stage IS NOT NULL
+         AND from_stage IS DISTINCT FROM to_stage
        GROUP BY to_stage, actor_email, actor_name`,
       eventDateParams
     ),
     pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total
+      `SELECT COUNT(DISTINCT inscricao_id)::text AS total
        FROM ${SCHEMA}.commercial_events
        WHERE event_type = 'assigned'
          AND created_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
@@ -78,10 +82,11 @@ export async function getCommercialProductivitySnapshot(params: {
       eventDateParams
     ),
     pool.query<{ total: string }>(
-      `SELECT COUNT(*)::text AS total
+      `SELECT COUNT(DISTINCT inscricao_id)::text AS total
        FROM ${SCHEMA}.commercial_events
        WHERE created_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
-         ${sellerClauseEvents}`,
+         ${sellerClauseEvents}
+         AND NOT (event_type = 'stage_changed' AND from_stage IS NOT DISTINCT FROM to_stage)`,
       eventDateParams
     ),
     pool.query<{
@@ -206,13 +211,14 @@ export async function getCommercialChannelMetrics(params: {
     campaign_name: string | null;
     total: string;
   }>(
-    `SELECT ce.to_stage, cl.campaign_source, cl.campaign_name, COUNT(*)::text AS total
+    `SELECT ce.to_stage, cl.campaign_source, cl.campaign_name, COUNT(DISTINCT ce.inscricao_id)::text AS total
      FROM ${SCHEMA}.commercial_events ce
      JOIN ${SCHEMA}.commercial_leads cl ON cl.inscricao_id = ce.inscricao_id
      WHERE ce.event_type = 'stage_changed'
        AND ce.created_at BETWEEN $1::date AND ($2::date + INTERVAL '1 day')
        ${sellerClause}
        AND ce.to_stage IS NOT NULL
+       AND ce.from_stage IS DISTINCT FROM ce.to_stage
      GROUP BY ce.to_stage, cl.campaign_source, cl.campaign_name`,
     queryParams
   );

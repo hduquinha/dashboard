@@ -4,8 +4,10 @@ import { listTeamMembers } from "@/lib/teamAuth";
 import {
   isProductivityManager,
   productivityActorFromUser,
+  removeProductivityLeadAssignment,
   upsertProductivityLeadAssignment,
 } from "@/lib/productivity";
+import { hasPermission } from "@/lib/permissions";
 import type { CommercialStage } from "@/types/inscricao";
 import type { CommercialSeller, CommercialWorkspace } from "@/types/commercial";
 
@@ -31,7 +33,7 @@ function normalizeEmail(value: string | null | undefined): string {
 }
 
 function assertSupervisor(user: DashboardUser | null | undefined): void {
-  if (!isProductivityManager(user)) {
+  if (!isProductivityManager(user) && !hasPermission(user, "crm.assign_leads")) {
     throw new Error("Apenas administradores podem executar esta acao comercial.");
   }
 }
@@ -72,6 +74,10 @@ export async function ensureCommercialSchema(): Promise<void> {
     );
 
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_reason TEXT;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_course TEXT;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_value NUMERIC;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE;
 
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.commercial_events (
       id BIGSERIAL PRIMARY KEY,
@@ -230,6 +236,155 @@ export async function setCommercialStage(
   await insertEvent(inscricaoId, "stage_changed", user, { actor }, fromStage, stage);
 }
 
+export interface CommercialTimelineEvent {
+  id: number;
+  type: string;
+  fromStage: string | null;
+  toStage: string | null;
+  actorName: string | null;
+  actorEmail: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+/**
+ * Linha do tempo do lead: tudo que aconteceu (atribuicoes, trocas de etapa,
+ * fechamento, reabertura e atividades manuais), do mais recente ao mais
+ * antigo. Reordenacoes dentro da mesma coluna (from = to) ficam de fora.
+ */
+export async function listCommercialLeadTimeline(
+  inscricaoId: number
+): Promise<CommercialTimelineEvent[]> {
+  await ensureCommercialSchema();
+  const result = await getPool().query<{
+    id: number;
+    event_type: string;
+    from_stage: string | null;
+    to_stage: string | null;
+    actor_name: string | null;
+    actor_email: string | null;
+    payload: Record<string, unknown> | null;
+    created_at: Date | string;
+  }>(
+    `
+      SELECT id, event_type, from_stage, to_stage, actor_name, actor_email, payload, created_at
+      FROM ${SCHEMA}.commercial_events
+      WHERE inscricao_id = $1
+        AND NOT (event_type = 'stage_changed' AND from_stage IS NOT DISTINCT FROM to_stage)
+      ORDER BY created_at DESC, id DESC
+      LIMIT 300
+    `,
+    [inscricaoId]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    type: row.event_type,
+    fromStage: row.from_stage,
+    toStage: row.to_stage,
+    actorName: row.actor_name,
+    actorEmail: row.actor_email,
+    payload: row.payload ?? {},
+    createdAt: new Date(row.created_at).toISOString(),
+  }));
+}
+
+export const COMMERCIAL_ACTIVITY_KINDS = ["whatsapp", "ligacao", "email", "anotacao"] as const;
+export type CommercialActivityKind = (typeof COMMERCIAL_ACTIVITY_KINDS)[number];
+
+/** Registro manual na linha do tempo: "falei no WhatsApp", "liguei", etc. */
+export async function logCommercialLeadActivity(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  kindInput: unknown,
+  descriptionInput: unknown
+): Promise<void> {
+  await ensureCommercialLeadRow(inscricaoId);
+
+  const kind = COMMERCIAL_ACTIVITY_KINDS.includes(kindInput as CommercialActivityKind)
+    ? (kindInput as CommercialActivityKind)
+    : null;
+  if (!kind) {
+    throw new Error("Tipo de atividade invalido.");
+  }
+
+  const description =
+    typeof descriptionInput === "string" ? descriptionInput.trim().slice(0, 2000) : "";
+  if (!description && kind === "anotacao") {
+    throw new Error("Escreva a anotacao.");
+  }
+
+  await insertEvent(inscricaoId, "activity", user, { kind, description });
+}
+
+export type CommercialCloseReason = "curso_fechado" | "sem_continuidade";
+
+export interface CommercialCloseInput {
+  reason: CommercialCloseReason;
+  courseName?: string | null;
+  value?: number | null;
+}
+
+/**
+ * Fecha o lead e ele sai do Kanban da equipe: "curso_fechado" vira etapa
+ * "ganho" (com nome do curso e valor pago) e "sem_continuidade" vira
+ * "perdido". Redistribuir o lead depois reabre como "novo" (ver
+ * applyCommercialLeadAssignment), preservando o historico.
+ */
+export async function closeCommercialLead(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  input: CommercialCloseInput
+): Promise<void> {
+  await ensureCommercialLeadRow(inscricaoId);
+
+  if (input.reason !== "curso_fechado" && input.reason !== "sem_continuidade") {
+    throw new Error("Motivo de fechamento invalido.");
+  }
+
+  const actor = productivityActorFromUser(user);
+  const item = (await listInscricoesByIds([inscricaoId]))[0];
+  const assignedEmail = normalizeEmail(item?.commercial?.assignedSellerEmail);
+  if (!isProductivityManager(user) && assignedEmail !== actor.email) {
+    throw new Error("Voce nao pode fechar lead de outro vendedor.");
+  }
+
+  const courseName = typeof input.courseName === "string" ? input.courseName.trim() || null : null;
+  const value =
+    typeof input.value === "number" && Number.isFinite(input.value) && input.value >= 0
+      ? input.value
+      : null;
+  if (input.reason === "curso_fechado" && !courseName) {
+    throw new Error("Informe o nome do curso fechado.");
+  }
+
+  const fromStage = item?.commercial?.stage ?? "novo";
+  const toStage: CommercialStage = input.reason === "curso_fechado" ? "ganho" : "perdido";
+
+  await getPool().query(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET commercial_stage = $2,
+          closed_reason = $3,
+          closed_course = $4,
+          closed_value = $5,
+          closed_at = NOW(),
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+    `,
+    [inscricaoId, toStage, input.reason, courseName, value]
+  );
+
+  await insertEvent(
+    inscricaoId,
+    "closed",
+    user,
+    { reason: input.reason, courseName, value },
+    fromStage,
+    toStage
+  );
+}
+
 interface CommercialLeadAssignmentContext {
   sourceGroupTitle?: string | null;
   leadPath?: string[] | null;
@@ -242,6 +397,21 @@ export async function assignCommercialLead(
   context: CommercialLeadAssignmentContext = {}
 ): Promise<{ seller: CommercialSeller }> {
   assertSupervisor(user);
+  return applyCommercialLeadAssignment(user, inscricaoId, sellerId, context);
+}
+
+/**
+ * Núcleo da atribuição de responsável, sem o gate de supervisor. Usado pelo
+ * repasse (assignCommercialLead, supervisores) e pela criação manual de lead,
+ * onde quem não é supervisor pode atribuir apenas a si mesmo (regra aplicada
+ * pelo chamador).
+ */
+export async function applyCommercialLeadAssignment(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  sellerId: number,
+  context: CommercialLeadAssignmentContext = {}
+): Promise<{ seller: CommercialSeller }> {
   await ensureCommercialLeadRow(inscricaoId);
 
   const sellers = await listCommercialSellers();
@@ -254,6 +424,14 @@ export async function assignCommercialLead(
   const items = await listInscricoesByIds([inscricaoId]);
   const item = items[0];
 
+  // Lead distribuido/redistribuido chega como "novo" no Kanban do vendedor.
+  // Lead fechado (ganho/perdido) que for redistribuido reabre como "novo",
+  // mantendo todo o historico de eventos.
+  const previousStage = item?.commercial?.stage ?? "novo";
+  const previousSellerId = item?.commercial?.assignedSellerId ?? null;
+  const wasClosed = previousStage === "ganho" || previousStage === "perdido";
+  const resetToNovo = wasClosed || previousSellerId !== seller.chatwootUserId;
+
   await getPool().query(
     `
       UPDATE ${SCHEMA}.commercial_leads
@@ -264,7 +442,12 @@ export async function assignCommercialLead(
           assigned_by_email = $6,
           assigned_by_name = $7,
           assigned_at = NOW(),
-          commercial_stage = CASE WHEN commercial_stage = 'novo' THEN 'primeiro_contato' ELSE commercial_stage END,
+          commercial_stage = CASE WHEN $8 THEN 'novo' ELSE commercial_stage END,
+          position = CASE WHEN $8 THEN NULL ELSE position END,
+          closed_reason = CASE WHEN $9 THEN NULL ELSE closed_reason END,
+          closed_course = CASE WHEN $9 THEN NULL ELSE closed_course END,
+          closed_value = CASE WHEN $9 THEN NULL ELSE closed_value END,
+          closed_at = CASE WHEN $9 THEN NULL ELSE closed_at END,
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
@@ -276,8 +459,17 @@ export async function assignCommercialLead(
       actor.id,
       actor.email,
       actor.name,
+      resetToNovo,
+      wasClosed,
     ]
   );
+  if (wasClosed) {
+    await insertEvent(inscricaoId, "reopened", user, {
+      sellerId: seller.chatwootUserId,
+      sellerEmail: seller.email,
+      sellerName: seller.name,
+    }, previousStage, "novo");
+  }
   await insertEvent(inscricaoId, "assigned", user, {
     sellerId: seller.chatwootUserId,
     sellerEmail: seller.email,
@@ -299,4 +491,53 @@ export async function assignCommercialLead(
   });
 
   return { seller };
+}
+
+/**
+ * Remove a associação lead ↔ vendedor ("Repassar para vendedor" selecionado de
+ * volta na ficha). Limpa as colunas assigned_* em commercial_leads — todos os
+ * indicadores de "sem responsável" leem assigned_seller_id IS NULL — e o
+ * vínculo de produtividade. Etapa comercial e histórico ficam intactos.
+ */
+export async function unassignCommercialLead(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number
+): Promise<void> {
+  assertSupervisor(user);
+  await ensureCommercialSchema();
+
+  const item = (await listInscricoesByIds([inscricaoId]))[0];
+  if (!item) {
+    throw new Error("Lead nao encontrado.");
+  }
+  const previousSellerId = item.commercial?.assignedSellerId ?? null;
+  const previousSellerEmail = item.commercial?.assignedSellerEmail ?? null;
+  const previousSellerName = item.commercial?.assignedSellerName ?? null;
+  if (previousSellerId === null && !previousSellerEmail) {
+    return;
+  }
+
+  await getPool().query(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET assigned_seller_id = NULL,
+          assigned_seller_email = NULL,
+          assigned_seller_name = NULL,
+          assigned_by_user_id = NULL,
+          assigned_by_email = NULL,
+          assigned_by_name = NULL,
+          assigned_at = NULL,
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+    `,
+    [inscricaoId]
+  );
+
+  await insertEvent(inscricaoId, "unassigned", user, {
+    sellerId: previousSellerId,
+    sellerEmail: previousSellerEmail,
+    sellerName: previousSellerName,
+  });
+
+  await removeProductivityLeadAssignment(inscricaoId);
 }

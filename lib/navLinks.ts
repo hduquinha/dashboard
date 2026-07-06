@@ -31,8 +31,8 @@ export const NAV_LINKS: NavLink[] = [
   {
     key: "produtividade",
     href: "/produtividade",
-    label: "Equipe",
-    description: "Atividade e distribuição",
+    label: "Kanban",
+    description: "Kanban e produtividade da equipe",
     icon: "📋",
     group: "primary",
     brand: "instituto-up",
@@ -40,8 +40,8 @@ export const NAV_LINKS: NavLink[] = [
   {
     key: "distribuicao",
     href: "/distribuicao",
-    label: "Distribuição",
-    description: "Leads por filtro",
+    label: "Chegada de Leads",
+    description: "Novos leads Meta e landing pages",
     icon: "↗",
     group: "primary",
     brand: "instituto-up",
@@ -100,6 +100,15 @@ export const NAV_LINKS: NavLink[] = [
     group: "secondary",
     brand: "instituto-up",
   },
+  {
+    key: "usuarios",
+    href: "/usuarios",
+    label: "Usuarios",
+    description: "Permissoes e acessos",
+    icon: "🔐",
+    group: "secondary",
+    brand: "instituto-up",
+  },
 
   // ── VozUP ──────────────────────────────────────────────────────
   {
@@ -108,6 +117,15 @@ export const NAV_LINKS: NavLink[] = [
     label: "Leads VozUP",
     description: "Leads captados pelas páginas VozUP",
     icon: "👥",
+    group: "primary",
+    brand: "vozup",
+  },
+  {
+    key: "vozup-financeiro",
+    href: "/financeiro",
+    label: "Gestão Financeira",
+    description: "ERP financeiro VozUP",
+    icon: "💳",
     group: "primary",
     brand: "vozup",
   },

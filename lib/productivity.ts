@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 import type { DashboardUser } from "@/lib/auth";
 import { getPool, listInscricoes } from "@/lib/db";
 import { listTeamMembers, updateTeamMember } from "@/lib/teamAuth";
+import { hasPermission, isSuperMaster } from "@/lib/permissions";
 import {
   CLOSING_NO_SHOW_ROWS,
   CLOSING_PRODUCTION_ROWS,
@@ -112,13 +113,21 @@ export function productivityActorFromUser(user: DashboardUser | null | undefined
 }
 
 export function isProductivityManager(
-  user: Pick<DashboardUser, "role" | "email"> | null | undefined
+  user: Pick<DashboardUser, "role" | "email"> & { permissions?: readonly string[] | null; institutoUpOnly?: boolean | null } | null | undefined
 ): boolean {
   if (!user) {
     return false;
   }
 
-  if (user.role === "admin") {
+  if (isSuperMaster(user) || user.role === "admin") {
+    return true;
+  }
+
+  if (
+    hasPermission(user, "crm.view_all_leads") ||
+    hasPermission(user, "admin.productivity") ||
+    hasPermission(user, "admin.distribution")
+  ) {
     return true;
   }
 
@@ -812,6 +821,18 @@ export async function upsertProductivityLeadAssignment(input: {
       input.actor.name,
       JSON.stringify(sourceSnapshot),
     ]
+  );
+}
+
+/**
+ * Remove o vínculo de produtividade quando o lead é desassociado do vendedor —
+ * mantém a tabela coerente com dashboard.commercial_leads (sem responsável).
+ */
+export async function removeProductivityLeadAssignment(inscricaoId: number): Promise<void> {
+  await ensureProductivitySchema();
+  await getPool().query(
+    `DELETE FROM ${SCHEMA}.productivity_lead_assignments WHERE dashboard_inscricao_id = $1`,
+    [inscricaoId]
   );
 }
 

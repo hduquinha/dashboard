@@ -55,6 +55,8 @@ describe("lib/auth", () => {
           name: "Agent Example",
           role: "admin",
           isSupervisor: true,
+          priorityLevel: 60,
+          permissions: [],
           institutoUpOnly: false,
         },
       },

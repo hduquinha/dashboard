@@ -3,9 +3,14 @@ import { NextResponse } from "next/server";
 import {
   assertAuthenticatedRequest,
   assertAuthorizationHeader,
+  getRequestDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
-import { insertInscricao, listInscricoes } from "@/lib/db";
+import { insertInscricao, listInscricoes, getInscricaoById } from "@/lib/db";
+import { applyCommercialLeadAssignment, listCommercialSellers } from "@/lib/commercial";
+import { isProductivityManager } from "@/lib/productivity";
+import { hasPermission } from "@/lib/permissions";
+import { maskInscricoesForUser } from "@/lib/leadPermissions";
 import { ttlCache } from "@/lib/serverCache";
 import { LEAD_FIELD_CATALOG } from "@/lib/leadFields";
 import type { InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
@@ -154,6 +159,13 @@ export async function GET(request: NextRequest) {
   } satisfies RequestContext;
 
   const result = await handleInscricoesRequest(context);
+  const session = getRequestDashboardSession(request);
+  if (result.status === 200 && Array.isArray(result.body.data)) {
+    return NextResponse.json(
+      { ...result.body, data: maskInscricoesForUser(result.body.data, session?.user ?? null) },
+      { status: result.status }
+    );
+  }
   return NextResponse.json(result.body, { status: result.status });
 }
 
@@ -162,6 +174,11 @@ export async function POST(request: NextRequest) {
     assertAuthenticatedRequest(request);
   } catch {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "crm.create_leads")) {
+    return NextResponse.json({ error: "Sem permissao para criar leads." }, { status: 403 });
   }
 
   let body: unknown;
@@ -195,13 +212,53 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  const sellerIdRaw = record.sellerId;
+  const sellerId =
+    typeof sellerIdRaw === "number" && Number.isInteger(sellerIdRaw) && sellerIdRaw > 0
+      ? sellerIdRaw
+      : null;
+
   try {
-    const { inscricao, merged } = await insertInscricao({
+    // Valida o colaborador responsável antes de gravar o lead.
+    let seller: Awaited<ReturnType<typeof listCommercialSellers>>[number] | null = null;
+    if (sellerId !== null) {
+      const sellers = await listCommercialSellers();
+      seller = sellers.find((s) => s.chatwootUserId === sellerId) ?? null;
+      if (!seller) {
+        return NextResponse.json({ error: "Colaborador responsável não encontrado" }, { status: 400 });
+      }
+
+      // Mesma regra do CRM: quem não é supervisor só atribui lead a si mesmo.
+      if (
+        session &&
+        !isProductivityManager(session.user) &&
+        !hasPermission(session.user, "crm.assign_leads")
+      ) {
+        const own = session.user.email.trim().toLowerCase();
+        if ((seller.email ?? "").trim().toLowerCase() !== own) {
+          return NextResponse.json(
+            { error: "Você só pode atribuir novos leads a si mesmo" },
+            { status: 403 }
+          );
+        }
+      }
+    }
+
+    const created = await insertInscricao({
       nome,
       telefone: telefone || undefined,
       produto,
       fields,
     });
+    const { merged } = created;
+    let { inscricao } = created;
+
+    if (seller) {
+      const session = getRequestDashboardSession(request);
+      await applyCommercialLeadAssignment(session?.user ?? null, inscricao.id, seller.chatwootUserId);
+      inscricao = (await getInscricaoById(inscricao.id)) ?? inscricao;
+    }
+
     return NextResponse.json({ inscricao, merged }, { status: 201 });
   } catch (error) {
     console.error("Failed to create inscricao", error);

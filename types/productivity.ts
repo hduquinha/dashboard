@@ -102,7 +102,7 @@ export interface ProductivityLeadAgent {
   chatwootUserId: number;
   name: string;
   email: string;
-  role: "admin" | "member";
+  role: "super_master" | "admin" | "member";
   inboxIds: number[];
   active: boolean;
   position: number;

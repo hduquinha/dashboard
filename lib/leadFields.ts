@@ -39,6 +39,9 @@ export const LEAD_FIELD_CATALOG: LeadFieldDef[] = [
   { key: "setor_profissional", label: "Setor (empresa)", category: "profissional" },
   // Origem — normalmente preenchido automaticamente pelo formulário de origem.
   { key: "origem", label: "Origem", category: "origem" },
+  // Identifica a aula/turma VozUP do lead — preenchido pelo seletor de aula do
+  // cadastro manual, não digitado livremente (por isso addable: false).
+  { key: "data_treinamento", label: "Data do treinamento", category: "origem", addable: false },
   { key: "traffic_source", label: "Indicador / canal", category: "origem" },
   { key: "campaign_source", label: "Fonte (campanha)", category: "origem", addable: false },
   { key: "campaign_name", label: "Campanha", category: "origem", addable: false },
@@ -65,6 +68,8 @@ export const LEAD_FIELD_LABELS: Record<string, string> = {
   ocupacao: "Ocupação",
   occupation: "Ocupação",
   objetivo: "Objetivo",
+  maior_dor_comunicacao: "Maior dor em comunicação",
+  maior_desafio_comunicacao: "Maior desafio em comunicação",
   interesse_workshop: "Interesse no workshop",
   interesse: "Interesse",
   treinamento: "Treinamento",

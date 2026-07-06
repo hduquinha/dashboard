@@ -6,6 +6,7 @@ import { getCommercialWorkspace } from "@/lib/commercial";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames, listCampaignTermOptions } from "@/lib/db";
 import type { CommercialStage, InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 import { ttlCache } from "@/lib/serverCache";
+import { maskInscricoesForUser } from "@/lib/leadPermissions";
 
 export const dynamic = "force-dynamic";
 
@@ -161,12 +162,23 @@ export default async function LeadsPage(props: LeadsPageProps) {
     }),
   ]);
 
-  const previewItems = result.data.map(toCrmPreviewItem);
+  const previewItems = maskInscricoesForUser(result.data, session?.user ?? null).map(toCrmPreviewItem);
 
   return (
     <CrmClient
       inscricoes={previewItems}
       commercial={commercial}
+      currentUser={
+        session
+          ? {
+              email: session.user.email,
+              isSupervisor: commercial.isSupervisor,
+              role: session.user.role,
+              permissions: session.user.permissions,
+              institutoUpOnly: session.user.institutoUpOnly,
+            }
+          : null
+      }
       total={result.total}
       page={page}
       pageSize={PAGE_SIZE}

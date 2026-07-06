@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import ProductivityCharts from "./ProductivityCharts";
 import { KanbanSection } from "./KanbanSection";
-import { TeamManagementSection, type TeamMemberRow } from "./TeamManagementSection";
+import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import {
   CLOSING_NO_SHOW_ROWS,
   CLOSING_PRODUCTION_ROWS,
@@ -40,9 +40,16 @@ import type {
   ProductivityLeadAgent,
   ProductivityWorkspace,
 } from "@/types/productivity";
+import type { CommercialWorkspace } from "@/types/commercial";
+import type { TrainingOption } from "@/types/training";
+import type { PermissionUser } from "@/lib/permissions";
 
 interface ProductivityClientProps {
   initialWorkspace: ProductivityWorkspace;
+  commercial: CommercialWorkspace;
+  trainingOptions: TrainingOption[];
+  recruiterOptions: Array<{ code: string; name: string }>;
+  currentUser: ({ email: string; isSupervisor: boolean } & PermissionUser) | null;
 }
 
 function todayDate(): string {
@@ -211,7 +218,9 @@ const STAGE_COLORS: Record<string, string> = {
 };
 
 function KanbanPanel({ kanban }: { kanban: ProductivityKanbanSnapshot }) {
-  const maxStageTotal = Math.max(1, ...kanban.stageMetrics.map((stage) => stage.total));
+  // O board da equipe so contem leads atribuidos — os numeros aqui espelham
+  // isso; leads sem responsavel vivem na Chegada de Leads.
+  const maxStageTotal = Math.max(1, ...kanban.stageMetrics.map((stage) => stage.assigned));
   const topConsultants = kanban.consultantMetrics.slice(0, 8);
 
   return (
@@ -227,8 +236,8 @@ function KanbanPanel({ kanban }: { kanban: ProductivityKanbanSnapshot }) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Leads" value={kanban.totalLeads.toLocaleString("pt-BR")} />
-        <MetricCard label="Sem responsavel" value={kanban.unassignedLeads.toLocaleString("pt-BR")} />
+        <MetricCard label="Leads no Kanban" value={kanban.totalLeads.toLocaleString("pt-BR")} />
+        <MetricCard label="Na Chegada (sem responsavel)" value={kanban.unassignedLeads.toLocaleString("pt-BR")} />
         <MetricCard label="Movimentados" value={kanban.updatedInPeriod.toLocaleString("pt-BR")} />
         <MetricCard label="Distribuidos" value={kanban.distributedInPeriod.toLocaleString("pt-BR")} />
       </div>
@@ -245,17 +254,19 @@ function KanbanPanel({ kanban }: { kanban: ProductivityKanbanSnapshot }) {
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]">{stage.stageName}</p>
-                    <p className="truncate text-xs text-[rgb(var(--slate-10))]">
-                      {stage.unassigned} sem responsavel
-                    </p>
+                    {stage.unassigned > 0 ? (
+                      <p className="truncate text-xs text-[rgb(var(--slate-10))]">
+                        +{stage.unassigned} aguardando na Chegada de Leads
+                      </p>
+                    ) : null}
                   </div>
-                  <span className="text-sm font-semibold text-[rgb(var(--slate-12))]">{stage.total}</span>
+                  <span className="text-sm font-semibold text-[rgb(var(--slate-12))]">{stage.assigned}</span>
                 </div>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-[rgb(var(--slate-3))]">
                   <div
                     className="h-full rounded-full"
                     style={{
-                      width: `${Math.max(4, Math.round((stage.total / maxStageTotal) * 100))}%`,
+                      width: `${Math.max(4, Math.round((stage.assigned / maxStageTotal) * 100))}%`,
                       backgroundColor: STAGE_COLORS[stage.stage] ?? "#64748B",
                     }}
                   />
@@ -535,9 +546,17 @@ function DistributionPanel({
                         <p className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]">
                           {item.name || `Lead #${item.inscricaoId}`}
                         </p>
-                        <p className="truncate text-xs text-[rgb(var(--slate-10))]">
-                          {item.phone || "Sem telefone"} {item.trainingLabel ? `- ${item.trainingLabel}` : ""}
+                        <p className="mt-0.5 flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-semibold text-[rgb(var(--slate-11))]">
+                            {item.phone || "Sem telefone"}
+                          </span>
+                          {item.phone && (
+                            <CopyPhoneButton phone={item.phone} size={13} className="h-5 w-5 flex-shrink-0 justify-center" />
+                          )}
                         </p>
+                        {item.trainingLabel ? (
+                          <p className="truncate text-xs text-[rgb(var(--slate-10))]">{item.trainingLabel}</p>
+                        ) : null}
                       </div>
                       <span className="rounded-md bg-[rgb(var(--slate-2))] px-2 py-1 text-xs font-semibold text-[rgb(var(--slate-11))]">
                         #{item.inscricaoId}
@@ -554,7 +573,13 @@ function DistributionPanel({
   );
 }
 
-export default function ProductivityClient({ initialWorkspace }: ProductivityClientProps) {
+export default function ProductivityClient({
+  initialWorkspace,
+  commercial,
+  trainingOptions,
+  recruiterOptions,
+  currentUser,
+}: ProductivityClientProps) {
   const [workspace, setWorkspace] = useState(initialWorkspace);
   const [selectedDate, setSelectedDate] = useState(todayDate());
   const [rangeFrom, setRangeFrom] = useState(initialWorkspace.dateFrom);
@@ -804,11 +829,11 @@ export default function ProductivityClient({ initialWorkspace }: ProductivityCli
         <div className="min-w-0">
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-3 py-1 text-xs font-semibold text-[rgb(var(--slate-11))]">
             <ClipboardList className="h-3.5 w-3.5 text-[rgb(var(--blue-9))]" />
-            Diario de bordo
+            Kanban e produtividade
           </div>
-          <h1 className="text-2xl font-semibold text-[rgb(var(--slate-12))]">Produtividade Vox Tatuape</h1>
+          <h1 className="text-2xl font-semibold text-[rgb(var(--slate-12))]">Kanban</h1>
           <p className="mt-1 text-sm text-[rgb(var(--slate-10))]">
-            Preenchimento diario por consultor, verificacao de gestores, Kanban e distribuicao de leads da equipe.
+            Kanban de leads da equipe, diario de bordo por consultor e verificacao de gestores.
           </p>
         </div>
 
@@ -849,6 +874,22 @@ export default function ProductivityClient({ initialWorkspace }: ProductivityCli
         </div>
       ) : null}
 
+      {/* Kanban primeiro: e o foco principal da pagina. */}
+      <KanbanSection
+        isManager={workspace.isManager}
+        currentUserEmail={workspace.currentUser.email}
+        teamMembers={workspace.distribution.agents}
+        mode={kanbanMode}
+        memberEmail={kanbanMemberEmail}
+        onModeChange={setKanbanMode}
+        onMemberEmailChange={setKanbanMemberEmail}
+        onLeadMoved={refreshWorkspace}
+        trainingOptions={trainingOptions}
+        recruiterOptions={recruiterOptions}
+        commercial={commercial}
+        currentUser={currentUser}
+      />
+
       <section className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
         <MetricCard label="Tentativas" value={scopedKanbanMetric.tentativas.toLocaleString("pt-BR")} />
         <MetricCard label="Conexoes" value={scopedKanbanMetric.conexoes.toLocaleString("pt-BR")} />
@@ -859,17 +900,6 @@ export default function ProductivityClient({ initialWorkspace }: ProductivityCli
       </section>
 
       {workspace.isManager ? <KanbanPanel kanban={workspace.kanban} /> : null}
-
-      <KanbanSection
-        isManager={workspace.isManager}
-        currentUserEmail={workspace.currentUser.email}
-        teamMembers={workspace.distribution.agents}
-        mode={kanbanMode}
-        memberEmail={kanbanMemberEmail}
-        onModeChange={setKanbanMode}
-        onMemberEmailChange={setKanbanMemberEmail}
-        onLeadMoved={refreshWorkspace}
-      />
 
       <section className="space-y-4 rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-4 shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
         <div className="grid gap-3 lg:grid-cols-[minmax(220px,0.7fr)_minmax(160px,0.4fr)_auto] lg:items-end">
@@ -1048,19 +1078,6 @@ export default function ProductivityClient({ initialWorkspace }: ProductivityCli
         />
       ) : null}
 
-      {workspace.isManager ? (
-        <TeamManagementSection
-          currentUserId={workspace.currentUser.id ?? -1}
-          initialMembers={workspace.distribution.agents.map((agent): TeamMemberRow => ({
-            id: agent.chatwootUserId,
-            email: agent.email,
-            name: agent.name,
-            role: agent.role,
-            active: agent.active,
-            institutoUpOnly: agent.institutoUpOnly,
-          }))}
-        />
-      ) : null}
     </main>
   );
 }

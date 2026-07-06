@@ -28,8 +28,12 @@ function formatDate(dateStr: string | null): string {
 }
 
 export default async function TreinamentosPage() {
-  const trainings = await listTrainingsWithStats();
-  
+  // O Instituto UP possui apenas dois produtos: Encontro Online e Up Day Plus.
+  // Qualquer outro tipo de lead/formulário pertence à área VozUP > Leads.
+  const trainings = (await listTrainingsWithStats()).filter((t) => t.product !== null);
+  const encontroOnline = trainings.filter((t) => t.product === "online");
+  const upDayPlus = trainings.filter((t) => t.product === "up-day-plus");
+
   const totalInscritos = trainings.reduce((acc, t) => acc + t.totalInscritos, 0);
   const totalPresentes = trainings.reduce((acc, t) => acc + t.presentes, 0);
   const totalLast24h = trainings.reduce((acc, t) => acc + t.last24h, 0);
@@ -100,18 +104,29 @@ export default async function TreinamentosPage() {
         </div>
       </div>
 
-      {/* Trainings Grid */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {trainings.length === 0 ? (
-          <div className="col-span-full rounded-2xl border border-neutral-200 bg-white p-8 text-center">
-            <Calendar className="mx-auto h-12 w-12 text-neutral-300" />
-            <h3 className="mt-4 text-lg font-medium text-neutral-900">Nenhum treinamento encontrado</h3>
-            <p className="mt-2 text-sm text-neutral-500">
-              Os treinamentos serão criados automaticamente quando inscritos forem registrados.
-            </p>
-          </div>
-        ) : (
-          trainings.map((training) => (
+      {/* Trainings Grid — somente os dois produtos do Instituto UP */}
+      {trainings.length === 0 ? (
+        <div className="rounded-2xl border border-neutral-200 bg-white p-8 text-center">
+          <Calendar className="mx-auto h-12 w-12 text-neutral-300" />
+          <h3 className="mt-4 text-lg font-medium text-neutral-900">Nenhum treinamento encontrado</h3>
+          <p className="mt-2 text-sm text-neutral-500">
+            Os treinamentos serão criados automaticamente quando inscritos forem registrados.
+          </p>
+        </div>
+      ) : (
+        [
+          { key: "online", title: "Encontro Online", subtitle: "Turmas do encontro online, organizadas por data.", items: encontroOnline },
+          { key: "up-day-plus", title: "Up Day Plus", subtitle: "Turmas presenciais do Up Day Plus.", items: upDayPlus },
+        ]
+          .filter((section) => section.items.length > 0)
+          .map((section) => (
+            <section key={section.key} className="space-y-4">
+              <div>
+                <h2 className="text-lg font-bold text-neutral-900">{section.title}</h2>
+                <p className="text-sm text-neutral-500">{section.subtitle}</p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {section.items.map((training) => (
             <div
               key={training.id}
               className="group rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm transition hover:border-cyan-300 hover:shadow-md"
@@ -187,9 +202,11 @@ export default async function TreinamentosPage() {
                 )}
               </div>
             </div>
+                ))}
+              </div>
+            </section>
           ))
-        )}
-      </div>
+      )}
     </main>
   );
 }

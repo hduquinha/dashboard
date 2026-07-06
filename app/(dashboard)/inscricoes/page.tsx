@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { ArrowLeft, Download, MessageCircle, UploadCloud, Users } from "lucide-react";
 import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
+import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { maskInscricoesForUser } from "@/lib/leadPermissions";
 import { isOnlineTraining } from "@/lib/participantTags";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
 
@@ -69,6 +72,8 @@ export const metadata: Metadata = {
 
 export default async function CrmPage(props: CrmPageProps) {
   const searchParams = await props.searchParams;
+  const cookieStore = await cookies();
+  const session = getDashboardSession(cookieStore.get(DASHBOARD_COOKIE_NAME)?.value);
   const page = parseNumberParam(searchParams?.page, 1);
   const pageSize = Math.min(parseNumberParam(searchParams?.pageSize, DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
   const orderBy = parseOrderField(searchParams?.orderBy);
@@ -129,6 +134,7 @@ export default async function CrmPage(props: CrmPageProps) {
     recruiterOptionsPromise,
     resultPromise,
   ]);
+  const visibleInscricoes = maskInscricoesForUser(result.data, session?.user ?? null);
 
   const selectedTrainingOption = activeTreinamentoId.length
     ? trainingOptions.find((option) => option.id === activeTreinamentoId)
@@ -436,7 +442,7 @@ export default async function CrmPage(props: CrmPageProps) {
 
         <div className="p-0">
           <InscricoesTable
-            inscricoes={result.data}
+            inscricoes={visibleInscricoes}
             page={page}
             pageSize={pageSize}
             total={result.total}

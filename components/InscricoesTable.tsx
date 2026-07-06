@@ -3,12 +3,13 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Eye, MessageCircle } from 'lucide-react';
+import { CopyPhoneButton } from '@/components/CopyPhoneButton';
 import { LeadProfileModal } from '@/components/LeadProfileModal';
 import { TagBadge, TagOverflowBadge } from '@/components/TagBadge';
 import type { InscricaoItem, OrderDirection, OrderableField } from '@/types/inscricao';
 import type { TrainingOption } from '@/types/training';
 import { buildOperationalTags } from '@/lib/participantTags';
-import { buildWhatsAppWebUrl, humanizeName } from '@/lib/utils';
+import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from '@/lib/utils';
 
 interface RecruiterOption {
   code: string;
@@ -123,7 +124,12 @@ export default function InscricoesTable({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold text-neutral-900">{humanizeName(ins.nome) ?? 'Indisponível'}</p>
-                  {ins.telefone && <p className="text-xs text-neutral-400">{ins.telefone}</p>}
+                  {ins.telefone && (
+                    <p className="mt-0.5 flex items-center gap-1.5 text-[13px] font-semibold text-neutral-700">
+                      <span className="truncate">{ins.telefone}</span>
+                      <CopyPhoneButton phone={ins.telefone} size={13} className="h-5 w-5 flex-shrink-0 justify-center" />
+                    </p>
+                  )}
                   {tags.slice(0, 3).length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {tags.slice(0, 3).map((tag) => <TagBadge key={`${ins.id}-m-${tag.key}`} tag={tag} size="xs" />)}
@@ -136,6 +142,7 @@ export default function InscricoesTable({
               <div className="mt-2.5 flex gap-2">
                 {ins.telefone && (
                   <a href={buildWhatsAppWebUrl(ins.telefone)} target="_blank" rel="noopener noreferrer"
+                    onClick={(e) => openWhatsAppOnMobile(e, ins.telefone)}
                     className="inline-flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#25D366] text-xs font-semibold text-white">
                     {WA_ICON} WhatsApp
                   </a>
@@ -210,16 +217,20 @@ export default function InscricoesTable({
                         {humanizeName(ins.nome) ?? 'Indisponível'}
                       </button>
                       {ins.telefone && (
-                        <a
-                          href={buildWhatsAppWebUrl(ins.telefone)}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-[#25D366] hover:underline"
-                          title="Abrir no WhatsApp"
-                        >
-                          {WA_ICON}
-                          {ins.telefone}
-                        </a>
+                        <span className="mt-0.5 flex items-center gap-1.5">
+                          <a
+                            href={buildWhatsAppWebUrl(ins.telefone)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => openWhatsAppOnMobile(e, ins.telefone)}
+                            className="inline-flex min-w-0 items-center gap-1 text-[13px] font-semibold text-[#128C4B] hover:underline"
+                            title="Abrir no WhatsApp"
+                          >
+                            {WA_ICON}
+                            <span className="truncate">{ins.telefone}</span>
+                          </a>
+                          <CopyPhoneButton phone={ins.telefone} size={13} className="h-5 w-5 flex-shrink-0 justify-center" />
+                        </span>
                       )}
                       {visibleTags.length > 0 && (
                         <div className="mt-1 flex flex-wrap gap-1">
@@ -291,6 +302,7 @@ export default function InscricoesTable({
                           href={buildWhatsAppWebUrl(ins.telefone)}
                           target="_blank"
                           rel="noopener noreferrer"
+                          onClick={(e) => openWhatsAppOnMobile(e, ins.telefone)}
                           className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-[#25D366] text-white transition hover:opacity-90"
                           title="Abrir no WhatsApp"
                         >

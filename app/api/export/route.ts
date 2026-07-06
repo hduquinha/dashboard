@@ -1,8 +1,14 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { assertAuthenticatedRequest, UnauthorizedError } from "@/lib/auth";
+import {
+  assertAuthenticatedRequest,
+  getRequestDashboardSession,
+  UnauthorizedError,
+} from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
 import { UP_DAY_CSV_COLUMNS } from "@/lib/inscricaoForm";
+import { maskInscricoesForUser } from "@/lib/leadPermissions";
+import { hasPermission } from "@/lib/permissions";
 import { humanizeName } from "@/lib/utils";
 import type { InscricaoItem, InscricaoStatus, OrderableField, OrderDirection } from "@/types/inscricao";
 
@@ -123,6 +129,11 @@ export async function GET(request: NextRequest) {
     throw error;
   }
 
+  const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "crm.export")) {
+    return NextResponse.json({ error: "Sem permissao para exportar dados." }, { status: 403 });
+  }
+
   try {
     const sp = new URL(request.url).searchParams;
 
@@ -131,7 +142,7 @@ export async function GET(request: NextRequest) {
     const treinamentoIds = treinamentosRaw ? treinamentosRaw.split(",").filter(Boolean) : undefined;
     const treinamento = sanitize(sp.get("treinamento")) || undefined;
 
-    const records = await fetchAll({
+    const records = maskInscricoesForUser(await fetchAll({
       orderBy: parseOrderField(sp.get("orderBy")),
       orderDirection: parseDirection(sp.get("orderDirection")),
       filters: {
@@ -151,7 +162,7 @@ export async function GET(request: NextRequest) {
         campaignSource: sanitize(sp.get("campaignSource")) || undefined,
         campaignName: sanitize(sp.get("campaignName")) || undefined,
       },
-    });
+    }), session?.user ?? null);
 
     const source = sp.get("source") ?? "inscricoes";
     const lines = [CSV_HEADERS.join(","), ...records.map(buildCsvRow)];

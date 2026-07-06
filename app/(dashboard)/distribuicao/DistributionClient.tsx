@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   CheckSquare,
   Filter,
+  MessageCirclePlus,
   RefreshCw,
   Send,
   Square,
@@ -13,6 +14,8 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { CopyPhoneButton } from "@/components/CopyPhoneButton";
+import { CreateLeadModal } from "@/components/CreateLeadModal";
 import type {
   ManualDistributionCandidate,
   ManualDistributionFilters,
@@ -30,6 +33,7 @@ interface DistributionClientProps {
   sellers: CommercialSeller[];
   trainingOptions: TrainingOption[];
   isSupervisor: boolean;
+  currentUser: { email: string; isSupervisor: boolean } | null;
 }
 
 interface LeadGroup {
@@ -124,9 +128,18 @@ function buildGroups(rows: ManualDistributionCandidate[]): LeadGroup[] {
   }
 
   return Array.from(drafts.values())
-    .map(({ signalSet, latestTime, ...group }) => ({
-      ...group,
-      signals: Array.from(signalSet).sort((left, right) => left.localeCompare(right, "pt-BR")),
+    .map((draft) => ({
+      key: draft.key,
+      title: draft.title,
+      businessUnit: draft.businessUnit,
+      entryChannel: draft.entryChannel,
+      path: draft.path,
+      count: draft.count,
+      unassignedCount: draft.unassignedCount,
+      presentCount: draft.presentCount,
+      latestCreatedAt: draft.latestCreatedAt,
+      leadIds: draft.leadIds,
+      signals: Array.from(draft.signalSet).sort((left, right) => left.localeCompare(right, "pt-BR")),
     }))
     .sort((left, right) => {
       const rightTime = new Date(right.latestCreatedAt ?? "").getTime() || 0;
@@ -144,8 +157,8 @@ export default function DistributionClient({
   limit,
   filters,
   sellers,
-  trainingOptions,
   isSupervisor,
+  currentUser,
 }: DistributionClientProps) {
   const [rows, setRows] = useState(candidates);
   const [activeGroupKey, setActiveGroupKey] = useState(ALL_GROUPS_KEY);
@@ -158,6 +171,7 @@ export default function DistributionClient({
   const [busyScope, setBusyScope] = useState<"selected" | "group" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [showOrganicModal, setShowOrganicModal] = useState(false);
 
   const groups = useMemo(() => buildGroups(rows), [rows]);
 
@@ -324,18 +338,28 @@ export default function DistributionClient({
     <main className="space-y-0">
 
       {/* ── Cabeçalho ─────────────────────────────────────────── */}
-      <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="mb-1.5 inline-flex items-center gap-1.5 rounded-full border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-2.5 py-0.5 text-[11px] font-semibold text-[rgb(var(--slate-11))]">
             <Send className="h-3 w-3 text-[rgb(var(--blue-9))]" />
             CRM
           </div>
-          <h1 className="text-2xl font-bold text-[rgb(var(--slate-12))]">Central de distribuição</h1>
+          <h1 className="text-2xl font-bold text-[rgb(var(--slate-12))]">Chegada de Leads</h1>
           <p className="mt-0.5 text-sm text-[rgb(var(--slate-10))]">
+            Novos leads do Meta e das landing pages (Google) ·{" "}
             {rows.length.toLocaleString("pt-BR")} lead(s) em {groups.length} grupo(s)
             {total > rows.length ? ` · ${total.toLocaleString("pt-BR")} no recorte` : ""}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setShowOrganicModal(true)}
+          className="inline-flex h-9 items-center gap-2 self-start rounded-lg border border-[rgb(var(--border-strong))] bg-white px-3 text-xs font-semibold text-[rgb(var(--slate-11))] transition hover:bg-[rgb(var(--slate-2))] sm:self-auto"
+          title="Inserir manualmente um lead que chamou no WhatsApp"
+        >
+          <MessageCirclePlus className="h-4 w-4 text-[rgb(var(--blue-9))]" />
+          Lead orgânico (WhatsApp)
+        </button>
       </div>
 
       {/* ── Painel principal ───────────────────────────────────── */}
@@ -741,7 +765,15 @@ export default function DistributionClient({
                       </td>
                       <td className="max-w-56 px-4 py-3">
                         <p className="truncate font-semibold text-[rgb(var(--slate-12))]">{row.name ?? `Lead #${row.id}`}</p>
-                        <p className="truncate text-xs text-[rgb(var(--slate-10))]">{row.phone ?? "Sem telefone"} · {row.city ?? "Sem cidade"}</p>
+                        <p className="mt-0.5 flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-semibold text-[rgb(var(--slate-11))]">
+                            {row.phone ?? "Sem telefone"}
+                          </span>
+                          {row.phone && (
+                            <CopyPhoneButton phone={row.phone} size={13} className="h-5 w-5 flex-shrink-0 justify-center" />
+                          )}
+                        </p>
+                        <p className="truncate text-xs text-[rgb(var(--slate-10))]">{row.city ?? "Sem cidade"}</p>
                       </td>
                       {activeGroupKey === ALL_GROUPS_KEY && (
                         <td className="max-w-40 px-4 py-3">
@@ -817,6 +849,26 @@ export default function DistributionClient({
             </button>
           </div>
         </div>
+      )}
+
+      {/* ── Lead orgânico (chamou no WhatsApp) ─────────────────── */}
+      {showOrganicModal && (
+        <CreateLeadModal
+          sellers={sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
+          currentUser={currentUser}
+          context={{
+            produto: "vozup",
+            origem: "WhatsApp Orgânico",
+            label: "Lead orgânico · WhatsApp",
+          }}
+          onCreated={({ inscricao }) => {
+            setShowOrganicModal(false);
+            setMessage(
+              `Lead orgânico ${inscricao.nome ?? `#${inscricao.id}`} criado e atribuído — já está no Kanban do responsável.`
+            );
+          }}
+          onClose={() => setShowOrganicModal(false)}
+        />
       )}
 
     </main>

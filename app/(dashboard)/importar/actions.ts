@@ -5,9 +5,11 @@ import {
   assertSameOrigin,
   assertToken,
   DASHBOARD_COOKIE_NAME,
+  getDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
 import { insertImportedInscricoes, type InsertImportedInscricoesResult } from "@/lib/db";
+import { hasPermission } from "@/lib/permissions";
 import {
   importSpreadsheet,
   sanitizeImportFilename,
@@ -46,6 +48,10 @@ async function assertAuthenticatedImportAction(): Promise<void> {
   const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
 
   assertToken(token);
+  const session = getDashboardSession(token);
+  if (session && !hasPermission(session.user, "crm.import")) {
+    throw new UnauthorizedError("Sem permissao para importar dados.");
+  }
   assertSameOrigin({
     headers: headerStore,
     url: buildServerActionUrl(headerStore),

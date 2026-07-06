@@ -26,6 +26,8 @@ Scripts de migração para o schema normalizado do banco PostgreSQL.
 
 11. **[011_phone_merge_queue_and_trigger.sql](011_phone_merge_queue_and_trigger.sql)** — Cria `dashboard.pending_merge_checks` e um trigger `AFTER INSERT` em `inscricoes.inscricoes` que enfileira toda linha nova para verificação de merge por telefone, consumida por um sweep periódico (`lib/mergeSweep.ts`) dentro do processo do dashboard.
 
+12. **[012_super_master_permissions.sql](012_super_master_permissions.sql)** — Adiciona o perfil `super_master`, prioridade e permissões granulares em `dashboard.team_members`.
+
 > **Nota sobre `dashboard.commercial_leads.position`** (ordem manual do Kanban, coluna adicionada via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` em `ensureCommercialSchema`/`ensureCommercialSchemaForReads`): não precisou de migração de backfill. Leads sem `position` explícito (nunca arrastados) usam o fallback `COALESCE(cl.position, -i.id)` — único por lead e já preserva "mais recente primeiro" sem precisar tocar dado nenhum.
 
 ## Como executar
@@ -43,6 +45,7 @@ psql $DATABASE_URL -f 008_fix_august_upday_and_fake_training_date.sql
 psql $DATABASE_URL -f 009_team_members_and_cleanup.sql
 psql $DATABASE_URL -f 010_team_members_instituto_up_only.sql
 psql $DATABASE_URL -f 011_phone_merge_queue_and_trigger.sql
+psql $DATABASE_URL -f 012_super_master_permissions.sql
 ```
 
 > **Atenção:** Faça backup do banco antes de executar as migrações em produção.

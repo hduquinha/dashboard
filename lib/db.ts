@@ -26,13 +26,14 @@ import {
   formatTrainingDateLabel,
   buildAutoTrainingLabel,
   isIgnoredTrainingId,
+  classifyTrainingProduct,
 } from "@/lib/trainings";
 import {
   analyzeInscricaoQuality,
   hasQualityDismissed,
   issueCodeToDuplicateReason,
 } from "@/lib/inscricaoQuality";
-import type { TrainingOption } from "@/types/training";
+import type { TrainingKind, TrainingOption } from "@/types/training";
 import type {
   DuplicateGroup,
   DuplicateReason,
@@ -106,7 +107,8 @@ const ONLINE_TRAINING_DATE_EXPRESSION = payloadTextExpression("i", [
   "dataTreinamentoExtenso",
 ]);
 const DASHBOARD_TRAINING_EXPRESSION = payloadTextExpression("i", ["dashboard_treinamento"]);
-const UPDAY_PAYLOAD_CONDITION = `(
+// Exportado para as queries da área VozUP (lib/vozupFolders.ts) — pressupõe alias "i".
+export const UPDAY_PAYLOAD_CONDITION = `(
   LOWER(${EXPLICIT_TRAINING_EXPRESSION}) LIKE '%up day%'
   OR LOWER(${payloadTextExpression("i", ["origem", "source", "origin"])}) = 'landing-inscricao-agosto-2026'
   OR (
@@ -114,13 +116,17 @@ const UPDAY_PAYLOAD_CONDITION = `(
     AND ${UPDAY_TRAINING_DATE_EXPRESSION} <> ''
   )
 )`;
-const TRAINING_EXPRESSION = `COALESCE(
+// Exportado para as queries da área VozUP (lib/vozupFolders.ts) — pressupõe alias "i".
+export const TRAINING_EXPRESSION = `COALESCE(
   CASE WHEN ${UPDAY_PAYLOAD_CONDITION} THEN NULLIF(${UPDAY_TRAINING_DATE_EXPRESSION}, '') END,
   CASE WHEN NOT ${UPDAY_PAYLOAD_CONDITION} THEN NULLIF(${ONLINE_TRAINING_DATE_EXPRESSION}, '') END,
   NULLIF(${EXPLICIT_TRAINING_EXPRESSION}, ''),
   NULLIF(${DASHBOARD_TRAINING_EXPRESSION}, ''),
   ''
 )`;
+const OWN_LINK_ACTIVE_CONDITION = `COALESCE(i.payload->>'dashboard_vinculo_removido', '') != 'true'`;
+const ACTIVE_TRAINING_EXPRESSION = `CASE WHEN ${OWN_LINK_ACTIVE_CONDITION} THEN ${TRAINING_EXPRESSION} ELSE '' END`;
+const ACTIVE_UPDAY_PAYLOAD_CONDITION = `(${OWN_LINK_ACTIVE_CONDITION} AND ${UPDAY_PAYLOAD_CONDITION})`;
 const RECRUITER_EXPRESSION = payloadTextExpression("i", [
   "traffic_source",
   "codigo_indicador",
@@ -429,15 +435,27 @@ const RECRUITER_CODE_FIELDS = [
   "codigo_indicador_proprio",
 ];
 
+// Última interação do lead: novas inscrições unificadas por telefone gravam
+// dashboard_ultima_interacao no primário; "Mais recente" ordena por ela para o
+// lead voltar ao topo, como um cadastro novo.
+export const LAST_INTERACTION_EXPRESSION = `GREATEST(
+  i.criado_em,
+  CASE
+    WHEN COALESCE(i.payload->>'dashboard_ultima_interacao', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+      THEN (i.payload->>'dashboard_ultima_interacao')::timestamptz
+    ELSE i.criado_em
+  END
+)`;
+
 const ORDERABLE_COLUMNS: Record<OrderableField, string> = {
   id: "i.id",
   nome: `LOWER(${NAME_EXPRESSION})`,
   telefone: PHONE_EXPRESSION,
   cidade: `LOWER(${CITY_EXPRESSION})`,
   profissao: `LOWER(${PROFESSION_EXPRESSION})`,
-  treinamento: TRAINING_EXPRESSION,
+  treinamento: ACTIVE_TRAINING_EXPRESSION,
   recrutador: RECRUITER_EXPRESSION,
-  criado_em: "i.criado_em",
+  criado_em: LAST_INTERACTION_EXPRESSION,
   status_at: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_status_at', i.payload->>'status_at', '')), ''), i.criado_em::text)`,
   stars: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_stars', '')), ''), '0')::int`,
   commercial_stage: `COALESCE(cl.commercial_stage, 'novo')`,
@@ -477,6 +495,7 @@ interface ListInscricoesOptions {
     assignedSellerEmail?: string;
     assignedSellerId?: number;
     unassignedOnly?: boolean;
+    assignedOnly?: boolean;
     presenca?: "aprovada" | "reprovada" | "validada" | "nao-validada";
     produto?: "vozup" | "instituto";
     tag?: "recrutador" | "whatsapp" | "com-indicador" | "com-dinamica";
@@ -667,15 +686,17 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       ? row.profissao.trim()
       : undefined;
 
+  const ownLinkRemoved = String(payload.dashboard_vinculo_removido ?? "").trim() === "true";
   const parsedTreinamento =
-    typeof parsed.treinamento === "string" && parsed.treinamento.trim().length > 0
+    !ownLinkRemoved && typeof parsed.treinamento === "string" && parsed.treinamento.trim().length > 0
       ? parsed.treinamento.trim()
       : undefined;
   const rowTreinamento =
-    typeof row.treinamento === "string" && row.treinamento.trim().length > 0
+    !ownLinkRemoved && typeof row.treinamento === "string" && row.treinamento.trim().length > 0
       ? row.treinamento.trim()
       : undefined;
-  const treinamentoId = isUpDayInscricao
+  const activeUpDayInscricao = !ownLinkRemoved && isUpDayInscricao;
+  const treinamentoId = activeUpDayInscricao
     ? rowTreinamento ?? upDay.dataTreinamento ?? parsedTreinamento ?? null
     : parsedTreinamento ?? rowTreinamento ?? null;
   const treinamentoInfo = treinamentoId ? getTrainingById(treinamentoId) : null;
@@ -687,10 +708,10 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       : null;
   const treinamentoData =
     treinamentoInfo?.startsAt ??
-    (isUpDayInscricao ? upDay.dataTreinamentoExtenso ?? upDay.dataTreinamento : null) ??
+    (activeUpDayInscricao ? upDay.dataTreinamentoExtenso ?? upDay.dataTreinamento : null) ??
     treinamentoId ??
     null;
-  const isOnlineEnrollment = !isUpDayInscricao && formatTrainingDateLabel(treinamentoData ?? treinamentoId) !== null;
+  const isOnlineEnrollment = !activeUpDayInscricao && formatTrainingDateLabel(treinamentoData ?? treinamentoId) !== null;
 
   const parseRecruiterCode = (value: unknown): string | null => {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -1092,7 +1113,7 @@ async function fetchEnrollmentsByPersonKeys(
     SELECT
       TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key,
       i.id,
-      NULLIF(${TRAINING_EXPRESSION}, '') AS treinamento_id,
+      NULLIF(${ACTIVE_TRAINING_EXPRESSION}, '') AS treinamento_id,
       NULLIF(${enrollmentTrainingNomeExpr}, '') AS treinamento_nome,
       NULLIF(TRIM(COALESCE(
         NULLIF(TRIM(i.payload->>'data_treinamento'), ''),
@@ -1107,6 +1128,10 @@ async function fetchEnrollmentsByPersonKeys(
     FROM ${SCHEMA_NAME}.inscricoes AS i
     WHERE ${FINALIZED_INSCRICAO_CONDITION}
     AND TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) = ANY($1)
+    AND (
+      COALESCE(i.payload->>'dashboard_merged_into', '') <> ''
+      OR ${OWN_LINK_ACTIVE_CONDITION}
+    )
     ORDER BY i.criado_em ASC
   `;
 
@@ -1174,7 +1199,7 @@ export async function listInscricoes(
       `${EMAIL_EXPRESSION} ILIKE $${likeIndex}`,
       `${CITY_EXPRESSION} ILIKE $${likeIndex}`,
       `${PROFESSION_EXPRESSION} ILIKE $${likeIndex}`,
-      `${TRAINING_EXPRESSION} ILIKE $${likeIndex}`,
+      `${ACTIVE_TRAINING_EXPRESSION} ILIKE $${likeIndex}`,
       `${INDICATION_EXPRESSION} ILIKE $${likeIndex}`,
       `COALESCE(i.payload->>'dashboard_status', '') ILIKE $${likeIndex}`,
       `COALESCE(i.payload->>'dashboard_notes', '') ILIKE $${likeIndex}`,
@@ -1250,7 +1275,8 @@ export async function listInscricoes(
     }
   }
 
-  // Secondary subquery: finds primaries whose merged secondaries have the matching training
+  // Secondary subquery: finds primaries whose merged secondaries have the matching training.
+  // Satélites com dashboard_excluido são vínculos removidos e não contam.
   const TRAINING_EXPR_S = TRAINING_EXPRESSION.replaceAll("i.payload", "s.payload");
   const secondaryTrainingSubquery = (paramRef: string) => `
     EXISTS (
@@ -1260,16 +1286,18 @@ export async function listInscricoes(
         AND (${TRAINING_EXPR_S}) = ${paramRef}
     )`;
 
+  // O vínculo próprio do primário pode ter sido removido na ficha
+  // (dashboard_vinculo_removido) — nesse caso só os satélites contam.
   const trainingFilterValue = filters.dataTreinamento?.trim() || filters.treinamento?.trim() || "";
   if (trainingFilterValue.length > 0) {
     const treinamentoValue = trainingFilterValue;
     filtersValues.push(treinamentoValue);
     const paramIndex = filtersValues.length;
-    conditions.push(`(${TRAINING_EXPRESSION} = $${paramIndex} OR ${secondaryTrainingSubquery(`$${paramIndex}`)})`);
+    conditions.push(`((${TRAINING_EXPRESSION} = $${paramIndex} AND ${OWN_LINK_ACTIVE_CONDITION}) OR ${secondaryTrainingSubquery(`$${paramIndex}`)})`);
   } else if (filters.treinamentoIds && filters.treinamentoIds.length > 0) {
     filtersValues.push(filters.treinamentoIds);
     const paramIndex = filtersValues.length;
-    conditions.push(`(${TRAINING_EXPRESSION} = ANY($${paramIndex}::text[]) OR ${secondaryTrainingSubquery(`ANY($${paramIndex}::text[])`)})`);
+    conditions.push(`((${TRAINING_EXPRESSION} = ANY($${paramIndex}::text[]) AND ${OWN_LINK_ACTIVE_CONDITION}) OR ${secondaryTrainingSubquery(`ANY($${paramIndex}::text[])`)})`);
   }
 
   if (filters.status && STATUS_VALUES.includes(filters.status)) {
@@ -1321,6 +1349,10 @@ export async function listInscricoes(
 
   if (filters.unassignedOnly) {
     conditions.push(`cl.assigned_seller_id IS NULL AND COALESCE(cl.assigned_seller_email, '') = ''`);
+  }
+
+  if (filters.assignedOnly) {
+    conditions.push(`(cl.assigned_seller_id IS NOT NULL OR COALESCE(cl.assigned_seller_email, '') <> '')`);
   }
 
   // Filtro de presença
@@ -1381,7 +1413,20 @@ export async function listInscricoes(
       OR LOWER(COALESCE(i.payload->>'origem', '')) LIKE '%voz up%'
       OR LOWER(COALESCE(i.payload->>'lead_setor', '')) LIKE '%voz%'
     )`;
-    conditions.push(filters.produto === "vozup" ? vozupCond : `NOT ${vozupCond}`);
+    // Vínculos (satélites mesclados) também contam: um lead do Instituto que
+    // depois entrou por uma aula VozUP aparece nos dois filtros de produto.
+    const vozupCondSat = vozupCond.replaceAll("i.payload", "s.payload");
+    const satelliteExists = (cond: string) => `EXISTS (
+      SELECT 1 FROM ${SCHEMA_NAME}.inscricoes s
+      WHERE s.payload->>'dashboard_merged_into' = i.id::text
+        AND COALESCE(s.payload->>'dashboard_excluido', '') != 'true'
+        AND ${cond}
+    )`;
+    conditions.push(
+      filters.produto === "vozup"
+        ? `(${vozupCond} OR ${satelliteExists(vozupCondSat)})`
+        : `(NOT ${vozupCond} OR ${satelliteExists(`NOT ${vozupCondSat}`)})`
+    );
   }
 
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
@@ -1415,7 +1460,7 @@ export async function listInscricoes(
       ${PHONE_EXPRESSION} AS telefone,
       ${CITY_EXPRESSION} AS cidade,
       ${PROFESSION_EXPRESSION} AS profissao,
-      ${TRAINING_EXPRESSION} AS treinamento,
+      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
       ${RECRUITER_EXPRESSION} AS traffic_source,
       COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
       COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
@@ -1529,7 +1574,7 @@ export async function listPresenceInscricoes(
       ${PHONE_EXPRESSION} AS telefone,
       ${CITY_EXPRESSION} AS cidade,
       ${PROFESSION_EXPRESSION} AS profissao,
-      ${TRAINING_EXPRESSION} AS treinamento,
+      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
       ${RECRUITER_EXPRESSION} AS traffic_source,
       NULL::bigint AS total_count
     FROM ${SCHEMA_NAME}.inscricoes AS i
@@ -1567,6 +1612,7 @@ export async function listAbsentInscricoes(treinamentoId: string): Promise<Absen
     WHERE ${FINALIZED_INSCRICAO_CONDITION}
       AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
       AND ${TRAINING_EXPRESSION} = $1
+      AND ${OWN_LINK_ACTIVE_CONDITION}
       AND NOT (
         ${PRESENCE_VALIDATED_CONDITION}
         AND ${PRESENCE_TRAINING_EXPRESSION} = $1
@@ -1690,7 +1736,7 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
       ${PHONE_EXPRESSION} AS telefone,
       ${CITY_EXPRESSION} AS cidade,
       ${PROFESSION_EXPRESSION} AS profissao,
-      ${TRAINING_EXPRESSION} AS treinamento,
+      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
       ${RECRUITER_EXPRESSION} AS traffic_source,
       COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
       COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
@@ -1913,6 +1959,15 @@ export async function mergeInscricoes(
       [secondaryId, JSON.stringify(secondaryPayload)]
     );
 
+    // Re-aponta os satélites do secundário para o novo primário: os vínculos
+    // (eventos) da pessoa devem sempre apontar para o lead visível.
+    await client.query(
+      `UPDATE ${SCHEMA_NAME}.inscricoes
+       SET payload = jsonb_set(payload, '{dashboard_merged_into}', to_jsonb($1::text))
+       WHERE payload->>'dashboard_merged_into' = $2::text`,
+      [String(primaryId), String(secondaryId)]
+    );
+
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -1983,6 +2038,7 @@ export async function autoMergeNewLeadByPhone(
      FROM ${SCHEMA_NAME}.inscricoes
      WHERE id != $1
        AND (payload->>'dashboard_merged_into') IS NULL
+       AND COALESCE(payload->>'dashboard_excluido', '') != 'true'
        AND (${phoneConditions})
      ORDER BY criado_em ASC
      LIMIT 1`,
@@ -2053,6 +2109,10 @@ export async function autoMergeNewLeadByPhone(
       merged.dashboard_origens_adicionais = [...existingExtras, secondaryLabel];
     }
   }
+
+  // Uma nova inscrição da mesma pessoa é uma interação nova: o lead volta ao
+  // topo das listagens ("Mais recente" ordena por última interação).
+  merged.dashboard_ultima_interacao = new Date().toISOString();
 
   await mergeInscricoes(primary.id, newId, merged);
 
@@ -2647,12 +2707,12 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   // Query que busca de todos os campos possíveis de treinamento
   const query = `
     SELECT
-      ${TRAINING_EXPRESSION} AS treinamento,
-      BOOL_OR(${UPDAY_PAYLOAD_CONDITION}) AS is_upday
+      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
+      BOOL_OR(${ACTIVE_UPDAY_PAYLOAD_CONDITION}) AS is_upday
     FROM ${SCHEMA_NAME}.inscricoes AS i
     WHERE ${FINALIZED_INSCRICAO_CONDITION}
-      AND ${TRAINING_EXPRESSION} <> ''
-    GROUP BY ${TRAINING_EXPRESSION}
+      AND ${ACTIVE_TRAINING_EXPRESSION} <> ''
+    GROUP BY ${ACTIVE_TRAINING_EXPRESSION}
     ORDER BY 1
   `;
 
@@ -2768,7 +2828,7 @@ export async function getTrainingSnapshot(
 
   if (filters.treinamentoId) {
     params.push(filters.treinamentoId.trim());
-    conditions.push(`${TRAINING_EXPRESSION} = $${params.length}`);
+    conditions.push(`${TRAINING_EXPRESSION} = $${params.length} AND ${OWN_LINK_ACTIVE_CONDITION}`);
   }
 
   const whereClause = `WHERE ${conditions.join(" AND ")}`;
@@ -2962,7 +3022,7 @@ export async function listInscricoesByIds(ids: number[]): Promise<InscricaoItem[
       ${PHONE_EXPRESSION} AS telefone,
       ${CITY_EXPRESSION} AS cidade,
       ${PROFESSION_EXPRESSION} AS profissao,
-      ${TRAINING_EXPRESSION} AS treinamento,
+        ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
       ${RECRUITER_EXPRESSION} AS traffic_source,
       COALESCE(cl.campaign_source, ${CAMPAIGN_SOURCE_EXPRESSION}) AS campaign_source,
       COALESCE(cl.campaign_name, ${CAMPAIGN_NAME_EXPRESSION}) AS campaign_name,
@@ -3008,7 +3068,7 @@ export async function listDuplicateSuspects(
         ${PHONE_EXPRESSION} AS telefone,
         ${CITY_EXPRESSION} AS cidade,
         ${PROFESSION_EXPRESSION} AS profissao,
-        ${TRAINING_EXPRESSION} AS treinamento,
+        ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
         ${RECRUITER_EXPRESSION} AS traffic_source,
         NULL::bigint AS total_count,
         REGEXP_REPLACE(${PHONE_EXPRESSION}, '\\D', '', 'g') AS telefone_normalizado,
@@ -3433,6 +3493,8 @@ export interface TrainingWithStats {
   label: string;
   startsAt: string | null;
   days: number;
+  /** Produto do Instituto UP ("online" = Encontro Online, "up-day-plus") ou null quando o registro não pertence ao Instituto UP. */
+  product: TrainingKind | null;
   totalInscritos: number;
   leads: number;
   recrutadores: number;
@@ -3489,7 +3551,7 @@ export async function getCommercialDashboardStats(
 
   const treinamentoId = options.treinamentoId?.trim() ?? "";
   const queryValues = treinamentoId ? [treinamentoId] : [];
-  const trainingCondition = treinamentoId ? `AND ${TRAINING_EXPRESSION} = $1` : "";
+  const trainingCondition = treinamentoId ? `AND ${TRAINING_EXPRESSION} = $1 AND ${OWN_LINK_ACTIVE_CONDITION}` : "";
   const baseQuery = buildCommercialDashboardBaseQuery(trainingCondition);
 
   const [summaryRes, stageRes, campaignRes, sellerRes] = await Promise.all([
@@ -3645,7 +3707,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
   const pool = getPool();
 
   // Expressão para extrair treinamento de múltiplos campos possíveis
-  const treinamentoExpr = `COALESCE(NULLIF(${TRAINING_EXPRESSION}, ''), 'Sem Treinamento')`;
+  const treinamentoExpr = `COALESCE(NULLIF(${ACTIVE_TRAINING_EXPRESSION}, ''), 'Sem Treinamento')`;
 
   const query = `
     WITH base AS (
@@ -3670,7 +3732,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
     )
     SELECT
       treinamento_id,
-      BOOL_OR(${UPDAY_PAYLOAD_CONDITION}) AS is_upday,
+      BOOL_OR(${ACTIVE_UPDAY_PAYLOAD_CONDITION}) AS is_upday,
       COUNT(DISTINCT person_key)::bigint AS total_inscritos,
       COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
       COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
@@ -3724,6 +3786,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
         label,
         startsAt,
         days: trainingInfo?.days ?? (isUpDay && /\be\b/.test(treinamentoId) ? 2 : 1),
+        product: classifyTrainingProduct(treinamentoId, { isUpDay }),
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
@@ -3864,7 +3927,7 @@ export async function getInscricaoByRecruiterCode(code: string): Promise<Inscric
       ${PHONE_EXPRESSION} AS telefone,
       ${CITY_EXPRESSION} AS cidade,
       ${PROFESSION_EXPRESSION} AS profissao,
-      ${TRAINING_EXPRESSION} AS treinamento,
+      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
       ${RECRUITER_EXPRESSION} AS traffic_source
     FROM ${SCHEMA_NAME}.inscricoes i
     WHERE ${FINALIZED_INSCRICAO_CONDITION}

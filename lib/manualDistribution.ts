@@ -535,6 +535,20 @@ function isTestLead(item: InscricaoItem): boolean {
   return quality.issues.some((issue) => issue.code === "payload-teste");
 }
 
+// Canais que "chegam" na Chegada de Leads: trafego pago da Meta e leads das
+// landing pages (Google). Aula exclusiva, workshop, encontro online etc. nao
+// entram aqui — esses leads seguem outros fluxos.
+const ARRIVAL_CHANNELS = new Set(["Meta Ads", "Meta Forms", "Google Ads", "Google Forms"]);
+
+function isArrivalLead(item: InscricaoItem, candidate: ManualDistributionCandidate): boolean {
+  if (ARRIVAL_CHANNELS.has(candidate.entryChannel)) return true;
+
+  // Landing pages sem UTM identificavel: a origem gravada no payload ainda
+  // denuncia a landing page.
+  const origem = payloadText(item, ["origem", "lead_origem", "origem_formulario"]);
+  return Boolean(origem && textIncludes(origem, ["landing"]));
+}
+
 function normalizeSellerIds(input: unknown): number[] {
   return parseIdList(input).slice(0, 50);
 }
@@ -623,10 +637,13 @@ export async function listManualDistributionCandidates(
   });
 
   const cleanData = result.data.filter((item) => !isTestLead(item));
+  const arrivals = cleanData
+    .map((item) => ({ item, candidate: candidateFromItem(item) }))
+    .filter(({ item, candidate }) => isArrivalLead(item, candidate));
 
   return {
-    candidates: cleanData.map((item) => candidateFromItem(item)),
-    total: Math.max(0, result.total - (result.data.length - cleanData.length)),
+    candidates: arrivals.map(({ candidate }) => candidate),
+    total: Math.max(0, result.total - (result.data.length - arrivals.length)),
     limit: safePageSize,
   };
 }

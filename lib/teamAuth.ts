@@ -1,10 +1,17 @@
 import bcrypt from "bcryptjs";
 import { getPool } from "@/lib/db";
+import {
+  DEFAULT_PRIORITY_BY_ROLE,
+  defaultPermissionsForRole,
+  effectivePermissionsForRole,
+  normalizePermissionList,
+  normalizeTeamRole,
+  type PermissionKey,
+  type TeamRole,
+} from "@/lib/permissions";
 
 const SCHEMA = "dashboard";
 const BCRYPT_ROUNDS = 12;
-
-export type TeamRole = "admin" | "member";
 
 export interface TeamMember {
   id: number;
@@ -12,6 +19,8 @@ export interface TeamMember {
   name: string;
   role: TeamRole;
   active: boolean;
+  priorityLevel: number;
+  permissions: PermissionKey[];
   distributionPosition: number;
   /** Quando true, a secao "Leads VozUP" fica oculta e /vozup bloqueado para este usuario. */
   institutoUpOnly: boolean;
@@ -26,6 +35,8 @@ interface TeamMemberRow {
   password_hash: string;
   role: TeamRole;
   active: boolean;
+  priority_level: number;
+  permissions: unknown;
   distribution_position: number;
   instituto_up_only: boolean;
   created_at: string;
@@ -37,8 +48,12 @@ function mapRow(row: TeamMemberRow): TeamMember {
     id: row.id,
     email: row.email,
     name: row.name,
-    role: row.role,
+    role: normalizeTeamRole(row.role),
     active: row.active,
+    priorityLevel: Number(row.priority_level) || DEFAULT_PRIORITY_BY_ROLE[normalizeTeamRole(row.role)],
+    permissions: effectivePermissionsForRole(row.role, row.permissions, {
+      institutoUpOnly: row.instituto_up_only,
+    }),
     distributionPosition: row.distribution_position,
     institutoUpOnly: row.instituto_up_only,
     createdAt: row.created_at,
@@ -48,6 +63,15 @@ function mapRow(row: TeamMemberRow): TeamMember {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function configuredSuperMasterEmails(): string[] {
+  const configured = process.env.DASHBOARD_SUPER_MASTER_EMAILS?.trim();
+  const raw = configured && configured.length > 0 ? configured : "henrique@escolavozup.com";
+  return raw
+    .split(/[,\n;]/)
+    .map((entry) => normalizeEmail(entry))
+    .filter(Boolean);
 }
 
 let schemaReady = false;
@@ -65,17 +89,44 @@ export async function ensureTeamSchema(): Promise<void> {
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
+      role TEXT NOT NULL DEFAULT 'member',
       active BOOLEAN NOT NULL DEFAULT true,
+      priority_level INTEGER NOT NULL DEFAULT 0,
+      permissions JSONB,
       distribution_position INTEGER NOT NULL DEFAULT 0,
       instituto_up_only BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
 
+    ALTER TABLE ${SCHEMA}.team_members
+      ADD COLUMN IF NOT EXISTS priority_level INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS permissions JSONB,
+      ADD COLUMN IF NOT EXISTS instituto_up_only BOOLEAN NOT NULL DEFAULT false;
+
+    ALTER TABLE ${SCHEMA}.team_members
+      DROP CONSTRAINT IF EXISTS team_members_role_check;
+
+    ALTER TABLE ${SCHEMA}.team_members
+      ADD CONSTRAINT team_members_role_check
+      CHECK (role IN ('super_master', 'admin', 'member'));
+
     CREATE INDEX IF NOT EXISTS idx_team_members_active ON ${SCHEMA}.team_members(active);
     CREATE INDEX IF NOT EXISTS idx_team_members_role ON ${SCHEMA}.team_members(role);
+    CREATE INDEX IF NOT EXISTS idx_team_members_priority ON ${SCHEMA}.team_members(priority_level DESC);
   `);
+
+  const superMasterEmails = configuredSuperMasterEmails();
+  if (superMasterEmails.length > 0) {
+    await getPool().query(
+      `UPDATE ${SCHEMA}.team_members
+       SET role = 'super_master',
+           priority_level = GREATEST(priority_level, $2),
+           updated_at = NOW()
+       WHERE LOWER(email) = ANY($1::text[])`,
+      [superMasterEmails, DEFAULT_PRIORITY_BY_ROLE.super_master]
+    );
+  }
 
   schemaReady = true;
 }
@@ -139,17 +190,36 @@ export interface CreateTeamMemberInput {
   name: string;
   password: string;
   role: TeamRole;
+  priorityLevel?: number;
+  permissions?: PermissionKey[];
   institutoUpOnly?: boolean;
 }
 
 export async function createTeamMember(input: CreateTeamMemberInput): Promise<TeamMember> {
   await ensureTeamSchema();
+  const role = normalizeTeamRole(input.role);
+  const permissions = input.permissions
+    ? normalizePermissionList(input.permissions)
+    : defaultPermissionsForRole(role, { institutoUpOnly: input.institutoUpOnly ?? false });
+  const priorityLevel = Number.isFinite(input.priorityLevel)
+    ? Number(input.priorityLevel)
+    : DEFAULT_PRIORITY_BY_ROLE[role];
   const passwordHash = await hashPassword(input.password);
   const { rows } = await getPool().query<TeamMemberRow>(
-    `INSERT INTO ${SCHEMA}.team_members (email, name, password_hash, role, instituto_up_only)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO ${SCHEMA}.team_members (
+       email, name, password_hash, role, priority_level, permissions, instituto_up_only
+     )
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
      RETURNING *`,
-    [normalizeEmail(input.email), input.name.trim(), passwordHash, input.role, input.institutoUpOnly ?? false]
+    [
+      normalizeEmail(input.email),
+      input.name.trim(),
+      passwordHash,
+      role,
+      priorityLevel,
+      JSON.stringify(permissions),
+      input.institutoUpOnly ?? false,
+    ]
   );
   return mapRow(rows[0]);
 }
@@ -159,6 +229,8 @@ export interface UpdateTeamMemberInput {
   role?: TeamRole;
   active?: boolean;
   password?: string;
+  priorityLevel?: number;
+  permissions?: PermissionKey[];
   distributionPosition?: number;
   institutoUpOnly?: boolean;
 }
@@ -174,7 +246,7 @@ export async function updateTeamMember(id: number, input: UpdateTeamMemberInput)
     sets.push(`name = $${values.length}`);
   }
   if (input.role !== undefined) {
-    values.push(input.role);
+    values.push(normalizeTeamRole(input.role));
     sets.push(`role = $${values.length}`);
   }
   if (input.active !== undefined) {
@@ -184,6 +256,14 @@ export async function updateTeamMember(id: number, input: UpdateTeamMemberInput)
   if (input.distributionPosition !== undefined) {
     values.push(input.distributionPosition);
     sets.push(`distribution_position = $${values.length}`);
+  }
+  if (input.priorityLevel !== undefined) {
+    values.push(input.priorityLevel);
+    sets.push(`priority_level = $${values.length}`);
+  }
+  if (input.permissions !== undefined) {
+    values.push(JSON.stringify(normalizePermissionList(input.permissions)));
+    sets.push(`permissions = $${values.length}::jsonb`);
   }
   if (input.institutoUpOnly !== undefined) {
     values.push(input.institutoUpOnly);

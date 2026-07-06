@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { usePathname } from "next/navigation";
-import Image from "next/image";
 import { Menu } from "lucide-react";
+import LeadNotifications from "@/components/LeadNotifications";
 import ModernSidebar from "@/components/ModernSidebar";
 import type { DashboardUser } from "@/lib/auth";
 
@@ -22,22 +22,23 @@ export default function DashboardLayoutClient({
   const [mobileOpenPathname, setMobileOpenPathname] = useState<string | null>(null);
   const pathname = usePathname();
   const isMobileOpen = mobileOpenPathname === pathname;
+  const isVozupWorkspace = pathname.startsWith("/vozup") || pathname.startsWith("/financeiro");
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-[rgb(var(--background-color))] text-[rgb(var(--slate-12))]">
-      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-3 shadow-[0_1px_2px_rgba(28,32,36,0.04)] lg:hidden">
+    <div className="flex h-dvh w-full overflow-hidden bg-[#f5f8fb] text-slate-950">
+      <LeadNotifications />
+      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-white/10 bg-[var(--dashboard-navy)] px-3 text-white shadow-[0_12px_30px_rgba(2,19,37,0.18)] lg:hidden">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setMobileOpenPathname(pathname)}
-            className="flex size-9 items-center justify-center rounded-lg text-[rgb(var(--slate-11))] hover:bg-[rgba(var(--alpha-2))]"
+            className="flex size-9 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
             aria-label="Abrir menu"
           >
             <Menu size={20} />
           </button>
           <div className="flex items-center gap-2">
-            <Image src="/logo-up.svg" alt="Instituto UP" width={24} height={24} />
-            <span className="text-sm font-semibold text-[rgb(var(--slate-12))]">
-              CRM
+            <span className="text-lg font-black tracking-tight text-white">
+              <span className="text-[#08d9ff]">VOZ</span>UP
             </span>
           </div>
         </div>
@@ -53,7 +54,7 @@ export default function DashboardLayoutClient({
       />
       
       <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 transition-all duration-300 lg:pt-0">
-        <div className="min-h-full p-3 sm:p-4 lg:p-6">
+        <div className={isVozupWorkspace ? "min-h-full p-0" : "min-h-full p-3 sm:p-4 lg:p-6"}>
           {children}
         </div>
       </main>

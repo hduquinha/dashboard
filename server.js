@@ -71,3 +71,45 @@ if (cluster.isPrimary && process.env.MERGE_SWEEP_ENABLED !== "false") {
   setInterval(triggerSweep, sweepIntervalMs);
   setTimeout(triggerSweep, 10_000); // margem para o worker terminar app.prepare()
 }
+
+// Web push de leads novos para os celulares dos vendedores (inscritos via
+// /api/push/subscribe). Mesmo padrão de loopback do merge sweep acima.
+if (cluster.isPrimary && process.env.PUSH_DISPATCH_ENABLED !== "false") {
+  const pushIntervalMs = Number.parseInt(process.env.PUSH_DISPATCH_INTERVAL_MS || "30000", 10);
+  const pushToken = process.env.DASHBOARD_TOKEN || "";
+  const pushUrl = `http://127.0.0.1:${port}/api/internal/push-dispatch`;
+
+  const triggerPushDispatch = () => {
+    if (!pushToken) return;
+    fetch(pushUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pushToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] push dispatch trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerPushDispatch, pushIntervalMs);
+  setTimeout(triggerPushDispatch, 15_000);
+}
+
+// Fallback para Lead Ads da Meta: webhooks podem falhar ou ficar desinscritos
+// sem derrubar o app. A sincronização puxa leads recentes e ignora IDs já salvos.
+if (cluster.isPrimary && process.env.FACEBOOK_LEAD_SYNC_ENABLED !== "false") {
+  const syncIntervalMs = Number.parseInt(process.env.FACEBOOK_LEAD_SYNC_INTERVAL_MS || "120000", 10);
+  const syncToken = process.env.DASHBOARD_TOKEN || "";
+  const syncUrl = `http://127.0.0.1:${port}/api/internal/facebook-lead-sync`;
+
+  const triggerFacebookLeadSync = () => {
+    if (!syncToken || !process.env.FACEBOOK_PAGE_ACCESS_TOKEN) return;
+    fetch(syncUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${syncToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] facebook lead sync trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerFacebookLeadSync, syncIntervalMs);
+  setTimeout(triggerFacebookLeadSync, 20_000);
+}
