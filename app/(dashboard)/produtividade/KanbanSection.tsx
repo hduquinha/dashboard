@@ -6,26 +6,13 @@ import { CrmKanbanView } from "@/components/CrmKanbanView";
 import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { KanbanFiltersModal } from "./KanbanFiltersModal";
 import type { KanbanFilter } from "@/lib/kanbanFilters";
-import type { CommercialStage } from "@/types/inscricao";
 import type { CommercialWorkspace } from "@/types/commercial";
+import type { Funnel } from "@/types/funnel";
 import type { ProductivityLeadAgent } from "@/types/productivity";
 import type { TrainingOption } from "@/types/training";
 import type { PermissionUser } from "@/lib/permissions";
 
 export type KanbanMode = "mine" | "all" | "member";
-
-// Lead distribuido chega como "Novo" no Kanban do vendedor. Leads fechados
-// (ganho/perdido) saem do board — voltam como "Novo" se forem redistribuidos.
-// Leads sem responsavel nao aparecem aqui (ficam na Chegada de Leads); o
-// board carrega com assignedOnly.
-const TEAM_KANBAN_STAGES: CommercialStage[] = [
-  "novo",
-  "primeiro_contato",
-  "em_atendimento",
-  "agendado",
-  "fechamento",
-  "no_show",
-];
 
 interface RecruiterOption {
   code: string;
@@ -74,22 +61,78 @@ export function KanbanSection({
   const [activeFilterId, setActiveFilterId] = useState<number | null>(null);
   const [showFiltersModal, setShowFiltersModal] = useState(false);
 
-  // Filtros salvos: admin ve todos; vendedor so os atribuidos a ele (a API
-  // ja recorta). Vendedor com filtro atribuido entra com ele aplicado.
+  // Funil ativo: vendedor pode ter varios funis atribuidos e trocar entre
+  // eles (mesma UX do seletor de Filtro); comeca no funil padrao.
+  const [funnelOptions, setFunnelOptions] = useState<Funnel[]>(commercial.funnels);
+  const [activeFunnelId, setActiveFunnelId] = useState<number | null>(
+    () => commercial.funnels.find((funnel) => funnel.isDefault)?.id ?? commercial.funnels[0]?.id ?? null
+  );
+  const activeFunnel = funnelOptions.find((funnel) => funnel.id === activeFunnelId) ?? funnelOptions[0] ?? null;
+  const commercialFresh = { ...commercial, funnels: funnelOptions };
+
+  // Busca os funis atualizados — a prop `commercial` so vem fresca numa
+  // navegacao completa. Refaz a busca ao montar E sempre que a aba/janela
+  // recupera o foco (ex: usuario editou o funil em /funis numa outra aba e
+  // voltou pra essa sem dar F5) — sem isso, a edicao so aparecia apos um
+  // reload completo, e mesmo assim so se o Next remontasse o componente.
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/commercial/kanban-filters")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data: { filters?: KanbanFilter[] } | null) => {
-        if (cancelled || !data?.filters) return;
-        setFilters(data.filters);
-        if (!isManager && data.filters.length > 0) {
-          setActiveFilterId((current) => current ?? data.filters![0].id);
-        }
-      })
-      .catch(() => {});
+
+    function loadFunnels() {
+      fetch("/api/funnels")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { funnels?: Funnel[] } | null) => {
+          if (cancelled || !data?.funnels) return;
+          setFunnelOptions(data.funnels);
+          setActiveFunnelId((current) =>
+            current !== null && data.funnels!.some((funnel) => funnel.id === current)
+              ? current
+              : data.funnels!.find((funnel) => funnel.isDefault)?.id ?? data.funnels![0]?.id ?? null
+          );
+        })
+        .catch(() => {});
+    }
+
+    loadFunnels();
+    window.addEventListener("focus", loadFunnels);
+    document.addEventListener("visibilitychange", loadFunnels);
     return () => {
       cancelled = true;
+      window.removeEventListener("focus", loadFunnels);
+      document.removeEventListener("visibilitychange", loadFunnels);
+    };
+  }, []);
+  // Mostra todas as etapas do funil como coluna, incluindo Ganho/Perdido —
+  // a equipe quer ver esses leads fechados/perdidos permanecendo visiveis no
+  // quadro, nao saindo dele.
+  const visibleStages = activeFunnel?.stages ?? [];
+
+  // Filtros salvos: admin ve todos; vendedor so os atribuidos a ele (a API
+  // ja recorta). Vendedor com filtro atribuido entra com ele aplicado.
+  // Mesmo motivo acima: reflete edicoes feitas em outra aba ao voltar o foco.
+  useEffect(() => {
+    let cancelled = false;
+
+    function loadFilters() {
+      fetch("/api/commercial/kanban-filters")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { filters?: KanbanFilter[] } | null) => {
+          if (cancelled || !data?.filters) return;
+          setFilters(data.filters);
+          if (!isManager && data.filters.length > 0) {
+            setActiveFilterId((current) => current ?? data.filters![0].id);
+          }
+        })
+        .catch(() => {});
+    }
+
+    loadFilters();
+    window.addEventListener("focus", loadFilters);
+    document.addEventListener("visibilitychange", loadFilters);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", loadFilters);
+      document.removeEventListener("visibilitychange", loadFilters);
     };
   }, [isManager]);
 
@@ -187,6 +230,25 @@ export function KanbanSection({
               </>
             )}
 
+            {funnelOptions.length > 1 && (
+              <select
+                value={activeFunnelId ?? ""}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10);
+                  setActiveFunnelId(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+                }}
+                className="h-8 rounded-lg border border-[rgb(var(--border-weak))] px-2 text-xs font-semibold text-[rgb(var(--slate-11))]"
+                title="Funil"
+                aria-label="Funil"
+              >
+                {funnelOptions.map((funnel) => (
+                  <option key={funnel.id} value={funnel.id}>
+                    {funnel.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
             {filters.length > 0 && (
               <select
                 value={activeFilterId ?? ""}
@@ -237,7 +299,7 @@ export function KanbanSection({
           produto={null}
           assignedSellerEmail={assignedSellerEmail}
           isSupervisor={isManager}
-          visibleStages={TEAM_KANBAN_STAGES}
+          stages={visibleStages}
           assignedOnly
           filterId={activeFilterId}
           refreshToken={refreshToken}
@@ -256,7 +318,7 @@ export function KanbanSection({
         }}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
-        commercial={commercial}
+        commercial={commercialFresh}
         currentUser={currentUser}
       />
 

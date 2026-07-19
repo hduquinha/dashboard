@@ -41,7 +41,7 @@ export interface FacebookLeadSyncResult {
 const LEAD_FIELDS =
   "id,created_time,form_id,field_data,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,platform";
 
-function getAccessToken(): string {
+export function getFacebookAccessToken(): string {
   const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
   if (!token) {
     throw new Error("FACEBOOK_PAGE_ACCESS_TOKEN não configurado");
@@ -49,7 +49,7 @@ function getAccessToken(): string {
   return token;
 }
 
-async function fetchGraph<T>(path: string, accessToken = getAccessToken()): Promise<T> {
+async function fetchGraph<T>(path: string, accessToken = getFacebookAccessToken()): Promise<T> {
   const separator = path.includes("?") ? "&" : "?";
   const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${path}${separator}access_token=${encodeURIComponent(accessToken)}`;
   const res = await fetch(url, { cache: "no-store" });

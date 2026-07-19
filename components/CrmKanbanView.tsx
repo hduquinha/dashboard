@@ -18,109 +18,23 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { CommercialStage, InscricaoItem } from "@/types/inscricao";
+import type { FunnelStage } from "@/types/funnel";
+import { STAGE_COLOR_CLASSES } from "@/lib/stageColors";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 import { computeDropPosition } from "@/lib/leadPosition";
+import { describeLeadSource } from "@/lib/leadFields";
 
 /* ── Stage config ───────────────────────────────────────── */
+// As colunas do board vêm de fora (etapas do funil selecionado) — cada
+// coluna carrega seu próprio label/cor, resolvidos aqui pra classes Tailwind.
 
-interface StageConfig {
-  label: string;
-  headerBg: string;   // column header background
-  headerText: string; // column header text
-  badgeBg: string;    // count badge bg
-  badgeText: string;
-  cardBorder: string; // left accent on card
-  dotColor: string;   // dot in stage menu
+function stageConfig(stage: FunnelStage | undefined) {
+  const classes = STAGE_COLOR_CLASSES[stage?.color ?? "slate"];
+  return { label: stage?.label ?? stage?.key ?? "?", ...classes };
 }
-
-const STAGE_CONFIG: Record<CommercialStage, StageConfig> = {
-  novo: {
-    label: "Novo",
-    headerBg: "bg-slate-600",
-    headerText: "text-white",
-    badgeBg: "bg-slate-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-slate-400",
-    dotColor: "bg-slate-400",
-  },
-  primeiro_contato: {
-    label: "1º Contato",
-    headerBg: "bg-cyan-600",
-    headerText: "text-white",
-    badgeBg: "bg-cyan-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-cyan-500",
-    dotColor: "bg-cyan-500",
-  },
-  em_atendimento: {
-    label: "Em Atendimento",
-    headerBg: "bg-blue-600",
-    headerText: "text-white",
-    badgeBg: "bg-blue-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-blue-500",
-    dotColor: "bg-blue-500",
-  },
-  agendado: {
-    label: "Agendado",
-    headerBg: "bg-violet-600",
-    headerText: "text-white",
-    badgeBg: "bg-violet-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-violet-500",
-    dotColor: "bg-violet-500",
-  },
-  fechamento: {
-    label: "Fechamento",
-    headerBg: "bg-amber-500",
-    headerText: "text-white",
-    badgeBg: "bg-amber-400",
-    badgeText: "text-amber-900",
-    cardBorder: "border-l-amber-400",
-    dotColor: "bg-amber-400",
-  },
-  no_show: {
-    label: "No-show",
-    headerBg: "bg-orange-500",
-    headerText: "text-white",
-    badgeBg: "bg-orange-400",
-    badgeText: "text-white",
-    cardBorder: "border-l-orange-400",
-    dotColor: "bg-orange-400",
-  },
-  ganho: {
-    label: "Ganho",
-    headerBg: "bg-emerald-600",
-    headerText: "text-white",
-    badgeBg: "bg-emerald-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-emerald-500",
-    dotColor: "bg-emerald-500",
-  },
-  perdido: {
-    label: "Perdido",
-    headerBg: "bg-rose-600",
-    headerText: "text-white",
-    badgeBg: "bg-rose-500",
-    badgeText: "text-white",
-    cardBorder: "border-l-rose-400",
-    dotColor: "bg-rose-400",
-  },
-};
-
-const STAGE_ORDER: CommercialStage[] = [
-  "novo",
-  "primeiro_contato",
-  "em_atendimento",
-  "agendado",
-  "fechamento",
-  "no_show",
-  "ganho",
-  "perdido",
-];
 
 const COLUMN_DROPPABLE_PREFIX = "column:";
 
@@ -141,8 +55,8 @@ interface CrmKanbanViewProps {
   isSupervisor: boolean;
   /** Chamado depois de qualquer movimentacao persistida (troca de etapa ou drag-and-drop). */
   onLeadMoved?: () => void;
-  /** Etapas exibidas no board (default: todas). Ex.: Kanban da equipe esconde ganho/perdido. */
-  visibleStages?: CommercialStage[];
+  /** Colunas exibidas no board — etapas do funil selecionado, na ordem em que devem aparecer. */
+  stages: FunnelStage[];
   /** So leads com responsavel — os sem responsavel ficam na Chegada de Leads. */
   assignedOnly?: boolean;
   /** Filtro salvo (dashboard.kanban_filters) aplicado no servidor. */
@@ -176,8 +90,8 @@ function leadPosition(lead: InscricaoItem): number {
   return lead.commercial?.position ?? -lead.id;
 }
 
-function findStageOfLead(board: KanbanBoard, leadId: number): CommercialStage | null {
-  for (const stage of STAGE_ORDER) {
+function findStageOfLead(board: KanbanBoard, stageKeys: string[], leadId: number): CommercialStage | null {
+  for (const stage of stageKeys) {
     if (board[stage]?.leads.some((lead) => lead.id === leadId)) {
       return stage;
     }
@@ -185,10 +99,18 @@ function findStageOfLead(board: KanbanBoard, leadId: number): CommercialStage | 
   return null;
 }
 
-function parseColumnDroppableId(id: string | number): CommercialStage | null {
+function parseColumnDroppableId(id: string | number, stageKeys: string[]): CommercialStage | null {
   if (typeof id !== "string" || !id.startsWith(COLUMN_DROPPABLE_PREFIX)) return null;
   const stage = id.slice(COLUMN_DROPPABLE_PREFIX.length);
-  return STAGE_ORDER.includes(stage as CommercialStage) ? (stage as CommercialStage) : null;
+  return stageKeys.includes(stage) ? stage : null;
+}
+
+function findLeadById(board: KanbanBoard, stageKeys: string[], leadId: number): InscricaoItem | null {
+  for (const stage of stageKeys) {
+    const found = board[stage]?.leads.find((lead) => lead.id === leadId);
+    if (found) return found;
+  }
+  return null;
 }
 
 /* ── Card ────────────────────────────────────────────────── */
@@ -198,6 +120,7 @@ interface KanbanCardVisualProps {
   isSelected: boolean;
   onSelect: () => void;
   onStageChange: (stage: CommercialStage) => void;
+  onAttemptsChange: (delta: 1 | -1) => void;
   currentStage: CommercialStage;
   isOverlay?: boolean;
 }
@@ -207,18 +130,21 @@ function KanbanCardBody({
   lead,
   isSelected,
   onStageChange,
+  onAttemptsChange,
   currentStage,
   isOverlay,
-  stageOptions = STAGE_ORDER,
+  stages,
   onRequestClose,
 }: Omit<KanbanCardVisualProps, "onSelect"> & {
-  stageOptions?: CommercialStage[];
+  stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const cfg = STAGE_CONFIG[currentStage];
+  const cfg = stageConfig(stages.find((s) => s.key === currentStage));
   const training = trainingLabel(lead);
+  const origem = describeLeadSource(lead.payload).origem;
+  const attempts = lead.commercial?.contactAttempts ?? 0;
 
   useEffect(() => {
     if (!showMenu) return;
@@ -271,13 +197,13 @@ function KanbanCardBody({
                 <p className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-neutral-400">
                   Mover para
                 </p>
-                {stageOptions.filter((s) => s !== currentStage).map((s) => {
-                  const c = STAGE_CONFIG[s];
+                {stages.filter((s) => s.key !== currentStage).map((s) => {
+                  const c = stageConfig(s);
                   return (
                     <button
-                      key={s}
+                      key={s.key}
                       type="button"
-                      onClick={() => { onStageChange(s); setShowMenu(false); }}
+                      onClick={() => { onStageChange(s.key); setShowMenu(false); }}
                       className="flex w-full items-center gap-2.5 px-3 py-2 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50"
                     >
                       <span className={`h-2.5 w-2.5 rounded-full ${c.dotColor}`} />
@@ -331,8 +257,15 @@ function KanbanCardBody({
         </div>
       )}
 
+      {/* Origem */}
+      {origem && (
+        <p className="mt-1 truncate text-[9px] text-neutral-400" title={origem}>
+          Origem: {origem}
+        </p>
+      )}
+
       {/* Training + date */}
-      <div className="mt-2 flex flex-wrap items-center gap-1">
+      <div className="mt-1 flex flex-wrap items-center gap-1">
         {training && (
           <span className="rounded-md bg-neutral-900 px-1.5 py-0.5 text-[9px] font-semibold text-white">
             {training}
@@ -356,6 +289,34 @@ function KanbanCardBody({
           ))}
         </div>
       )}
+
+      {/* Tentativas de contato — contador 0-10, editavel direto no card */}
+      <div
+        className="mt-1.5 flex items-center gap-1.5"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <span className="text-[9px] font-semibold uppercase tracking-wide text-neutral-400">Tentativas</span>
+        <button
+          type="button"
+          onClick={() => onAttemptsChange(-1)}
+          disabled={attempts <= 0 || isOverlay}
+          aria-label="Diminuir tentativas"
+          className="flex h-4 w-4 items-center justify-center rounded bg-neutral-100 text-[11px] font-bold leading-none text-neutral-500 hover:bg-neutral-200 disabled:opacity-30"
+        >
+          −
+        </button>
+        <span className="w-4 text-center text-[11px] font-bold text-neutral-700">{attempts}</span>
+        <button
+          type="button"
+          onClick={() => onAttemptsChange(1)}
+          disabled={attempts >= 10 || isOverlay}
+          aria-label="Aumentar tentativas"
+          className="flex h-4 w-4 items-center justify-center rounded bg-neutral-100 text-[11px] font-bold leading-none text-neutral-500 hover:bg-neutral-200 disabled:opacity-30"
+        >
+          +
+        </button>
+      </div>
     </div>
   );
 }
@@ -366,11 +327,12 @@ function KanbanCard({
   isSelected,
   onSelect,
   onStageChange,
+  onAttemptsChange,
   currentStage,
-  stageOptions,
+  stages,
   onRequestClose,
 }: KanbanCardVisualProps & {
-  stageOptions: CommercialStage[];
+  stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -390,8 +352,9 @@ function KanbanCard({
         lead={lead}
         isSelected={isSelected}
         onStageChange={onStageChange}
+        onAttemptsChange={onAttemptsChange}
         currentStage={currentStage}
-        stageOptions={stageOptions}
+        stages={stages}
         onRequestClose={onRequestClose}
       />
     </div>
@@ -399,13 +362,23 @@ function KanbanCard({
 }
 
 /** Preview estatico usado no DragOverlay — sem registrar um segundo draggable com o mesmo id. */
-function KanbanCardOverlay({ lead, currentStage }: { lead: InscricaoItem; currentStage: CommercialStage }) {
+function KanbanCardOverlay({
+  lead,
+  currentStage,
+  stages,
+}: {
+  lead: InscricaoItem;
+  currentStage: CommercialStage;
+  stages: FunnelStage[];
+}) {
   return (
     <KanbanCardBody
       lead={lead}
       isSelected={false}
+      onAttemptsChange={() => {}}
       onStageChange={() => {}}
       currentStage={currentStage}
+      stages={stages}
       isOverlay
     />
   );
@@ -420,20 +393,22 @@ function KanbanColumn({
   selectedId,
   onSelectLead,
   onStageChange,
-  stageOptions,
+  onAttemptsChange,
+  stages,
   onRequestClose,
 }: {
-  stage: CommercialStage;
+  stage: FunnelStage;
   leads: InscricaoItem[];
   total: number;
   selectedId: number | null;
   onSelectLead: (id: number | null) => void;
   onStageChange: (leadId: number, stage: CommercialStage) => void;
-  stageOptions: CommercialStage[];
+  onAttemptsChange: (leadId: number, delta: 1 | -1) => void;
+  stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
 }) {
-  const cfg = STAGE_CONFIG[stage];
-  const { setNodeRef, isOver } = useDroppable({ id: `${COLUMN_DROPPABLE_PREFIX}${stage}` });
+  const cfg = stageConfig(stage);
+  const { setNodeRef, isOver } = useDroppable({ id: `${COLUMN_DROPPABLE_PREFIX}${stage.key}` });
 
   return (
     <div className="flex w-64 flex-shrink-0 flex-col rounded-xl border border-neutral-200 bg-neutral-50 shadow-sm">
@@ -464,8 +439,9 @@ function KanbanColumn({
                 isSelected={selectedId === lead.id}
                 onSelect={() => onSelectLead(selectedId === lead.id ? null : lead.id)}
                 onStageChange={(s) => onStageChange(lead.id, s)}
-                currentStage={stage}
-                stageOptions={stageOptions}
+                onAttemptsChange={(delta) => onAttemptsChange(lead.id, delta)}
+                currentStage={stage.key}
+                stages={stages}
                 onRequestClose={onRequestClose}
               />
             ))
@@ -490,7 +466,7 @@ export function CrmKanbanView({
   assignedSellerEmail,
   isSupervisor,
   onLeadMoved,
-  visibleStages,
+  stages,
   assignedOnly,
   filterId,
   refreshToken,
@@ -502,8 +478,8 @@ export function CrmKanbanView({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [closingLead, setClosingLead] = useState<InscricaoItem | null>(null);
 
-  const stages = visibleStages && visibleStages.length > 0 ? visibleStages : STAGE_ORDER;
-  const stagesKey = stages.join(",");
+  const stageKeys = stages.map((stage) => stage.key);
+  const stagesKey = stageKeys.join(",");
 
   // Mouse e toque separados: no celular o drag só começa com pressão longa
   // (250ms), senão qualquer tentativa de rolar o board arrastaria um card.
@@ -517,7 +493,7 @@ export function CrmKanbanView({
     setError(null);
     const params = new URLSearchParams();
     if (produto) params.set("produto", produto);
-    if (stagesKey !== STAGE_ORDER.join(",")) params.set("stages", stagesKey);
+    if (stagesKey) params.set("stages", stagesKey);
     if (assignedOnly) params.set("assignedOnly", "1");
     if (filterId) params.set("filterId", String(filterId));
     // Supervisors: pass sellerEmail only if explicitly filtering by one seller
@@ -560,7 +536,7 @@ export function CrmKanbanView({
   const handleStageChange = useCallback(async (leadId: number, stage: CommercialStage) => {
     setData((current) => {
       if (!current) return current;
-      const fromStage = findStageOfLead(current, leadId);
+      const fromStage = findStageOfLead(current, stageKeys, leadId);
       if (!fromStage || fromStage === stage) return current;
       const lead = current[fromStage].leads.find((l) => l.id === leadId);
       if (!lead) return current;
@@ -584,7 +560,52 @@ export function CrmKanbanView({
         },
       };
     });
-  }, [persistMove]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistMove, stagesKey]);
+
+  const persistAttempts = useCallback(
+    async (leadId: number, delta: 1 | -1) => {
+      try {
+        const res = await fetch(`/api/commercial/leads/${leadId}/attempts`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ delta }),
+        });
+        if (!res.ok) throw new Error("Falha ao salvar tentativas");
+      } catch {
+        setError("Não foi possível salvar as tentativas. Recarregando...");
+        await fetchData();
+      }
+    },
+    [fetchData]
+  );
+
+  const handleAttemptsChange = useCallback(
+    (leadId: number, delta: 1 | -1) => {
+      setData((current) => {
+        if (!current) return current;
+        const stage = findStageOfLead(current, stageKeys, leadId);
+        if (!stage) return current;
+        const lead = current[stage].leads.find((l) => l.id === leadId);
+        if (!lead?.commercial) return current;
+        const nextAttempts = Math.min(10, Math.max(0, lead.commercial.contactAttempts + delta));
+        if (nextAttempts === lead.commercial.contactAttempts) return current;
+        void persistAttempts(leadId, delta);
+        return {
+          ...current,
+          [stage]: {
+            ...current[stage],
+            leads: current[stage].leads.map((l) =>
+              l.id === leadId
+                ? { ...l, commercial: { ...l.commercial!, contactAttempts: nextAttempts } }
+                : l
+            ),
+          },
+        };
+      });
+    },
+    [persistAttempts, stageKeys]
+  );
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(Number(event.active.id));
@@ -597,12 +618,12 @@ export function CrmKanbanView({
 
     setData((current) => {
       if (!current) return current;
-      const fromStage = findStageOfLead(current, activeId);
+      const fromStage = findStageOfLead(current, stageKeys, activeId);
       if (!fromStage) return current;
 
-      const overColumn = parseColumnDroppableId(over.id);
+      const overColumn = parseColumnDroppableId(over.id, stageKeys);
       const overLeadId = overColumn ? null : Number(over.id);
-      const toStage = overColumn ?? (overLeadId !== null ? findStageOfLead(current, overLeadId) : null);
+      const toStage = overColumn ?? (overLeadId !== null ? findStageOfLead(current, stageKeys, overLeadId) : null);
       if (!toStage || toStage === fromStage) return current;
 
       const lead = current[fromStage].leads.find((l) => l.id === activeId);
@@ -625,7 +646,8 @@ export function CrmKanbanView({
         },
       };
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stagesKey]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
@@ -635,7 +657,7 @@ export function CrmKanbanView({
 
     setData((current) => {
       if (!current) return current;
-      const stage = findStageOfLead(current, leadId);
+      const stage = findStageOfLead(current, stageKeys, leadId);
       if (!stage) return current;
 
       const leads = current[stage].leads;
@@ -643,7 +665,7 @@ export function CrmKanbanView({
       if (index === -1) return current;
 
       // Reordena dentro da coluna se o "over" for outro card da mesma coluna.
-      const overColumn = parseColumnDroppableId(over.id);
+      const overColumn = parseColumnDroppableId(over.id, stageKeys);
       const overLeadId = overColumn ? null : Number(over.id);
       let nextLeads = leads;
       if (overLeadId !== null && overLeadId !== leadId) {
@@ -674,7 +696,8 @@ export function CrmKanbanView({
         [stage]: { leads: finalLeads, total: current[stage].total },
       };
     });
-  }, [persistMove]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistMove, stagesKey]);
 
   if (loading) {
     return (
@@ -701,9 +724,9 @@ export function CrmKanbanView({
 
   if (!data) return null;
 
-  const totalLeads = stages.reduce((sum, s) => sum + (data[s]?.total ?? 0), 0);
-  const activeLead = activeId !== null ? findLeadById(data, activeId) : null;
-  const activeStage = activeId !== null ? findStageOfLead(data, activeId) : null;
+  const totalLeads = stageKeys.reduce((sum, key) => sum + (data[key]?.total ?? 0), 0);
+  const activeLead = activeId !== null ? findLeadById(data, stageKeys, activeId) : null;
+  const activeStage = activeId !== null ? findStageOfLead(data, stageKeys, activeId) : null;
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -745,18 +768,19 @@ export function CrmKanbanView({
       >
         <div className="flex flex-1 gap-3 overflow-x-auto p-3">
           {stages.map((stage) => {
-            const stageData = data[stage];
+            const stageData = data[stage.key];
             if (!stageData) return null;
             return (
               <KanbanColumn
-                key={stage}
+                key={stage.key}
                 stage={stage}
                 leads={stageData.leads}
                 total={stageData.total}
                 selectedId={selectedId}
                 onSelectLead={onSelectLead}
                 onStageChange={handleStageChange}
-                stageOptions={stages}
+                onAttemptsChange={handleAttemptsChange}
+                stages={stages}
                 onRequestClose={allowCloseLead ? setClosingLead : undefined}
               />
             );
@@ -764,7 +788,7 @@ export function CrmKanbanView({
         </div>
         <DragOverlay>
           {activeLead && activeStage ? (
-            <KanbanCardOverlay lead={activeLead} currentStage={activeStage} />
+            <KanbanCardOverlay lead={activeLead} currentStage={activeStage} stages={stages} />
           ) : null}
         </DragOverlay>
       </DndContext>
@@ -777,7 +801,7 @@ export function CrmKanbanView({
             setClosingLead(null);
             setData((current) => {
               if (!current) return current;
-              const stage = findStageOfLead(current, leadId);
+              const stage = findStageOfLead(current, stageKeys, leadId);
               if (!stage) return current;
               return {
                 ...current,
@@ -794,12 +818,4 @@ export function CrmKanbanView({
       )}
     </div>
   );
-}
-
-function findLeadById(board: KanbanBoard, leadId: number): InscricaoItem | null {
-  for (const stage of STAGE_ORDER) {
-    const found = board[stage]?.leads.find((lead) => lead.id === leadId);
-    if (found) return found;
-  }
-  return null;
 }

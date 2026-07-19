@@ -99,15 +99,10 @@ export type InscricaoTipo = "lead" | "recrutador";
 
 export type InscricaoStatus = "aguardando" | "aprovado" | "rejeitado";
 
-export type CommercialStage =
-  | "novo"
-  | "primeiro_contato"
-  | "em_atendimento"
-  | "agendado"
-  | "fechamento"
-  | "ganho"
-  | "perdido"
-  | "no_show";
+/** Chave de etapa comercial: livre por funil (ver lib/funnels.ts), não é mais um union fixo. */
+export type CommercialStage = string;
+
+export type CommercialStageKind = "entry" | "normal" | "won" | "lost";
 
 export interface CommercialLeadState {
   campaignSource: string | null;
@@ -116,6 +111,10 @@ export interface CommercialLeadState {
   campaignTerm: string | null;
   landingPage: string | null;
   stage: CommercialStage;
+  stageKind: CommercialStageKind;
+  /** Tentativas de contato registradas pelo vendedor (0-10), editavel direto no card do Kanban. */
+  contactAttempts: number;
+  funnelId: number | null;
   position: number | null;
   assignedSellerId: number | null;
   assignedSellerEmail: string | null;

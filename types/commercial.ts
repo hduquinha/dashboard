@@ -1,4 +1,5 @@
 import type { CommercialStage } from "@/types/inscricao";
+import type { Funnel } from "@/types/funnel";
 import type { ProductivityLeadAgent } from "@/types/productivity";
 
 export interface CommercialSeller extends ProductivityLeadAgent {
@@ -8,7 +9,9 @@ export interface CommercialSeller extends ProductivityLeadAgent {
 export interface CommercialWorkspace {
   isSupervisor: boolean;
   sellers: CommercialSeller[];
+  /** Etapas do Funil Padrão — mantido por compat; para telas funil-aware, use `funnels`. */
   stages: Array<{ key: CommercialStage; label: string }>;
+  funnels: Funnel[];
 }
 
 export interface CommercialActionResult {

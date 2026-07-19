@@ -8,8 +8,10 @@ import {
   Bell,
   ChevronDown,
   Command,
+  Download,
   Folder,
   FolderOpen,
+  Map as MapIcon,
   Search,
   Users,
 } from "lucide-react";
@@ -121,6 +123,7 @@ function FolderCard({
   const total = blocks.reduce((s, b) => s + b.total, 0);
   const mes = blocks.reduce((s, b) => s + b.mes, 0);
   const semana = blocks.reduce((s, b) => s + b.semana, 0);
+  const count = folder.hasSubfolders ? new Set(blocks.map((b) => b.subpasta)).size : blocks.length;
 
   return (
     <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
@@ -136,9 +139,11 @@ function FolderCard({
         </div>
         <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[#e5f8ff] px-2.5 py-1 text-xs font-bold text-[#0086b8]">
           <Folder size={12} />
-          {folder.blockKind === "aula"
-            ? `${blocks.length} ${blocks.length === 1 ? "aula" : "aulas"}`
-            : `${blocks.length} ${blocks.length === 1 ? "formulário" : "formulários"}`}
+          {folder.hasSubfolders
+            ? `${count} ${count === 1 ? "página" : "páginas"}`
+            : folder.blockKind === "aula"
+              ? `${count} ${count === 1 ? "aula" : "aulas"}`
+              : `${count} ${count === 1 ? "formulário" : "formulários"}`}
         </span>
       </div>
 
@@ -158,7 +163,73 @@ function FolderCard({
   );
 }
 
-function BlockCard({ folder, block }: { folder: VozupFolderDef; block: VozupBlockStats }) {
+function subfolderLabel(grupo: string): string {
+  return `Página de ${grupo}`;
+}
+
+function SubfolderCard({
+  folder,
+  grupo,
+  blocks,
+}: {
+  folder: VozupFolderDef;
+  grupo: string;
+  blocks: VozupBlockStats[];
+}) {
+  const total = blocks.reduce((s, b) => s + b.total, 0);
+  const mes = blocks.reduce((s, b) => s + b.mes, 0);
+  const semana = blocks.reduce((s, b) => s + b.semana, 0);
+  const lastConversao = blocks.reduce<string | null>((latest, b) => {
+    if (!b.ultimaConversao) return latest;
+    if (!latest || b.ultimaConversao > latest) return b.ultimaConversao;
+    return latest;
+  }, null);
+
+  return (
+    <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e5f8ff] text-xl">
+            <Folder size={20} className="text-[#0086b8]" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-slate-950">{subfolderLabel(grupo)}</h3>
+            <p className="text-xs font-medium text-slate-400">
+              Última conversão: {dateLabel(lastConversao)}
+            </p>
+          </div>
+        </div>
+        <span className="inline-flex flex-shrink-0 items-center gap-1 rounded-full bg-[#e5f8ff] px-2.5 py-1 text-xs font-bold text-[#0086b8]">
+          <Folder size={12} />
+          {blocks.length} {blocks.length === 1 ? "formulário" : "formulários"}
+        </span>
+      </div>
+
+      <StatsRow total={total} mes={mes} semana={semana} />
+
+      <div className="mt-4">
+        <Link
+          href={`/vozup?pasta=${encodeURIComponent(folder.key)}&subpasta=${encodeURIComponent(grupo)}`}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0086b8] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#006f99]"
+        >
+          <FolderOpen size={15} />
+          Abrir pasta
+          <ArrowRight size={15} />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function BlockCard({
+  folder,
+  block,
+  subpasta,
+}: {
+  folder: VozupFolderDef;
+  block: VozupBlockStats;
+  subpasta?: string;
+}) {
   return (
     <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
       <div className="flex items-start justify-between">
@@ -184,7 +255,9 @@ function BlockCard({ folder, block }: { folder: VozupFolderDef; block: VozupBloc
 
       <div className="mt-4">
         <Link
-          href={`/vozup?pasta=${encodeURIComponent(folder.key)}&bloco=${encodeURIComponent(block.bloco)}`}
+          href={`/vozup?pasta=${encodeURIComponent(folder.key)}${
+            subpasta ? `&subpasta=${encodeURIComponent(subpasta)}` : ""
+          }&bloco=${encodeURIComponent(block.bloco)}`}
           className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#0086b8] px-4 py-2.5 text-sm font-bold text-white transition hover:bg-[#006f99]"
         >
           <Users size={15} />
@@ -224,6 +297,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
   const pastaKey = pick(resolved.pasta);
   const bloco = pick(resolved.bloco);
+  const subpastaParam = pick(resolved.subpasta) || undefined;
   const search = pick(resolved.q) || undefined;
   const page = Number(pick(resolved.page)) || 1;
   const sort = pick(resolved.sort) || undefined;
@@ -263,16 +337,20 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
     const blockHref = (params: Record<string, string | undefined>) => {
       const u = new URLSearchParams({ pasta: folder.key, bloco });
+      if (subpastaParam) u.set("subpasta", subpastaParam);
       for (const [k, v] of Object.entries(params)) if (v) u.set(k, v);
       return `/vozup?${u.toString()}`;
     };
+    const backHref = subpastaParam
+      ? `/vozup?pasta=${encodeURIComponent(folder.key)}&subpasta=${encodeURIComponent(subpastaParam)}`
+      : `/vozup?pasta=${encodeURIComponent(folder.key)}`;
 
     return (
       <main className="min-h-full bg-[#f3f6fa]">
         <div className="flex min-h-[76px] items-center justify-between gap-4 border-b border-slate-200/80 bg-white/80 px-4 backdrop-blur sm:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <Link
-              href={`/vozup?pasta=${encodeURIComponent(folder.key)}`}
+              href={backHref}
               className="flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-cyan-50 hover:text-cyan-700"
               aria-label={`Voltar para a pasta ${folder.label}`}
             >
@@ -284,7 +362,8 @@ export default async function VozupPage({ searchParams }: PageProps) {
             <div className="min-w-0">
               <h1 className="truncate text-2xl font-black text-slate-950">{bloco}</h1>
               <p className="truncate text-xs font-semibold text-slate-500">
-                VozUP · Leads · {folder.label} · {total} leads
+                VozUP · Leads · {folder.label}
+                {subpastaParam ? ` · ${subfolderLabel(subpastaParam)}` : ""} · {total} leads
               </p>
             </div>
           </div>
@@ -314,6 +393,18 @@ export default async function VozupPage({ searchParams }: PageProps) {
         </div>
 
         <div className="space-y-4 p-4 sm:p-8">
+          {folder.blockKind === "aula" && (
+            <div className="flex justify-end">
+              <a
+                href={`/api/vozup/aulas/attendance-pdf?pasta=${encodeURIComponent(folder.key)}&bloco=${encodeURIComponent(bloco)}`}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-4 text-sm font-bold text-cyan-700 shadow-sm transition hover:bg-cyan-100"
+              >
+                <Download size={16} />
+                Baixar lista de presença
+              </a>
+            </div>
+          )}
+
           {folder.blockKind === "meta-form" && creativeOptions.length > 0 && (
             <div className="flex min-w-0 flex-wrap gap-2">
               <a
@@ -355,6 +446,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
             totalPages={totalPages}
             pasta={folder.key}
             bloco={bloco}
+            subpasta={subpastaParam}
             search={search}
             sort={sort}
             dir={dir}
@@ -384,35 +476,55 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
   const allBlocks = await listVozupBlockStats();
 
-  // ── Nível 2: blocos (formulários) de uma pasta ────────────────────────────
+  // ── Nível 2: subpastas (temas) ou blocos (formulários) de uma pasta ───────
   if (folder) {
     const blocks = allBlocks.filter((b) => b.folderKey === folder.key);
-    const total = blocks.reduce((s, b) => s + b.total, 0);
-    const mes = blocks.reduce((s, b) => s + b.mes, 0);
-    const semana = blocks.reduce((s, b) => s + b.semana, 0);
+    const showSubfolders = Boolean(folder.hasSubfolders) && !subpastaParam;
+    const visibleBlocks =
+      folder.hasSubfolders && subpastaParam ? blocks.filter((b) => b.subpasta === subpastaParam) : blocks;
+    const total = visibleBlocks.reduce((s, b) => s + b.total, 0);
+    const mes = visibleBlocks.reduce((s, b) => s + b.mes, 0);
+    const semana = visibleBlocks.reduce((s, b) => s + b.semana, 0);
+
+    const subfolderGroups = showSubfolders
+      ? Array.from(
+          blocks.reduce((map, block) => {
+            const list = map.get(block.subpasta) ?? [];
+            list.push(block);
+            map.set(block.subpasta, list);
+            return map;
+          }, new Map<string, VozupBlockStats[]>())
+        )
+      : [];
+
+    const backHref = subpastaParam ? `/vozup?pasta=${encodeURIComponent(folder.key)}` : "/vozup";
+    const title = subpastaParam ? subfolderLabel(subpastaParam) : folder.label;
+    const description = subpastaParam
+      ? `Formulários da ${subfolderLabel(subpastaParam)}. Escolha um formulário para ver os leads.`
+      : `${folder.description} Escolha ${
+          showSubfolders ? "uma página" : folder.blockKind === "aula" ? "uma aula" : "um formulário"
+        } para ver os leads.`;
 
     return (
       <main className="min-h-full space-y-6 bg-[#f5f8fb] p-4 sm:p-6">
         <header>
           <div className="flex items-center gap-3">
             <Link
-              href="/vozup"
+              href={backHref}
               className="flex size-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-cyan-50 hover:text-cyan-700"
-              aria-label="Voltar para as pastas"
+              aria-label="Voltar"
             >
               <ArrowLeft size={17} />
             </Link>
             <div className="inline-flex items-center gap-2 rounded-full border border-[#b8e8f8] bg-[#e5f8ff] px-3 py-1 text-[11px] font-bold text-[#0086b8]">
               <FolderOpen size={13} />
-              VozUP · Leads
+              VozUP · Leads{subpastaParam ? ` · ${folder.label}` : ""}
             </div>
           </div>
           <h1 className="mt-3 text-3xl font-bold text-slate-950">
-            {folder.emoji} {folder.label}
+            {folder.emoji} {title}
           </h1>
-          <p className="mt-1 text-sm font-medium text-slate-500">
-            {folder.description} Escolha {folder.blockKind === "aula" ? "uma aula" : "um formulário"} para ver os leads.
-          </p>
+          <p className="mt-1 text-sm font-medium text-slate-500">{description}</p>
         </header>
 
         {/* Aggregate stats */}
@@ -432,8 +544,8 @@ export default async function VozupPage({ searchParams }: PageProps) {
           ))}
         </div>
 
-        {/* Block cards */}
-        {blocks.length === 0 ? (
+        {/* Subfolder ou block cards */}
+        {(showSubfolders ? subfolderGroups.length === 0 : visibleBlocks.length === 0) ? (
           <div className="rounded-[20px] border border-[#dce8f2] bg-white p-10 text-center shadow-[var(--dashboard-card-shadow)]">
             <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-cyan-50 text-cyan-700">
               <Folder size={24} />
@@ -443,10 +555,16 @@ export default async function VozupPage({ searchParams }: PageProps) {
               Assim que um lead chegar por um formulário desta categoria, o bloco aparece aqui automaticamente.
             </p>
           </div>
+        ) : showSubfolders ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {subfolderGroups.map(([grupo, groupBlocks]) => (
+              <SubfolderCard key={grupo} folder={folder} grupo={grupo} blocks={groupBlocks} />
+            ))}
+          </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {blocks.map((block) => (
-              <BlockCard key={block.bloco} folder={folder} block={block} />
+            {visibleBlocks.map((block) => (
+              <BlockCard key={block.bloco} folder={folder} block={block} subpasta={subpastaParam} />
             ))}
           </div>
         )}
@@ -461,15 +579,24 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
   return (
     <main className="min-h-full space-y-6 bg-[#f5f8fb] p-4 sm:p-6">
-      <header>
-        <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[#b8e8f8] bg-[#e5f8ff] px-3 py-1 text-[11px] font-bold text-[#0086b8]">
-          <Users size={13} />
-          VozUP
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-[#b8e8f8] bg-[#e5f8ff] px-3 py-1 text-[11px] font-bold text-[#0086b8]">
+            <Users size={13} />
+            VozUP
+          </div>
+          <h1 className="text-3xl font-bold text-slate-950">Leads</h1>
+          <p className="mt-1 text-sm font-medium text-slate-500">
+            Escolha uma pasta, depois um formulário, para ver os leads correspondentes.
+          </p>
         </div>
-        <h1 className="text-3xl font-bold text-slate-950">Leads</h1>
-        <p className="mt-1 text-sm font-medium text-slate-500">
-          Escolha uma pasta, depois um formulário, para ver os leads correspondentes.
-        </p>
+        <Link
+          href="/vozup/rotas"
+          className="inline-flex items-center gap-2 rounded-xl border border-[#dce8f2] bg-white px-4 py-2.5 text-sm font-bold text-[#0086b8] shadow-[var(--dashboard-card-shadow)] transition hover:border-[#54c4ed]"
+        >
+          <MapIcon size={16} />
+          Mapa de Rotas
+        </Link>
       </header>
 
       {/* Aggregate stats */}

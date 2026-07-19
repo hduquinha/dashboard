@@ -16,6 +16,23 @@ const DEFAULT_TRAINING_OPTIONS: TrainingOption[] = [
       "Inscrição UP Day - Agosto 2026",
     ],
   },
+  // Turmas passadas importadas do Google Forms (origem
+  // google-forms-up-day-plus-sp-*): o treinamento veio como data solta
+  // ("17/01/2026"), que sem esta config nao casa com nenhuma heuristica de
+  // produto e some da aba Instituto UP.
+  {
+    id: "17/01/2026",
+    label: "Up Day Plus 17/01/2026",
+    kind: "up-day-plus",
+    aliases: ["17/01/26", "17/01"],
+  },
+  {
+    id: "18 e 19/04",
+    label: "Up Day Plus 18 e 19/04/2026",
+    kind: "up-day-plus",
+    days: 2,
+    aliases: ["18 e 19/04/2026", "18 e 19/04/26"],
+  },
 ];
 
 const IGNORED_TRAINING_DATE_LABELS = new Set(["01/01/2026"]);

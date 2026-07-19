@@ -4,10 +4,12 @@ import DistributionClient from "./DistributionClient";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { getCommercialWorkspace } from "@/lib/commercial";
 import {
+  type ManualDistributionFolderOption,
   listManualDistributionCandidates,
   normalizeManualDistributionFilters,
 } from "@/lib/manualDistribution";
 import { listTrainingFilterOptions } from "@/lib/db";
+import { listVozupBlockStats, VOZUP_FOLDERS } from "@/lib/vozupFolders";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +44,31 @@ function parseLimit(value: unknown): number {
   return Math.max(1, Math.min(500, parsed));
 }
 
+function buildFolderOptions(
+  stats: Awaited<ReturnType<typeof listVozupBlockStats>>
+): ManualDistributionFolderOption[] {
+  return VOZUP_FOLDERS.map((folder) => {
+    const blocks = stats
+      .filter((item) => item.folderKey === folder.key)
+      .map((item) => ({
+        bloco: item.bloco,
+        subpasta: item.subpasta,
+        total: item.total,
+        semana: item.semana,
+        mes: item.mes,
+        ultimaConversao: item.ultimaConversao,
+      }));
+
+    return {
+      key: folder.key,
+      label: folder.label,
+      emoji: folder.emoji,
+      description: folder.description,
+      blocks,
+    };
+  }).filter((folder) => folder.blocks.length > 0);
+}
+
 export default async function DistributionPage(props: DistributionPageProps) {
   const [cookieStore, rawSearchParams, trainingOptions] = await Promise.all([
     cookies(),
@@ -53,9 +80,12 @@ export default async function DistributionPage(props: DistributionPageProps) {
   const flatParams = flattenSearchParams(rawSearchParams);
   const filters = normalizeManualDistributionFilters(flatParams);
   const limit = parseLimit(flatParams.limit);
-  const candidateResult = commercial.isSupervisor
-    ? await listManualDistributionCandidates(filters, limit)
-    : { candidates: [], total: 0, limit };
+  const [candidateResult, folderOptions] = commercial.isSupervisor
+    ? await Promise.all([
+        listManualDistributionCandidates(filters, limit),
+        listVozupBlockStats().then(buildFolderOptions),
+      ])
+    : [{ candidates: [], total: 0, limit }, [] as ManualDistributionFolderOption[]];
   const sellers = commercial.sellers
     .filter((seller) => seller.email && seller.name)
     .sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
@@ -66,6 +96,7 @@ export default async function DistributionPage(props: DistributionPageProps) {
       total={candidateResult.total}
       limit={candidateResult.limit}
       filters={filters}
+      folderOptions={folderOptions}
       sellers={sellers}
       trainingOptions={trainingOptions}
       isSupervisor={commercial.isSupervisor}

@@ -1,6 +1,6 @@
 import webpush, { type PushSubscription as WebPushSubscription } from "web-push";
 import { getPool } from "@/lib/db";
-import { describeLeadSource } from "@/lib/leadFields";
+import { describeLeadSource, isMetaOuGoogleAdsOrigem } from "@/lib/leadFields";
 import { parsePayload } from "@/lib/parsePayload";
 
 const SCHEMA = "dashboard";
@@ -219,19 +219,27 @@ export async function dispatchNewLeadPushes(): Promise<DispatchResult> {
     [latestId]
   );
 
-  result.newLeads = rows.length;
-  if (rows.length === 0) return result;
+  // Push restrito a leads de tráfego pago Meta/Google Ads — o cursor acima já
+  // avançou sobre todas as linhas (inclusive as que não casam), então elas
+  // não voltam a ser reavaliadas no próximo despacho.
+  const matchingRows = rows.filter((row) => {
+    const payload = (row.payload ?? {}) as Record<string, unknown>;
+    return isMetaOuGoogleAdsOrigem(payload.origem as string | undefined);
+  });
+
+  result.newLeads = matchingRows.length;
+  if (matchingRows.length === 0) return result;
 
   const messages: PushMessage[] = [];
-  if (rows.length > MAX_INDIVIDUAL_NOTIFICATIONS) {
+  if (matchingRows.length > MAX_INDIVIDUAL_NOTIFICATIONS) {
     messages.push({
       title: "Novos Leads Recebidos",
-      body: `${rows.length} novos cadastros chegaram ao sistema.`,
+      body: `${matchingRows.length} novos cadastros chegaram ao sistema.`,
       tag: `leads-batch-${latestId}`,
       url: "/distribuicao",
     });
   } else {
-    for (const row of rows) {
+    for (const row of matchingRows) {
       const payload = (row.payload ?? {}) as Record<string, unknown>;
       const parsed = parsePayload(payload);
       const source = describeLeadSource(payload);

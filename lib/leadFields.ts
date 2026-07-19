@@ -68,6 +68,8 @@ export const LEAD_FIELD_LABELS: Record<string, string> = {
   ocupacao: "Ocupação",
   occupation: "Ocupação",
   objetivo: "Objetivo",
+  quer_resultado_rapido: "Quer resultado rápido",
+  landing_page_grupo: "Página (tema)",
   maior_dor_comunicacao: "Maior dor em comunicação",
   maior_desafio_comunicacao: "Maior desafio em comunicação",
   interesse_workshop: "Interesse no workshop",
@@ -101,6 +103,35 @@ export const LEAD_FIELD_LABELS: Record<string, string> = {
 export function leadFieldLabel(key: string): string {
   return LEAD_FIELD_LABELS[key] ?? key.replace(/_/g, " ").replace(/([A-Z])/g, " $1").trim();
 }
+
+/**
+ * Campos que fazem parte do payload do formulário mas são metadados técnicos
+ * (rastreamento de anúncio/campanha, IDs internos do Facebook, valor fixo de
+ * unidade de negócio) — não são relevantes pra quem olha a ficha do lead, então
+ * saem do bloco "Informações Padrão do Lead" e vão pra uma seção própria no
+ * final da visualização ("Dados técnicos do formulário").
+ */
+export const FORM_TRACKING_KEYS = new Set<string>([
+  "ad_id", "adId",
+  "ad_name", "adName",
+  "adset_id", "adsetId",
+  "adset_name", "adsetName",
+  "campaign_id", "campaignId",
+  "objetivo",
+  "unidade_negocio", "unidadeNegocio",
+  "facebook_form_id", "facebookFormId",
+  "facebook_lead_id", "facebookLeadId",
+  "facebook_page_id", "facebookPageId",
+  "facebook_platform", "facebookPlatform",
+  "facebook_created_time", "facebookCreatedTime",
+  "aguarda_distribuicao", "aguardaDistribuicao",
+  // UTM/click-id capturados no clique do anúncio (landingpage-vozup/src/lib/trafficSource.ts)
+  // que não viram os campos padronizados de origem (esses ficam em describeLeadSource/STANDARD_PAYLOAD_KEYS).
+  "utm_medium", "utmMedium",
+  "utm_content", "utmContent",
+  "utm_term", "utmTerm",
+  "gclid", "fbclid",
+]);
 
 export function addableLeadFields(): LeadFieldDef[] {
   return LEAD_FIELD_CATALOG.filter((f) => f.addable !== false);
@@ -175,6 +206,18 @@ export function describeLeadSource(payload: Record<string, unknown> | null | und
     comoConheceu: firstString(p, "como_conheceu"),
     extras,
   };
+}
+
+/**
+ * Um lead é de tráfego pago Meta/Google quando a origem casa com a mesma
+ * regra usada para classificar as pastas "Meta" e "Google Ads" em
+ * `vozupFolders.ts` (ORIGEM_NORM = 'facebook lead ads' OR LIKE 'meta%'/'%google ads%').
+ * Mantida em sincronia manualmente por não ser viável compartilhar SQL com TS aqui.
+ */
+export function isMetaOuGoogleAdsOrigem(origem: string | null | undefined): boolean {
+  const normalized = (origem ?? "").trim().toLowerCase();
+  if (!normalized) return false;
+  return normalized === "facebook lead ads" || normalized.startsWith("meta") || normalized.includes("google ads");
 }
 
 /**

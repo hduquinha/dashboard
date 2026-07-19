@@ -41,6 +41,8 @@ interface Props {
   totalPages: number;
   pasta: string;
   bloco: string;
+  /** Subpasta (tema) de onde veio a navegação — só existe em pastas com hasSubfolders. */
+  subpasta?: string;
   search?: string;
   sort?: string;
   dir?: "asc" | "desc";
@@ -176,6 +178,7 @@ export default function VozupLeadsTable({
   totalPages,
   pasta,
   bloco,
+  subpasta,
   search,
   sort,
   dir = "desc",
@@ -192,7 +195,7 @@ export default function VozupLeadsTable({
   const [, startTransition] = useTransition();
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const scopedParams = { criativo };
+  const scopedParams = { criativo, subpasta };
   const prevUrl = page > 1 ? buildUrl(pasta, bloco, { q: search, page: String(page - 1), sort, dir }, scopedParams) : null;
   const nextUrl = page < totalPages ? buildUrl(pasta, bloco, { q: search, page: String(page + 1), sort, dir }, scopedParams) : null;
   const clearUrl = buildUrl(pasta, bloco, {}, scopedParams);
@@ -233,6 +236,7 @@ export default function VozupLeadsTable({
           <form method="GET" className="min-w-0">
             <input type="hidden" name="pasta" value={pasta} />
             <input type="hidden" name="bloco" value={bloco} />
+            {subpasta ? <input type="hidden" name="subpasta" value={subpasta} /> : null}
             {criativo ? <input type="hidden" name="criativo" value={criativo} /> : null}
             {sort ? <input type="hidden" name="sort" value={sort} /> : null}
             {dir ? <input type="hidden" name="dir" value={dir} /> : null}

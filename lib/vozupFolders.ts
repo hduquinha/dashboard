@@ -25,6 +25,36 @@ const PAGE_SIZE = 50;
 const ORIGEM_NORM = `LOWER(TRIM(COALESCE(i.payload->>'origem', '')))`;
 const ORIGEM_RAW = `COALESCE(NULLIF(TRIM(i.payload->>'origem'), ''), 'Sem origem')`;
 
+// Tema/dor da landing page (ex.: "Vendas"), usado para agrupar no Dashboard
+// as variantes de uma mesma página (ex.: as 3 versões do formulário de
+// Vendas) em uma subpasta só.
+//
+// Preferimos o campo explícito 'landing_page_grupo' (gravado pelo formulário
+// mais recente), mas todo lead de landing page da VozUP segue o padrão
+// "Landing Page VozUP - <Tema> [(Formulário N Perguntas)] [- <índice>]", então
+// como respaldo extraímos o <Tema> direto da origem via regex — isso agrupa
+// corretamente até leads antigos, capturados antes do campo explícito existir,
+// sem precisar de nenhuma migração de dado.
+const LANDING_PAGE_GRUPO_FROM_ORIGEM = `
+  CASE
+    -- Leads antigos da Home, capturados antes de a origem virar "... - Home"
+    -- (sem "-" nenhum depois do prefixo, então a regex abaixo não teria o que cortar).
+    WHEN TRIM(COALESCE(i.payload->>'origem', '')) = 'Landing Page VozUP' THEN 'Home'
+    ELSE regexp_replace(
+      regexp_replace(
+        regexp_replace(TRIM(COALESCE(i.payload->>'origem', '')), '\\s*-\\s*\\d+\\s*$', ''),
+        '\\s*\\([^)]*\\)\\s*$', ''
+      ),
+      '^Landing Page VozUP\\s*-\\s*', ''
+    )
+  END
+`;
+const LANDING_PAGE_GRUPO_EXPRESSION = `COALESCE(
+  NULLIF(TRIM(i.payload->>'landing_page_grupo'), ''),
+  NULLIF(TRIM(${LANDING_PAGE_GRUPO_FROM_ORIGEM}), ''),
+  ${ORIGEM_RAW}
+)`;
+
 const BASE_FLAGS = `LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
   AND COALESCE(i.payload->>'dashboard_excluido', '') != 'true'
   AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''`;
@@ -138,14 +168,18 @@ export const META_FALLBACK_BLOCK = "Sem campanha identificada";
 export const SEM_ORIGEM_BLOCK = "Sem origem";
 
 // Blocos da pasta de aulas: cada aula (turma + data) é um bloco separado,
-// identificado por data_treinamento ("Aula Exclusiva 02/07/2026"). Cadastros
-// antigos com valor ISO ("2026-06-09T19:00:00-03:00") viram "<origem> DD/MM/AAAA";
-// sem data alguma, o lead cai no bloco "<origem> (sem data)".
+// identificado por data_treinamento no formato rótulo ("Aula Exclusiva
+// 02/07/2026"); sem data alguma, o lead cai no bloco "<origem> (sem data)".
+//
+// Datas ISO ("2026-06-09T19:00:00-03:00") são EXCLUSIVAS do Encontro Online
+// (ver docs/cartilha-formularios-produtos.md): um evento com origem de aula e
+// data ISO é contaminação de payload (formulário do Encontro reaproveitando
+// cadastro por telefone) e não pode virar bloco de aula — a condição da pasta
+// abaixo já o exclui, e ele cai na aba Instituto UP via data ISO.
 const AULA_DATE_RAW = `TRIM(COALESCE(i.payload->>'data_treinamento', ''))`;
+const AULA_ISO_DATE_CONDITION = `${AULA_DATE_RAW} ~ '^\\d{4}-\\d{2}-\\d{2}'`;
 const AULA_BLOCK_EXPRESSION = `CASE
-  WHEN ${AULA_DATE_RAW} ~ '^\\d{4}-\\d{2}-\\d{2}'
-    THEN ${ORIGEM_RAW} || ' ' || TO_CHAR(SUBSTRING(${AULA_DATE_RAW} FROM 1 FOR 10)::date, 'DD/MM/YYYY')
-  WHEN ${AULA_DATE_RAW} <> '' THEN ${AULA_DATE_RAW}
+  WHEN ${AULA_DATE_RAW} <> '' AND NOT ${AULA_ISO_DATE_CONDITION} THEN ${AULA_DATE_RAW}
   ELSE ${ORIGEM_RAW} || '${AULA_SEM_DATA_SUFFIX}'
 END`;
 
@@ -164,6 +198,12 @@ export interface VozupFolderDef {
   condition: string;
   /** Como os blocos (formulários) da pasta são identificados. */
   blockKind: "origem" | "meta-form" | "aula";
+  /**
+   * Se true, os blocos da pasta são agrupados em uma subpasta por tema
+   * (ex.: "Página de Vendas" reunindo as 3 variantes do formulário de Vendas)
+   * antes de listar os blocos individuais. Ver LANDING_PAGE_GRUPO_EXPRESSION.
+   */
+  hasSubfolders?: boolean;
 }
 
 export const VOZUP_FOLDERS: VozupFolderDef[] = [
@@ -172,7 +212,7 @@ export const VOZUP_FOLDERS: VozupFolderDef[] = [
     label: "Aula Experimental",
     emoji: "🧪",
     description: "Cada aula (Experimental, Exclusiva…) aparece como um bloco com sua data.",
-    condition: `(${ORIGEM_NORM} LIKE 'aula %' OR ${ORIGEM_NORM} LIKE 'aula-%' OR ${ORIGEM_NORM} = 'aula')`,
+    condition: `((${ORIGEM_NORM} LIKE 'aula %' OR ${ORIGEM_NORM} LIKE 'aula-%' OR ${ORIGEM_NORM} = 'aula') AND NOT ${AULA_ISO_DATE_CONDITION})`,
     blockKind: "aula",
   },
   {
@@ -182,6 +222,7 @@ export const VOZUP_FOLDERS: VozupFolderDef[] = [
     description: "Leads captados pelas landing pages da VozUP.",
     condition: `(${ORIGEM_NORM} LIKE '%landing%' AND (${ORIGEM_NORM} LIKE '%vozup%' OR ${ORIGEM_NORM} LIKE '%voz up%'))`,
     blockKind: "origem",
+    hasSubfolders: true,
   },
   {
     key: "meta",
@@ -190,6 +231,15 @@ export const VOZUP_FOLDERS: VozupFolderDef[] = [
     description: "Formulários de tráfego pago da Meta (Facebook/Instagram Lead Ads).",
     condition: `(${ORIGEM_NORM} = 'facebook lead ads' OR ${ORIGEM_NORM} LIKE 'meta%')`,
     blockKind: "meta-form",
+  },
+  {
+    key: "google-ads",
+    label: "Google Ads",
+    emoji: "🎯",
+    description: "Leads captados pelas landing pages de tráfego pago do Google Ads.",
+    condition: `(${ORIGEM_NORM} LIKE '%google ads%')`,
+    blockKind: "origem",
+    hasSubfolders: true,
   },
   {
     key: "workshop",
@@ -229,6 +279,8 @@ export interface VozupBlockStats {
   folderKey: string;
   /** Identidade do bloco (origem do formulário ou formulário/campanha da Meta). */
   bloco: string;
+  /** Subpasta (tema) do bloco — igual ao bloco em pastas sem hasSubfolders. */
+  subpasta: string;
   total: number;
   semana: number;
   mes: number;
@@ -257,6 +309,23 @@ export function vozupBlockCaseForEvents(): string {
 }
 
 /**
+ * CASE que dá a subpasta (tema) de um EVENTO (alias "e") dentro de pastas com
+ * hasSubfolders. Fora dessas pastas, a subpasta é o próprio bloco — ou seja,
+ * não há agrupamento extra (comportamento idêntico ao de antes da subpasta
+ * existir).
+ */
+export function vozupSubpastaCaseForEvents(): string {
+  const subfolderFolders = NAMED_FOLDERS.filter((f) => f.hasSubfolders);
+  if (subfolderFolders.length === 0) return vozupBlockCaseForEvents();
+  return `CASE
+    ${subfolderFolders
+      .map((f) => `WHEN ${asEvent(f.condition)} THEN ${asEvent(LANDING_PAGE_GRUPO_EXPRESSION)}`)
+      .join("\n    ")}
+    ELSE ${vozupBlockCaseForEvents()}
+  END`;
+}
+
+/**
  * Estatísticas de todos os blocos de todas as pastas em uma única query.
  * Blocos são descobertos dinamicamente. Cada lead (pessoa) conta uma vez por
  * bloco, considerando TODOS os seus eventos (vínculos), inclusive inscrições
@@ -268,6 +337,7 @@ export async function listVozupBlockStats(): Promise<VozupBlockStats[]> {
   const result = await pool.query<{
     pasta: string;
     bloco: string;
+    subpasta: string;
     total: string;
     semana: string;
     mes: string;
@@ -278,31 +348,34 @@ export async function listVozupBlockStats(): Promise<VozupBlockStats[]> {
       SELECT
         ${vozupFolderCaseForEvents()} AS pasta,
         ${vozupBlockCaseForEvents()} AS bloco,
+        ${vozupSubpastaCaseForEvents()} AS subpasta,
         TRIM(${PERSON_KEY}) AS person_key,
         e.criado_em
       FROM ${PRIMARY_EVENT_LINKS_FROM}
       WHERE ${asEvent(VOZUP_SCOPE_CONDITION)}
     ),
     unique_leads AS (
-      SELECT DISTINCT ON (person_key, pasta, bloco) pasta, bloco, criado_em
+      SELECT DISTINCT ON (person_key, pasta, bloco) pasta, bloco, subpasta, criado_em
       FROM events
       ORDER BY person_key, pasta, bloco, criado_em DESC
     )
     SELECT
       pasta,
       bloco,
+      subpasta,
       COUNT(*)::text AS total,
       COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '7 days')::text AS semana,
       COUNT(*) FILTER (WHERE criado_em >= NOW() - INTERVAL '30 days')::text AS mes,
       MAX(criado_em)::text AS ultima_conversao
     FROM unique_leads
-    GROUP BY pasta, bloco
+    GROUP BY pasta, bloco, subpasta
     ORDER BY MAX(criado_em) DESC
   `);
 
   return result.rows.map((row) => ({
     folderKey: row.pasta,
     bloco: row.bloco,
+    subpasta: row.subpasta,
     total: Number(row.total),
     semana: Number(row.semana),
     mes: Number(row.mes),
@@ -334,6 +407,12 @@ export interface ListVozupLeadsOptions {
   sort?: string;
   dir?: string;
   /** Sub-filtro por criativo (ad_name), disponível apenas na pasta Meta. */
+  criativo?: string | null;
+}
+
+export interface ListVozupLeadIdsOptions {
+  limit?: number;
+  unassignedOnly?: boolean;
   criativo?: string | null;
 }
 
@@ -429,6 +508,110 @@ export async function listVozupLeadsByBlock(
     })),
     total: result.rows[0] ? Number(result.rows[0].total) : 0,
   };
+}
+
+/**
+ * IDs de leads de um bloco, sem paginação, para ações em lote como distribuição.
+ */
+export async function listVozupLeadIdsByBlock(
+  folderKey: string,
+  bloco: string,
+  opts: ListVozupLeadIdsOptions = {}
+): Promise<number[]> {
+  const folder = getVozupFolder(folderKey);
+  if (!folder || !bloco) return [];
+
+  const pool = getPool();
+  const limit = Math.max(1, Math.min(500, Math.trunc(opts.limit ?? 100)));
+  const params: unknown[] = [bloco];
+  const eventBlockClause =
+    folder.blockKind === "meta-form"
+      ? `${asEvent(META_BLOCK_EXPRESSION)} = $1`
+      : folder.blockKind === "aula"
+      ? `${asEvent(AULA_BLOCK_EXPRESSION)} = $1`
+      : `${asEvent(ORIGEM_RAW)} = $1`;
+
+  let criativoClause = "";
+  if (folder.blockKind === "meta-form" && opts.criativo) {
+    params.push(opts.criativo);
+    criativoClause = `AND COALESCE(NULLIF(TRIM(e.payload->>'ad_name'), ''), 'Sem criativo identificado') = $${params.length}`;
+  }
+
+  let legacyExtrasClause = "";
+  if (folder.blockKind === "origem") {
+    params.push(`%${bloco}%`);
+    legacyExtrasClause = `OR (${folderCondition(folder)} AND COALESCE(i.payload->>'dashboard_origens_adicionais', '') ILIKE $${params.length})`;
+  }
+
+  const unassignedClause = opts.unassignedOnly
+    ? "AND cl.assigned_seller_id IS NULL AND COALESCE(cl.assigned_seller_email, '') = ''"
+    : "";
+  params.push(limit);
+
+  const result = await pool.query<{ id: number }>(
+    `WITH ${PRIMARY_EVENT_LINKS_CTE},
+    matching_leads AS (
+      SELECT DISTINCT i.id
+      FROM ${PRIMARY_EVENT_LINKS_FROM}
+      WHERE ${asEvent(folderCondition(folder))}
+        AND ${eventBlockClause}
+        ${criativoClause}
+    )
+    SELECT i.id
+    FROM inscricoes.inscricoes AS i
+    LEFT JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id
+    WHERE ${BASE_FLAGS}
+      AND (
+        EXISTS (SELECT 1 FROM matching_leads AS m WHERE m.id = i.id)
+        ${legacyExtrasClause}
+      )
+      ${unassignedClause}
+    ORDER BY ${LAST_INTERACTION} DESC, i.id DESC
+    LIMIT $${params.length}`,
+    params
+  );
+
+  return result.rows.map((row) => Number(row.id));
+}
+
+/**
+ * Todos os inscritos de um bloco (aula), sem paginação — usado pela lista de
+ * presença para impressão, que precisa do total e não só da página atual.
+ */
+export async function listAllVozupLeadsByBlock(
+  folderKey: string,
+  bloco: string
+): Promise<Pick<VozupLead, "nome" | "telefone">[]> {
+  const folder = getVozupFolder(folderKey);
+  if (!folder || !bloco) return [];
+
+  const pool = getPool();
+  const eventBlockClause =
+    folder.blockKind === "meta-form"
+      ? `${asEvent(META_BLOCK_EXPRESSION)} = $1`
+      : folder.blockKind === "aula"
+      ? `${asEvent(AULA_BLOCK_EXPRESSION)} = $1`
+      : `${asEvent(ORIGEM_RAW)} = $1`;
+
+  const result = await pool.query<{ nome: string; telefone: string }>(
+    `WITH ${PRIMARY_EVENT_LINKS_CTE},
+    matching_leads AS (
+      SELECT DISTINCT i.id
+      FROM ${PRIMARY_EVENT_LINKS_FROM}
+      WHERE ${asEvent(folderCondition(folder))}
+        AND ${eventBlockClause}
+    )
+    SELECT
+      COALESCE(NULLIF(TRIM(i.payload->>'nome'), ''), NULLIF(TRIM(i.payload->>'name'), ''), 'Sem nome') AS nome,
+      COALESCE(NULLIF(TRIM(i.payload->>'telefone'), ''), NULLIF(TRIM(i.payload->>'whatsapp'), ''), '') AS telefone
+    FROM inscricoes.inscricoes AS i
+    WHERE ${BASE_FLAGS}
+      AND EXISTS (SELECT 1 FROM matching_leads AS m WHERE m.id = i.id)
+    ORDER BY ${SORT_COLUMNS.nome}`,
+    [bloco]
+  );
+
+  return result.rows.map((row) => ({ nome: row.nome, telefone: row.telefone }));
 }
 
 /**

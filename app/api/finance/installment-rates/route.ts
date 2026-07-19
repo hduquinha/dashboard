@@ -10,10 +10,14 @@ export async function PATCH(request: NextRequest) {
     const body = await readJsonBody(request);
     const rates = Array.isArray(body.rates) ? body.rates : [];
     await updateInstallmentRates(
-      rates.map((item) => ({
-        installments: Number((item as Record<string, unknown>).installments),
-        ratePct: Number((item as Record<string, unknown>).ratePct),
-      }))
+      rates.map((item) => {
+        const record = item as Record<string, unknown>;
+        return {
+          installments: Number(record.installments),
+          ratePct: Number(record.ratePct),
+          brandId: record.brandId === null || record.brandId === undefined ? null : Number(record.brandId),
+        };
+      })
     );
     return NextResponse.json({ ok: true });
   } catch (error) {

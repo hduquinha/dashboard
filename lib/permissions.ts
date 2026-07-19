@@ -24,10 +24,12 @@ export const PERMISSION_GROUPS = [
       { key: "view.dashboard", label: "Visao geral", description: "Resumo principal do dashboard." },
       { key: "view.crm", label: "Pipeline CRM", description: "Lista e kanban comercial." },
       { key: "view.vozup", label: "Leads VozUP", description: "Pastas e formularios da VozUP." },
+      { key: "view.vozup_rotas", label: "Mapa de Rotas VozUP", description: "Apenas a tela de mapa de rotas de captacao (/vozup/rotas)." },
       { key: "view.finance", label: "Gestao Financeira", description: "ERP financeiro da VozUP." },
+      { key: "view.campaigns", label: "Metricas de Campanha", description: "Gasto, leads e qualificacao real por anuncio do Meta Ads." },
       { key: "view.trainings", label: "Instituto UP", description: "Turmas, ofertas e treinamentos." },
-      { key: "view.productivity", label: "Equipe", description: "Produtividade e fechamento." },
-      { key: "view.distribution", label: "Distribuicao", description: "Repasse manual de leads." },
+      { key: "view.productivity", label: "Kanban", description: "Kanban da equipe, diario de bordo e fechamento." },
+      { key: "view.distribution", label: "Chegada de Leads", description: "Leads novos (Meta/LP) e distribuicao manual." },
       { key: "view.recruiters", label: "Clusters", description: "Recrutadores e clusters." },
       { key: "view.network", label: "Rede", description: "Arvore de indicacoes." },
       { key: "view.anamnese", label: "Anamnese", description: "Respostas e vinculacoes." },
@@ -48,6 +50,7 @@ export const PERMISSION_GROUPS = [
       { key: "crm.assign_leads", label: "Atribuir vendedor", description: "Repassar leads para usuarios." },
       { key: "crm.merge_leads", label: "Mesclar duplicados", description: "Unificar cadastros." },
       { key: "crm.manage_links", label: "Gerenciar vinculos", description: "Adicionar, trocar e remover origens." },
+      { key: "crm.manage_funnels", label: "Gerenciar funis", description: "Criar, editar funis e atribuir aos vendedores." },
       { key: "crm.manage_notes", label: "Observacoes", description: "Criar observacoes internas." },
       { key: "crm.manage_temperature", label: "Temperatura", description: "Alterar estrelas do lead." },
       { key: "crm.import", label: "Importar", description: "Importar planilhas e listas." },
@@ -104,7 +107,9 @@ export type PermissionKey =
   | "view.dashboard"
   | "view.crm"
   | "view.vozup"
+  | "view.vozup_rotas"
   | "view.finance"
+  | "view.campaigns"
   | "view.trainings"
   | "view.productivity"
   | "view.distribution"
@@ -121,6 +126,7 @@ export type PermissionKey =
   | "crm.assign_leads"
   | "crm.merge_leads"
   | "crm.manage_links"
+  | "crm.manage_funnels"
   | "crm.manage_notes"
   | "crm.manage_temperature"
   | "crm.import"
@@ -234,7 +240,7 @@ export function defaultPermissionsForRole(
         : MEMBER_PERMISSIONS;
 
   return options.institutoUpOnly
-    ? base.filter((key) => key !== "view.vozup" && key !== "view.finance")
+    ? base.filter((key) => key !== "view.vozup" && key !== "view.finance" && key !== "view.campaigns")
     : [...base];
 }
 
@@ -251,7 +257,7 @@ export function effectivePermissionsForRole(
   if (Array.isArray(storedPermissions)) {
     const normalized = normalizePermissionList(storedPermissions);
     return options.institutoUpOnly
-      ? normalized.filter((key) => key !== "view.vozup" && key !== "view.finance")
+      ? normalized.filter((key) => key !== "view.vozup" && key !== "view.finance" && key !== "view.campaigns")
       : normalized;
   }
 
@@ -291,10 +297,16 @@ export function hasPermission(
   }
 
   if (isSuperMaster(user)) {
-    return (permission !== "view.vozup" && permission !== "view.finance") || !user.institutoUpOnly;
+    return (
+      (permission !== "view.vozup" && permission !== "view.finance" && permission !== "view.campaigns") ||
+      !user.institutoUpOnly
+    );
   }
 
-  if ((permission === "view.vozup" || permission === "view.finance") && user.institutoUpOnly) {
+  if (
+    (permission === "view.vozup" || permission === "view.finance" || permission === "view.campaigns") &&
+    user.institutoUpOnly
+  ) {
     return false;
   }
 
@@ -319,14 +331,18 @@ export const NAV_PERMISSION_BY_KEY: Record<string, PermissionKey | undefined> = 
   "encontro-online": "view.encontro",
   rede: "view.network",
   "vozup-leads": "view.vozup",
+  "vozup-rotas": "view.vozup_rotas",
   "vozup-financeiro": "view.finance",
+  campanhas: "view.campaigns",
   usuarios: "admin.users",
+  funis: "crm.manage_funnels",
 };
 
 const PATH_PERMISSION_RULES: Array<{ prefix: string; permission: PermissionKey }> = [
   { prefix: "/crm", permission: "view.crm" },
   { prefix: "/vozup", permission: "view.vozup" },
   { prefix: "/financeiro", permission: "view.finance" },
+  { prefix: "/campanhas", permission: "view.campaigns" },
   { prefix: "/treinamentos", permission: "view.trainings" },
   { prefix: "/produtividade", permission: "view.productivity" },
   { prefix: "/distribuicao", permission: "view.distribution" },
@@ -337,6 +353,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; permission: PermissionKey }
   { prefix: "/ranking", permission: "view.reports" },
   { prefix: "/encontro-online", permission: "view.encontro" },
   { prefix: "/usuarios", permission: "admin.users" },
+  { prefix: "/funis", permission: "crm.manage_funnels" },
 ];
 
 export function canViewNavLink(
@@ -357,6 +374,10 @@ export function canAccessDashboardPath(
 ): boolean {
   if (!user) {
     return true;
+  }
+
+  if (pathname === "/vozup/rotas" || pathname.startsWith("/vozup/rotas/")) {
+    return hasPermission(user, "view.vozup_rotas") || hasPermission(user, "view.vozup");
   }
 
   const rule = PATH_PERMISSION_RULES.find((candidate) =>

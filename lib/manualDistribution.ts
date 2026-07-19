@@ -1,11 +1,12 @@
 import type { DashboardUser } from "@/lib/auth";
-import { assignCommercialLead, listCommercialSellers } from "@/lib/commercial";
+import { assignCommercialLead, ensureCommercialSchema, listCommercialSellers } from "@/lib/commercial";
 import { analyzeInscricaoQuality } from "@/lib/inscricaoQuality";
 import { pickFormString } from "@/lib/inscricaoForm";
 import { FORM_NAME_KEYS, LANDING_PAGE_KEYS } from "@/lib/leadFields";
 import { isProductivityManager } from "@/lib/productivity";
 import { listInscricoes, listInscricoesByIds } from "@/lib/db";
 import { formatTrainingDateLabel } from "@/lib/trainings";
+import { listVozupLeadIdsByBlock } from "@/lib/vozupFolders";
 import type { CommercialSeller } from "@/types/commercial";
 import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 
@@ -56,12 +57,38 @@ export interface ManualDistributionCandidateResult {
   limit: number;
 }
 
+export interface ManualDistributionFolderBlockOption {
+  bloco: string;
+  subpasta: string;
+  total: number;
+  semana: number;
+  mes: number;
+  ultimaConversao: string | null;
+}
+
+export interface ManualDistributionFolderOption {
+  key: string;
+  label: string;
+  emoji: string;
+  description: string;
+  blocks: ManualDistributionFolderBlockOption[];
+}
+
 export interface ManualDistributionInput {
-  scope: "selected" | "filters";
+  scope: "selected" | "filters" | "folder_block";
   leadIds?: number[];
   filters?: ManualDistributionFilters;
+  folderKey?: string;
+  block?: string;
   sellerIds: number[];
   strategy: ManualDistributionStrategy;
+  overwriteAssigned?: boolean;
+  limit?: number;
+}
+
+export interface ManualDistributionFolderCandidatesInput {
+  folderKey?: string;
+  block?: string;
   overwriteAssigned?: boolean;
   limit?: number;
 }
@@ -540,7 +567,38 @@ function isTestLead(item: InscricaoItem): boolean {
 // entram aqui — esses leads seguem outros fluxos.
 const ARRIVAL_CHANNELS = new Set(["Meta Ads", "Meta Forms", "Google Ads", "Google Forms"]);
 
+// O produto de um lead vem do FORMULARIO onde ele se inscreveu, nunca do canal
+// de trafego (ver docs/cartilha-formularios-produtos.md). Um lead da Aula
+// Exclusiva que clicou num anuncio do Instagram chega com utm/fbclid e seria
+// classificado como "Meta Ads" — mas continua sendo Aula Exclusiva e nao pode
+// aparecer na Chegada. Estes termos identificam formularios de produto
+// (aulas, workshop, Encontro Online, UP Day) que nunca entram aqui.
+const EXCLUDED_PRODUCT_TERMS = [
+  "aula exclusiva",
+  "aula experimental",
+  "workshop",
+  "encontro online",
+  "up day",
+  "up-day",
+  "landing-inscricao",
+];
+
+function isProductFormLead(item: InscricaoItem): boolean {
+  const identity = compactParts([
+    payloadText(item, ["origem", "lead_origem", "origem_formulario"]),
+    payloadText(item, ["nome_evento"]),
+    item.treinamentoNome,
+    item.treinamentoId,
+  ]).join(" ");
+  if (identity && textIncludes(identity, EXCLUDED_PRODUCT_TERMS)) return true;
+
+  // Data ISO em data_treinamento e exclusiva do Encontro Online.
+  const dataTreinamento = payloadText(item, ["data_treinamento", "dataTreinamento"]);
+  return Boolean(dataTreinamento && /^\d{4}-\d{2}-\d{2}/.test(dataTreinamento));
+}
+
 function isArrivalLead(item: InscricaoItem, candidate: ManualDistributionCandidate): boolean {
+  if (isProductFormLead(item)) return false;
   if (ARRIVAL_CHANNELS.has(candidate.entryChannel)) return true;
 
   // Landing pages sem UTM identificavel: a origem gravada no payload ainda
@@ -663,16 +721,73 @@ function validateSellerMap(sellers: CommercialSeller[], sellerIds: number[]): Ma
   return sellerMap;
 }
 
+async function loadItemsByIds(ids: number[], max = MAX_FILTER_DISTRIBUTION): Promise<InscricaoItem[]> {
+  const uniqueIds = Array.from(new Set(ids)).slice(0, max);
+  const batches: number[][] = [];
+  for (let index = 0; index < uniqueIds.length; index += 100) {
+    batches.push(uniqueIds.slice(index, index + 100));
+  }
+
+  const items = (await Promise.all(batches.map((batch) => listInscricoesByIds(batch)))).flat();
+  const byId = new Map(items.map((item) => [item.id, item]));
+  return uniqueIds.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  });
+}
+
+export async function listManualDistributionFolderCandidates(
+  user: DashboardUser | null | undefined,
+  input: ManualDistributionFolderCandidatesInput
+): Promise<ManualDistributionCandidateResult> {
+  if (!isProductivityManager(user)) {
+    throw new Error("Apenas usuarios master podem distribuir leads.");
+  }
+
+  const folderKey = cleanText(input.folderKey);
+  const block = cleanText(input.block);
+  if (!folderKey || !block) {
+    throw new Error("Informe a pasta e o bloco de leads.");
+  }
+
+  const limit = safeLimit(input.limit, MAX_FILTER_DISTRIBUTION);
+  await ensureCommercialSchema();
+  const ids = await listVozupLeadIdsByBlock(folderKey, block, {
+    limit,
+    unassignedOnly: !Boolean(input.overwriteAssigned),
+  });
+  const items = await loadItemsByIds(ids, limit);
+  const candidates = items.filter((item) => !isTestLead(item)).map(candidateFromItem);
+
+  return { candidates, total: candidates.length, limit };
+}
+
 async function loadItemsForDistribution(input: ManualDistributionInput): Promise<InscricaoItem[]> {
   if (input.scope === "filters") {
     const filters = input.filters ?? normalizeManualDistributionFilters({});
     const result = await listManualDistributionCandidates(filters, safeLimit(input.limit, MAX_FILTER_DISTRIBUTION));
     const ids = result.candidates.map((candidate) => candidate.id);
-    return ids.length > 0 ? listInscricoesByIds(ids) : [];
+    return ids.length > 0 ? loadItemsByIds(ids) : [];
+  }
+
+  if (input.scope === "folder_block") {
+    const folderKey = cleanText(input.folderKey);
+    const block = cleanText(input.block);
+    if (!folderKey || !block) {
+      throw new Error("Informe a pasta e o bloco de leads para distribuir.");
+    }
+
+    await ensureCommercialSchema();
+    const ids = await listVozupLeadIdsByBlock(folderKey, block, {
+      limit: safeLimit(input.limit, MAX_FILTER_DISTRIBUTION),
+      unassignedOnly: !Boolean(input.overwriteAssigned),
+    });
+    const items = ids.length > 0 ? await loadItemsByIds(ids) : [];
+    return items.filter((item) => !isTestLead(item));
   }
 
   const leadIds = parseIdList(input.leadIds).slice(0, MAX_FILTER_DISTRIBUTION);
-  const items = leadIds.length > 0 ? await listInscricoesByIds(leadIds) : [];
+  const items = leadIds.length > 0 ? await loadItemsByIds(leadIds) : [];
   return items.filter((item) => !isTestLead(item));
 }
 

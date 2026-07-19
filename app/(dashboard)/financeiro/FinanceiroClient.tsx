@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, ReactNode, useMemo, useState, useSyncExternalStore } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import {
   Area,
@@ -13,6 +13,7 @@ import {
   LineChart,
   Pie,
   PieChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -20,6 +21,7 @@ import {
 } from "recharts";
 import {
   ArrowDownRight,
+  ArrowLeftRight,
   ArrowUpRight,
   BadgeDollarSign,
   Banknote,
@@ -35,32 +37,41 @@ import {
   FileUp,
   Filter,
   LineChart as LineChartIcon,
+  LockKeyhole,
   Plus,
   ReceiptText,
   Search,
   Settings2,
   SlidersHorizontal,
   Trash2,
+  UnlockKeyhole,
   WalletCards,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type {
+  BranchItemPhase,
+  CommissionStatus,
+  CommissionsOverview,
   ExpenseStatus,
+  FinanceAlertGroup,
   FinanceBranchItem,
   FinanceCatalog,
+  FinanceCategoryKind,
   FinanceCommission,
   FinanceCommissionPanel,
   FinanceDashboardSummary,
   FinanceEnrollment,
   FinanceFilters,
   FinanceFixedExpense,
+  FinanceInstallmentRate,
   FinanceKpi,
   FinanceMonthTotals,
   FinanceRevenue,
   FinanceVariableExpense,
   RevenueStatus,
 } from "@/types/finance";
+import RevenuePaymentsPanel from "./RevenuePaymentsPanel";
 
 type TabKey =
   | "dashboard"
@@ -78,7 +89,7 @@ type ModalState =
   | { type: "fixed"; mode: "create" | "edit"; record?: FinanceFixedExpense }
   | { type: "variable"; mode: "create" | "edit"; record?: FinanceVariableExpense }
   | { type: "branch"; mode: "create" | "edit"; record?: FinanceBranchItem }
-  | { type: "enrollment"; mode: "create" }
+  | { type: "enrollment"; mode: "create" | "edit"; record?: FinanceEnrollment }
   | { type: "commission"; mode: "create" }
   | null;
 
@@ -95,7 +106,17 @@ interface FinanceiroClientProps {
   filters: FinanceFilters;
   month: string;
   periodMode: "month" | "custom";
+  gastosVisao: "mes" | "todos";
+  receitasVisao: "mes" | "todos";
+  fluxoVisao: "mes" | "todos";
+  matriculasVisao: "mes" | "todos";
+  comissoesVisao: "mes" | "todos";
+  allTimeTotals: FinanceMonthTotals | null;
+  allMonthlyTotals: FinanceMonthTotals[] | null;
+  commissionsOverview: CommissionsOverview;
 }
+
+type VisaoKey = "gastosVisao" | "receitasVisao" | "fluxoVisao" | "matriculasVisao" | "comissoesVisao";
 
 interface Column<T> {
   key: string;
@@ -105,13 +126,23 @@ interface Column<T> {
   className?: string;
 }
 
+type ChartMonthlyPoint = {
+  mes: string;
+  receitas: number;
+  despesas: number;
+  lucro: number;
+  fixos: number;
+  variaveis: number;
+  saldo: number;
+};
+
 const tabs: Array<{ key: TabKey; label: string; icon: typeof LineChartIcon }> = [
   { key: "dashboard", label: "Dashboard Financeiro", icon: LineChartIcon },
   { key: "fluxo", label: "Fluxo de Caixa", icon: WalletCards },
   { key: "receitas", label: "Receitas", icon: BadgeDollarSign },
   { key: "gastos", label: "Despesas", icon: ReceiptText },
   { key: "filiais", label: "Unidade Tatuapé", icon: Building2 },
-  { key: "matriculas", label: "Matrículas Parceladas", icon: CalendarDays },
+  { key: "matriculas", label: "Matrículas", icon: CalendarDays },
   { key: "comissoes", label: "Comissões", icon: Banknote },
   { key: "trimestral", label: "Consolidação Trimestral", icon: FileDown },
   { key: "configuracoes", label: "Configurações Financeiras", icon: Settings2 },
@@ -119,9 +150,12 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof LineChartIcon }> = 
 
 const COLORS = ["#06a8d8", "#12a594", "#f59e0b", "#e54666", "#6366f1", "#14b8a6", "#8b5cf6", "#0f766e"];
 
-const inputClass =
+export const inputClass =
   "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100";
-const labelClass = "text-[11px] font-black uppercase tracking-[0.14em] text-slate-500";
+export const labelClass = "text-[11px] font-black uppercase tracking-[0.14em] text-slate-500";
+
+/** Campos dos formulários de Configurações que são colunas numéricas no banco — precisam passar por parseDecimal antes de ir pra API. */
+const CATALOG_DECIMAL_FIELDS = new Set(["salary", "benefits", "defaultPrice", "defaultPct"]);
 
 function splitInstallmentsClient(total: number, count: number): number[] {
   const n = Math.max(1, Math.trunc(count));
@@ -131,7 +165,7 @@ function splitInstallmentsClient(total: number, count: number): number[] {
   return Array.from({ length: n }, (_, index) => (base + (index === n - 1 ? remainder : 0)) / 100);
 }
 
-function money(value: number | null | undefined): string {
+export function money(value: number | null | undefined): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value ?? 0);
 }
 
@@ -139,8 +173,50 @@ function number(value: number | null | undefined): string {
   return new Intl.NumberFormat("pt-BR").format(value ?? 0);
 }
 
-function percent(value: number | null | undefined): string {
+export function percent(value: number | null | undefined): string {
   return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value ?? 0)}%`;
+}
+
+function compactMoney(value: number | null | undefined): string {
+  const amount = value ?? 0;
+  const abs = Math.abs(amount);
+  if (abs >= 1_000_000) {
+    return `R$ ${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(amount / 1_000_000)} mi`;
+  }
+  if (abs >= 1_000) {
+    return `R$ ${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(amount / 1_000)} mil`;
+  }
+  return money(amount);
+}
+
+function monthLabel(month: string): string {
+  const [year, monthNumber] = month.split("-").map(Number);
+  if (!year || !monthNumber) return month;
+  const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
+    new Date(year, monthNumber - 1, 1)
+  );
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+export function dateLabel(value: string | null | undefined): string {
+  if (!value) return "-";
+  const [year, month, day] = value.slice(0, 10).split("-");
+  if (!year || !month || !day) return value;
+  return `${day}/${month}/${year}`;
+}
+
+function chartTick(value: number | string): string {
+  return compactMoney(Number(value)).replace("R$ ", "");
+}
+
+function dayFromDate(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value.slice(8, 10), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function lockedDayLabel(day: number | null): string {
+  return day ? `dia ${String(day).padStart(2, "0")}` : "valor fixo";
 }
 
 function sumClientTotals(monthly: FinanceMonthTotals[]): FinanceMonthTotals {
@@ -180,7 +256,7 @@ function formatKpiValue(kpi: FinanceKpi): string {
   return number(kpi.value);
 }
 
-function toInputDate(value: string | null | undefined): string {
+export function toInputDate(value: string | null | undefined): string {
   return value ? value.slice(0, 10) : "";
 }
 
@@ -212,12 +288,12 @@ function valueOrEmpty(value: string | number | null | undefined): string | numbe
   return value ?? "";
 }
 
-function formString(form: FormData, key: string): string {
+export function formString(form: FormData, key: string): string {
   const value = form.get(key);
   return typeof value === "string" ? value.trim() : "";
 }
 
-function parseDecimal(value: string): number {
+export function parseDecimal(value: string): number {
   const normalized = value.trim().replace(/\s/g, "");
   const decimalSeparator = normalized.lastIndexOf(",") > normalized.lastIndexOf(".") ? "," : ".";
   const withoutThousands =
@@ -228,22 +304,29 @@ function parseDecimal(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function formNumber(form: FormData, key: string): number {
+export function formNumber(form: FormData, key: string): number {
   const value = formString(form, key);
   return parseDecimal(value);
 }
 
-function formOptionalNumber(form: FormData, key: string): number | null {
+export function formOptionalNumber(form: FormData, key: string): number | null {
   const value = formString(form, key);
   if (!value) return null;
   return parseDecimal(value);
 }
 
-function formOptionalDate(form: FormData, key: string): string | null {
+export function formOptionalDate(form: FormData, key: string): string | null {
   return formString(form, key) || null;
 }
 
-function StatusBadge({ status }: { status: RevenueStatus | ExpenseStatus | "pago" | "pendente" }) {
+export function StatusBadge({
+  status,
+  label,
+}: {
+  status: RevenueStatus | ExpenseStatus | "pago" | "pendente";
+  /** Texto exibido no lugar do valor cru do status (ex.: "Parcialmente Pago" em vez de "parcial"). */
+  label?: string;
+}) {
   const tone =
     status === "recebido" || status === "pago"
       ? "bg-emerald-50 text-emerald-700 ring-emerald-100"
@@ -252,12 +335,39 @@ function StatusBadge({ status }: { status: RevenueStatus | ExpenseStatus | "pago
         : "bg-amber-50 text-amber-700 ring-amber-100";
   return (
     <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-bold ring-1", tone)}>
-      {status}
+      {label ?? status}
     </span>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+const AVULSO_STATUS_LABELS: Record<RevenueStatus, string> = {
+  previsto: "Pendente",
+  parcial: "Parcialmente Pago",
+  recebido: "Pago",
+  cancelado: "Cancelado",
+  atrasado: "Atrasado",
+};
+
+function RecurringLockBadge({ record }: { record: FinanceFixedExpense }) {
+  const lockedDay = record.recurringDueDay ?? dayFromDate(record.dueDate);
+  const Icon = record.recurringLocked ? LockKeyhole : UnlockKeyhole;
+  return (
+    <span
+      title={record.recurringLocked ? "Valor e vencimento travados para os próximos meses" : "Sem trava mensal"}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-black ring-1",
+        record.recurringLocked
+          ? "bg-cyan-50 text-cyan-800 ring-cyan-100"
+          : "bg-slate-50 text-slate-500 ring-slate-200"
+      )}
+    >
+      <Icon size={13} />
+      {record.recurringLocked ? lockedDayLabel(lockedDay) : "Livre"}
+    </span>
+  );
+}
+
+export function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="grid gap-1.5">
       <span className={labelClass}>{label}</span>
@@ -266,7 +376,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function InvoiceLinks({
+export function InvoiceLinks({
   fileHref,
   invoiceUrl,
   filename,
@@ -294,17 +404,28 @@ function InvoiceLinks({
   );
 }
 
-function InvoiceFileInput({ currentFilename }: { currentFilename?: string | null }) {
+export function InvoiceFileInput({
+  currentFilename,
+  label = "Anexar nota",
+  fieldName = "invoiceFile",
+  accept,
+}: {
+  currentFilename?: string | null;
+  label?: string;
+  fieldName?: string;
+  accept?: string;
+}) {
   const [selectedName, setSelectedName] = useState("");
   return (
     <div className="grid gap-1.5">
-      <span className={labelClass}>Anexar nota</span>
+      <span className={labelClass}>{label}</span>
       <label className="inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-cyan-300 bg-cyan-50 px-3 text-sm font-black text-cyan-800 transition hover:bg-cyan-100">
         <FileUp size={16} />
-        Anexar nota
+        {label}
         <input
           type="file"
-          name="invoiceFile"
+          name={fieldName}
+          accept={accept}
           className="sr-only"
           onChange={(event) => setSelectedName(event.target.files?.[0]?.name ?? "")}
         />
@@ -318,7 +439,7 @@ function InvoiceFileInput({ currentFilename }: { currentFilename?: string | null
   );
 }
 
-function TextInput({
+export function TextInput({
   label,
   name,
   defaultValue,
@@ -344,7 +465,7 @@ function TextInput({
   );
 }
 
-function DecimalInput({
+export function DecimalInput({
   label,
   name,
   defaultValue,
@@ -369,29 +490,56 @@ function DecimalInput({
   );
 }
 
-function SelectInput({
+function LockCheckbox({
+  defaultChecked = false,
+}: {
+  defaultChecked?: boolean;
+}) {
+  return (
+    <label className="flex min-h-10 cursor-pointer items-center gap-3 rounded-lg border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm font-black text-cyan-900">
+      <input
+        type="checkbox"
+        name="recurringLocked"
+        defaultChecked={defaultChecked}
+        className="size-4 rounded border-cyan-300 text-cyan-700 accent-cyan-700"
+      />
+      <LockKeyhole size={16} className="text-cyan-700" />
+      <span>Travar valor e vencimento nos próximos meses</span>
+    </label>
+  );
+}
+
+export function SelectInput({
   label,
   name,
   defaultValue,
   children,
   required = false,
+  onChange,
 }: {
   label: string;
   name: string;
   defaultValue?: string | number | null;
   children: ReactNode;
   required?: boolean;
+  onChange?: (value: string) => void;
 }) {
   return (
     <Field label={label}>
-      <select name={name} required={required} defaultValue={valueOrEmpty(defaultValue)} className={inputClass}>
+      <select
+        name={name}
+        required={required}
+        defaultValue={valueOrEmpty(defaultValue)}
+        onChange={onChange ? (event) => onChange(event.target.value) : undefined}
+        className={inputClass}
+      >
         {children}
       </select>
     </Field>
   );
 }
 
-function TextAreaInput({ label, name, defaultValue }: { label: string; name: string; defaultValue?: string | null }) {
+export function TextAreaInput({ label, name, defaultValue }: { label: string; name: string; defaultValue?: string | null }) {
   return (
     <Field label={label}>
       <textarea
@@ -404,11 +552,11 @@ function TextAreaInput({ label, name, defaultValue }: { label: string; name: str
   );
 }
 
-function Section({ children, className }: { children: ReactNode; className?: string }) {
+export function Section({ children, className }: { children: ReactNode; className?: string }) {
   return <section className={cn("rounded-lg border border-slate-200 bg-white shadow-[var(--dashboard-card-shadow)]", className)}>{children}</section>;
 }
 
-function SectionHeader({
+export function SectionHeader({
   title,
   subtitle,
   action,
@@ -465,14 +613,14 @@ function KpiCard({ kpi }: { kpi: FinanceKpi }) {
   );
 }
 
-function ChartCard({ title, children }: { title: string; children: ReactNode }) {
+function ChartCard({ title, children, heightClass = "h-72" }: { title: string; children: ReactNode; heightClass?: string }) {
   const hydrated = useHydrated();
   return (
     <Section>
       <div className="border-b border-slate-100 px-5 py-4">
         <h3 className="text-sm font-black text-slate-950">{title}</h3>
       </div>
-      <div className="h-72 px-3 py-4">{hydrated ? children : <EmptyChart />}</div>
+      <div className={cn(heightClass, "px-3 py-4")}>{hydrated ? children : <EmptyChart />}</div>
     </Section>
   );
 }
@@ -485,20 +633,24 @@ function EmptyChart() {
   );
 }
 
-function SmartTable<T>({
+export function SmartTable<T>({
   rows,
   columns,
   searchPlaceholder = "Pesquisar",
   actions,
+  defaultSortDir = "desc",
+  defaultSortKey,
 }: {
   rows: T[];
   columns: Column<T>[];
   searchPlaceholder?: string;
   actions?: (item: T) => ReactNode;
+  defaultSortDir?: "asc" | "desc";
+  defaultSortKey?: string;
 }) {
   const [query, setQuery] = useState("");
-  const [sortKey, setSortKey] = useState(columns[0]?.key ?? "");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [sortKey, setSortKey] = useState(defaultSortKey ?? columns[0]?.key ?? "");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(defaultSortDir);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -641,7 +793,7 @@ function SmartTable<T>({
   );
 }
 
-function IconButton({
+export function IconButton({
   title,
   onClick,
   children,
@@ -678,12 +830,21 @@ function ExportCenter({ month, filters }: { month: string; filters: FinanceFilte
     ["gastos-fixos", "Despesas Fixas"],
     ["gastos-variaveis", "Despesas Variáveis"],
     ["filiais", "Unidade Tatuapé"],
-    ["matriculas", "Matrículas Parceladas"],
+    ["matriculas", "Matrículas"],
     ["comissoes", "Comissões"],
     ["trimestral", "Consolidação Trimestral"],
+    ["funcionarios", "Funcionários"],
+    ["folha", "Folha de Pagamento"],
+    ["configuracoes", "Configurações Financeiras"],
   ] as const;
 
-  function href(section: string, format: "xlsx" | "csv" | "pdf") {
+  const [selectedMonths, setSelectedMonths] = useState<string[]>(() => [month]);
+  const [selectedSections, setSelectedSections] = useState<string[]>(["dashboard", "fluxo", "receitas"]);
+
+  const selectedSectionCount = selectedSections.length;
+  const selectedMonthCount = selectedMonths.filter(Boolean).length;
+
+  function singleHref(section: string, format: "xlsx" | "csv" | "pdf") {
     const params = new URLSearchParams({ section, format, month });
     Object.entries(filters).forEach(([key, value]) => {
       if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
@@ -691,33 +852,122 @@ function ExportCenter({ month, filters }: { month: string; filters: FinanceFilte
     return `/api/finance/export?${params.toString()}`;
   }
 
+  function selectedHref(format: "xlsx" | "csv" | "pdf") {
+    const months = Array.from(new Set(selectedMonths.filter(Boolean)));
+    const sections = Array.from(new Set(selectedSections));
+    const params = new URLSearchParams({
+      format,
+      months: months.join(","),
+      sections: sections.join(","),
+    });
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+    });
+    return `/api/finance/export?${params.toString()}`;
+  }
+
+  function toggleSection(section: string) {
+    setSelectedSections((current) => current.includes(section) ? current.filter((item) => item !== section) : [...current, section]);
+  }
+
+  function updateMonth(index: number, value: string) {
+    setSelectedMonths((current) => current.map((item, itemIndex) => itemIndex === index ? value : item));
+  }
+
+  function addMonth() {
+    const lastMonth = selectedMonths[selectedMonths.length - 1] || month;
+    const [year, monthNumber] = lastMonth.split("-").map(Number);
+    const next = year && monthNumber ? new Date(year, monthNumber, 1) : new Date();
+    const nextValue = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
+    setSelectedMonths((current) => [...current, nextValue]);
+  }
+
+  function removeMonth(index: number) {
+    setSelectedMonths((current) => current.length <= 1 ? current : current.filter((_, itemIndex) => itemIndex !== index));
+  }
+
+  function selectAllSections() {
+    setSelectedSections(sectionOptions.map(([section]) => section));
+  }
+
+  function clearSections() {
+    setSelectedSections([]);
+  }
+
   return (
     <Section>
       <SectionHeader
         title="Central de exportação"
-        subtitle="Arquivos prontos para contabilidade, sócios, auditoria e backup."
+        subtitle="Escolha os meses e as partes do financeiro para gerar um único pacote de exportação."
         action={
-          <a
-            href={href("complete", "xlsx")}
-            className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"
-          >
-            <FileSpreadsheet size={16} />
-            Exportar base completa
-          </a>
+          <div className="flex flex-wrap gap-2">
+            <a href={selectedSectionCount > 0 && selectedMonthCount > 0 ? selectedHref("xlsx") : undefined} className={cn("inline-flex h-10 items-center gap-2 rounded-lg px-4 text-sm font-black", selectedSectionCount > 0 && selectedMonthCount > 0 ? "bg-slate-950 text-white hover:bg-slate-800" : "cursor-not-allowed bg-slate-200 text-slate-400")} aria-disabled={selectedSectionCount === 0 || selectedMonthCount === 0}>
+              <FileSpreadsheet size={16} />Excel selecionado
+            </a>
+          </div>
         }
       />
+      <div className="grid gap-5 border-b border-slate-100 p-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div className="rounded-lg border border-cyan-100 bg-cyan-50/60 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-950">Meses da exportação</p>
+              <p className="mt-1 text-xs font-semibold text-slate-600">Cada mês selecionado vira um conjunto de abas no Excel.</p>
+            </div>
+            <button type="button" onClick={addMonth} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-cyan-200 bg-white px-3 text-xs font-black text-cyan-800 hover:bg-cyan-50"><Plus size={13} />Adicionar</button>
+          </div>
+          <div className="mt-3 grid gap-2">
+            {selectedMonths.map((value, index) => (
+              <div key={`${index}-${value}`} className="flex items-center gap-2">
+                <input type="month" value={value} onChange={(event) => updateMonth(index, event.target.value)} className={inputClass} aria-label={`Mês ${index + 1}`} />
+                <button type="button" onClick={() => removeMonth(index)} disabled={selectedMonths.length <= 1} className="inline-flex size-10 flex-none items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-40" title="Remover mês" aria-label="Remover mês"><X size={16} /></button>
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs font-black text-cyan-900">{selectedMonthCount} mês{selectedMonthCount === 1 ? "" : "es"} selecionado{selectedMonthCount === 1 ? "" : "s"}</p>
+        </div>
+        <div className="rounded-lg border border-slate-200 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-950">Seções do pacote</p>
+              <p className="mt-1 text-xs font-semibold text-slate-500">Selecione uma ou várias áreas para reunir no mesmo arquivo.</p>
+            </div>
+            <div className="flex gap-2 text-xs font-black">
+              <button type="button" onClick={selectAllSections} className="text-cyan-700 hover:text-cyan-900">Todas</button>
+              <span className="text-slate-300">·</span>
+              <button type="button" onClick={clearSections} className="text-slate-500 hover:text-slate-800">Limpar</button>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {sectionOptions.map(([section, label]) => (
+              <label key={section} className={cn("flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold transition", selectedSections.includes(section) ? "border-cyan-200 bg-cyan-50 text-cyan-900" : "border-slate-200 bg-white text-slate-600 hover:border-cyan-200")}>
+                <input type="checkbox" checked={selectedSections.includes(section)} onChange={() => toggleSection(section)} className="size-4 rounded border-slate-300 accent-cyan-700" />
+                {label}
+              </label>
+            ))}
+          </div>
+          <p className="mt-3 text-xs font-black text-slate-600">{selectedSectionCount} seção{selectedSectionCount === 1 ? "" : "ões"} selecionada{selectedSectionCount === 1 ? "" : "s"}</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50 px-5 py-3">
+        <p className="text-xs font-semibold text-slate-600">Excel cria uma aba por combinação de mês e seção. CSV reúne tudo em uma tabela; PDF cria uma página por combinação.</p>
+        <div className="flex flex-wrap gap-2">
+          <a href={selectedSectionCount > 0 && selectedMonthCount > 0 ? selectedHref("csv") : undefined} className={cn("inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-xs font-black", selectedSectionCount > 0 && selectedMonthCount > 0 ? "bg-slate-200 text-slate-700 hover:bg-slate-300" : "cursor-not-allowed bg-slate-200 text-slate-400")} aria-disabled={selectedSectionCount === 0 || selectedMonthCount === 0}><Download size={14} />CSV selecionado</a>
+          <a href={selectedSectionCount > 0 && selectedMonthCount > 0 ? selectedHref("pdf") : undefined} className={cn("inline-flex h-9 items-center gap-1.5 rounded-md px-3 text-xs font-black", selectedSectionCount > 0 && selectedMonthCount > 0 ? "bg-rose-50 text-rose-700 hover:bg-rose-100" : "cursor-not-allowed bg-slate-200 text-slate-400")} aria-disabled={selectedSectionCount === 0 || selectedMonthCount === 0}><FileDown size={14} />PDF selecionado</a>
+        </div>
+      </div>
       <div className="grid gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
         {sectionOptions.map(([section, label]) => (
           <div key={section} className="rounded-lg border border-slate-200 p-4">
             <p className="text-sm font-black text-slate-950">{label}</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-50 px-3 text-xs font-bold text-emerald-700" href={href(section, "xlsx")}>
+              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-50 px-3 text-xs font-bold text-emerald-700" href={singleHref(section, "xlsx")}>
                 <Download size={13} /> Excel
               </a>
-              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-3 text-xs font-bold text-slate-700" href={href(section, "csv")}>
+              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-slate-100 px-3 text-xs font-bold text-slate-700" href={singleHref(section, "csv")}>
                 <Download size={13} /> CSV
               </a>
-              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-rose-50 px-3 text-xs font-bold text-rose-700" href={href(section, "pdf")}>
+              <a className="inline-flex h-8 items-center gap-1.5 rounded-md bg-rose-50 px-3 text-xs font-bold text-rose-700" href={singleHref(section, "pdf")}>
                 <Download size={13} /> PDF
               </a>
             </div>
@@ -725,6 +975,119 @@ function ExportCenter({ month, filters }: { month: string; filters: FinanceFilte
         ))}
       </div>
     </Section>
+  );
+}
+
+function FinanceOverviewPanel({ summary }: { summary: FinanceDashboardSummary }) {
+  const overview = summary.cashOverview;
+  return (
+    <Section>
+      <SectionHeader title="Realizado, Previsto e Lucro" subtitle="Separação rápida do dinheiro que entrou/saiu, valores previstos e resultado do período." />
+      <div className="grid divide-y divide-slate-100 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+        <div className="grid content-start gap-3 p-5">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-emerald-700">Dinheiro realizado</p>
+            <p className={cn("mt-2 text-2xl font-black", overview.realizedNet >= 0 ? "text-emerald-700" : "text-rose-700")}>
+              {money(overview.realizedNet)}
+            </p>
+          </div>
+          <MetricRow label="Entrou" value={money(overview.received)} tone="good" />
+          <MetricRow label="Saiu" value={money(overview.paid)} tone="bad" />
+        </div>
+
+        <div className="grid content-start gap-3 p-5">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-cyan-700">Dinheiro previsto</p>
+            <p className={cn("mt-2 text-2xl font-black", overview.forecastNet >= 0 ? "text-cyan-800" : "text-rose-700")}>
+              {money(overview.forecastNet)}
+            </p>
+          </div>
+          <MetricRow label="A receber" value={money(overview.toReceive)} />
+          <MetricRow label="A pagar" value={money(overview.toPay)} tone="bad" />
+        </div>
+
+        <div className="grid content-start gap-3 p-5">
+          <div>
+            <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Lucro do mês</p>
+            <p className={cn("mt-2 text-2xl font-black", overview.monthProfit >= 0 ? "text-slate-950" : "text-rose-700")}>
+              {money(overview.monthProfit)}
+            </p>
+          </div>
+          <MetricRow label="Receitas" value={money(overview.competenceRevenue)} />
+          <MetricRow label="Despesas" value={money(overview.competenceExpenses)} tone="bad" />
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function FinanceAlertsPanel({ alerts }: { alerts: FinanceDashboardSummary["alerts"] }) {
+  return (
+    <Section>
+      <SectionHeader title="Alertas Financeiros" subtitle="Pendências que precisam de acompanhamento." />
+      <div className="grid divide-y divide-slate-100 xl:grid-cols-4 xl:divide-x xl:divide-y-0">
+        <AlertGroupBlock title="Contas vencendo" group={alerts.dueSoonBills} tone="amber" emptyText="Nenhuma conta vencendo nos próximos 7 dias." />
+        <AlertGroupBlock title="Contas atrasadas" group={alerts.overdueBills} tone="rose" emptyText="Nenhuma conta atrasada." />
+        <AlertGroupBlock title="Receitas atrasadas" group={alerts.overdueRevenues} tone="rose" emptyText="Nenhuma receita atrasada." />
+        <AlertGroupBlock title="Comissões pendentes" group={alerts.pendingCommissions} tone="cyan" emptyText="Nenhuma comissão pendente no período." />
+      </div>
+    </Section>
+  );
+}
+
+function AlertGroupBlock({
+  title,
+  group,
+  tone,
+  emptyText,
+}: {
+  title: string;
+  group: FinanceAlertGroup;
+  tone: "amber" | "rose" | "cyan";
+  emptyText: string;
+}) {
+  const toneClasses = {
+    amber: "bg-amber-50 text-amber-800 ring-amber-100",
+    rose: "bg-rose-50 text-rose-700 ring-rose-100",
+    cyan: "bg-cyan-50 text-cyan-800 ring-cyan-100",
+  }[tone];
+
+  return (
+    <div className="grid content-start gap-3 p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-black text-slate-950">{title}</p>
+          <p className="mt-1 text-xs font-bold text-slate-500">{group.count} registro{group.count === 1 ? "" : "s"}</p>
+        </div>
+        <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black ring-1", toneClasses)}>
+          {money(group.total)}
+        </span>
+      </div>
+
+      {group.items.length > 0 ? (
+        <div className="grid gap-2">
+          {group.items.map((item) => (
+            <div key={item.id} className="grid gap-1 border-t border-slate-100 pt-2 first:border-t-0 first:pt-0">
+              <div className="flex items-center justify-between gap-3">
+                <p className="truncate text-sm font-bold text-slate-700">{item.label}</p>
+                <p className="whitespace-nowrap text-sm font-black text-slate-950">{money(item.amount)}</p>
+              </div>
+              <p className="truncate text-xs font-semibold text-slate-500">
+                {dateLabel(item.date)}{item.detail ? ` · ${item.detail}` : ""}
+              </p>
+            </div>
+          ))}
+          {group.count > group.items.length ? (
+            <p className="text-xs font-bold text-slate-400">+{group.count - group.items.length} outros registros</p>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm font-bold text-slate-500">
+          <CheckCircle2 size={16} className="text-emerald-600" />
+          {emptyText}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -741,10 +1104,19 @@ export default function FinanceiroClient({
   filters,
   month,
   periodMode,
+  gastosVisao,
+  receitasVisao,
+  fluxoVisao,
+  matriculasVisao,
+  comissoesVisao,
+  allTimeTotals,
+  allMonthlyTotals,
+  commissionsOverview,
 }: FinanceiroClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [modal, setModal] = useState<ModalState>(null);
+  const [paymentsPanelRevenue, setPaymentsPanelRevenue] = useState<FinanceRevenue | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [localFilters, setLocalFilters] = useState({
@@ -757,6 +1129,11 @@ export default function FinanceiroClient({
     categoryId: filters.categoryId ? String(filters.categoryId) : "",
     sellerId: filters.sellerId ? String(filters.sellerId) : "",
     paymentMethodId: filters.paymentMethodId ? String(filters.paymentMethodId) : "",
+    gastosVisao,
+    receitasVisao,
+    fluxoVisao,
+    matriculasVisao,
+    comissoesVisao,
   });
 
   const revenueCategories = catalog.categories.filter((item) => item.kind === "receita" && item.active);
@@ -794,6 +1171,18 @@ export default function FinanceiroClient({
       const value = localFilters[key];
       if (value) params.set(key, value);
     }
+    for (const key of ["gastosVisao", "receitasVisao", "fluxoVisao", "matriculasVisao", "comissoesVisao"] as const) {
+      if (localFilters[key] === "todos") params.set(key, "todos");
+    }
+    router.push(`/financeiro?${params.toString()}`);
+  }
+
+  /** Addon "ver todos os meses" (Despesas, Receitas, Fluxo, Matrículas, Comissões) — aplica na hora, sem precisar clicar em Filtrar. */
+  function setVisao(key: VisaoKey, next: "mes" | "todos") {
+    const params = new URLSearchParams(window.location.search);
+    if (next === "todos") params.set(key, "todos");
+    else params.delete(key);
+    setLocalFilters((current) => ({ ...current, [key]: next }));
     router.push(`/financeiro?${params.toString()}`);
   }
 
@@ -808,6 +1197,12 @@ export default function FinanceiroClient({
       throw new Error(typeof data.error === "string" ? data.error : "Falha ao salvar.");
     }
     return data as { id?: number; ok?: boolean };
+  }
+
+  async function createCategory(kind: FinanceCategoryKind, name: string): Promise<number | undefined> {
+    const result = await apiJson("/api/finance/catalog/categories", "POST", { kind, name });
+    refresh("Categoria criada.");
+    return result.id;
   }
 
   async function uploadInvoiceFile(endpoint: string, form: FormData) {
@@ -841,27 +1236,48 @@ export default function FinanceiroClient({
     setMessage(null);
     try {
       if (modal.type === "revenue") {
-        const body = {
-          date: formString(form, "date"),
-          description: formString(form, "description"),
-          categoryId: formOptionalNumber(form, "categoryId"),
-          origin: formString(form, "origin") || null,
-          student: formString(form, "student") || null,
-          courseId: formOptionalNumber(form, "courseId"),
-          branchId: formOptionalNumber(form, "branchId"),
-          paymentMethodId: formOptionalNumber(form, "paymentMethodId"),
-          sellerId: formOptionalNumber(form, "sellerId"),
-          amount: formNumber(form, "amount"),
-          feeAmount: formNumber(form, "feeAmount"),
-          status: formString(form, "status") as RevenueStatus,
-          notes: formString(form, "notes") || null,
-        };
-        await apiJson(modal.mode === "edit" ? `/api/finance/revenues/${modal.record?.id}` : "/api/finance/revenues", modal.mode === "edit" ? "PATCH" : "POST", body);
+        const isLegacy = modal.mode === "edit" && modal.record?.revenueMode === "legacy";
+        const body: Record<string, unknown> = isLegacy
+          ? {
+              date: formString(form, "date"),
+              description: formString(form, "description"),
+              categoryId: formOptionalNumber(form, "categoryId"),
+              origin: formString(form, "origin") || null,
+              student: formString(form, "student") || null,
+              courseId: formOptionalNumber(form, "courseId"),
+              branchId: formOptionalNumber(form, "branchId"),
+              paymentMethodId: formOptionalNumber(form, "paymentMethodId"),
+              sellerId: formOptionalNumber(form, "sellerId"),
+              amount: formNumber(form, "amount"),
+              feeAmount: formNumber(form, "feeAmount"),
+              status: formString(form, "status") as RevenueStatus,
+              notes: formString(form, "notes") || null,
+            }
+          : {
+              date: formString(form, "date"),
+              description: formString(form, "description"),
+              categoryId: formOptionalNumber(form, "categoryId"),
+              origin: formString(form, "origin") || null,
+              courseId: formOptionalNumber(form, "courseId"),
+              branchId: formOptionalNumber(form, "branchId"),
+              sellerId: formOptionalNumber(form, "sellerId"),
+              commissionPct: formNumber(form, "commissionPct"),
+              amount: formNumber(form, "amount"),
+              dueDate: formOptionalDate(form, "dueDate"),
+              leadInscricaoId: formOptionalNumber(form, "leadInscricaoId"),
+              leadName: formString(form, "leadName") || null,
+              leadPhone: formString(form, "leadPhone") || null,
+              notes: formString(form, "notes") || null,
+              ...(form.get("cancelReceita") === "on" ? { status: "cancelado" as RevenueStatus } : {}),
+            };
+        const result = await apiJson(modal.mode === "edit" ? `/api/finance/revenues/${modal.record?.id}` : "/api/finance/revenues", modal.mode === "edit" ? "PATCH" : "POST", body);
+        const targetId = modal.mode === "edit" ? modal.record?.id : result.id;
+        if (targetId) await uploadInvoiceFile(`/api/finance/revenues/${targetId}/invoice`, form);
       }
 
       if (modal.type === "fixed") {
-        const body = {
-          month,
+        const body: Record<string, unknown> = {
+          month: formString(form, "monthDisplay") || month,
           description: formString(form, "description"),
           categoryId: formOptionalNumber(form, "categoryId"),
           dueDate: formOptionalDate(form, "dueDate"),
@@ -871,6 +1287,7 @@ export default function FinanceiroClient({
           paidAt: formOptionalDate(form, "paidAt"),
           notes: formString(form, "notes") || null,
           invoiceUrl: formString(form, "invoiceUrl") || null,
+          recurringLocked: form.get("recurringLocked") === "on",
         };
         const result = await apiJson(modal.mode === "edit" ? `/api/finance/fixed-expenses/${modal.record?.id}` : "/api/finance/fixed-expenses", modal.mode === "edit" ? "PATCH" : "POST", body);
         const targetId = modal.mode === "edit" ? modal.record?.id : result.id;
@@ -901,7 +1318,7 @@ export default function FinanceiroClient({
           amount: formNumber(form, "amount"),
           date: formOptionalDate(form, "date"),
           status: formString(form, "status") as ExpenseStatus,
-          costKind: formString(form, "costKind"),
+          phase: formString(form, "phase") as BranchItemPhase,
           invoiceUrl: formString(form, "invoiceUrl") || null,
           notes: formString(form, "notes") || null,
         };
@@ -911,18 +1328,21 @@ export default function FinanceiroClient({
       }
 
       if (modal.type === "enrollment") {
-        await apiJson("/api/finance/enrollments", "POST", {
+        const body = {
           student: formString(form, "student"),
           courseId: formOptionalNumber(form, "courseId"),
           totalAmount: formNumber(form, "totalAmount"),
           installments: formNumber(form, "installments"),
           paymentMethodId: formOptionalNumber(form, "paymentMethodId"),
+          cardBrandId: formOptionalNumber(form, "cardBrandId"),
+          commissionPct: formNumber(form, "commissionPct"),
           firstMonth: formString(form, "firstMonth"),
           saleDate: formString(form, "saleDate"),
           sellerId: formOptionalNumber(form, "sellerId"),
           branchId: formOptionalNumber(form, "branchId"),
           notes: formString(form, "notes") || null,
-        });
+        };
+        await apiJson(modal.mode === "edit" ? `/api/finance/enrollments/${modal.record?.id}` : "/api/finance/enrollments", modal.mode === "edit" ? "PATCH" : "POST", body);
       }
 
       if (modal.type === "commission") {
@@ -969,7 +1389,7 @@ export default function FinanceiroClient({
             </div>
             <h1 className="mt-3 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">Gestão Financeira</h1>
             <p className="mt-1 max-w-3xl text-sm text-slate-500">
-              Dashboard, fluxo de caixa, receitas, despesas, implantação, matrículas parceladas, comissões e consolidação para investidores.
+              Dashboard, fluxo de caixa, receitas, despesas, implantação, matrículas, comissões e consolidação para investidores.
             </p>
           </div>
           <div className="grid w-full gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
@@ -1094,15 +1514,26 @@ export default function FinanceiroClient({
         ) : null}
 
         {activeTab === "fluxo" ? (
-          <FluxoTab monthly={summary.monthly} cashBalance={summary.cashBalance} />
+          <FluxoTab
+            monthly={localFilters.fluxoVisao === "todos" && allMonthlyTotals ? allMonthlyTotals : summary.monthly}
+            cashBalance={summary.cashBalance}
+            month={localFilters.month}
+            fluxoVisao={localFilters.fluxoVisao}
+            onChangeFluxoVisao={(next) => setVisao("fluxoVisao", next)}
+          />
         ) : null}
 
         {activeTab === "receitas" ? (
           <ReceitasTab
             rows={revenues}
+            month={localFilters.month}
+            receitasVisao={localFilters.receitasVisao}
+            onChangeReceitasVisao={(next) => setVisao("receitasVisao", next)}
             onAdd={() => setModal({ type: "revenue", mode: "create" })}
             onEdit={(record) => setModal({ type: "revenue", mode: "edit", record })}
             onDelete={(record) => destroy(`/api/finance/revenues/${record.id}`, "receita")}
+            onOpenPayments={(record) => setPaymentsPanelRevenue(record)}
+            onAddEnrollment={() => setModal({ type: "enrollment", mode: "create" })}
           />
         ) : null}
 
@@ -1110,7 +1541,10 @@ export default function FinanceiroClient({
           <GastosTab
             fixed={fixedExpenses}
             variable={variableExpenses}
-            totals={currentTotals as FinanceMonthTotals}
+            totals={localFilters.gastosVisao === "todos" && allTimeTotals ? allTimeTotals : (currentTotals as FinanceMonthTotals)}
+            month={localFilters.month}
+            gastosVisao={localFilters.gastosVisao}
+            onChangeGastosVisao={(next) => setVisao("gastosVisao", next)}
             onAddFixed={() => setModal({ type: "fixed", mode: "create" })}
             onEditFixed={(record) => setModal({ type: "fixed", mode: "edit", record })}
             onDeleteFixed={(record) => destroy(`/api/finance/fixed-expenses/${record.id}`, "despesa fixa")}
@@ -1126,6 +1560,14 @@ export default function FinanceiroClient({
             onAdd={() => setModal({ type: "branch", mode: "create" })}
             onEdit={(record) => setModal({ type: "branch", mode: "edit", record })}
             onDelete={(record) => destroy(`/api/finance/branch-items/${record.id}`, "item de filial")}
+            onChangePhase={async (record, phase) => {
+              try {
+                await apiJson(`/api/finance/branch-items/${record.id}`, "PATCH", { phase });
+                refresh("Fase atualizada.");
+              } catch (error) {
+                setMessage(error instanceof Error ? error.message : "Falha ao mover item.");
+              }
+            }}
           />
         ) : null}
 
@@ -1133,7 +1575,11 @@ export default function FinanceiroClient({
           <MatriculasTab
             rows={enrollments}
             catalog={catalog}
+            month={localFilters.month}
+            matriculasVisao={localFilters.matriculasVisao}
+            onChangeMatriculasVisao={(next) => setVisao("matriculasVisao", next)}
             onAdd={() => setModal({ type: "enrollment", mode: "create" })}
+            onEdit={(record) => setModal({ type: "enrollment", mode: "edit", record })}
             onDelete={(record) => destroy(`/api/finance/enrollments/${record.id}`, "matrícula")}
           />
         ) : null}
@@ -1142,12 +1588,19 @@ export default function FinanceiroClient({
           <ComissoesTab
             rows={commissions}
             panel={commissionPanel}
+            overview={commissionsOverview}
             month={month}
+            comissoesVisao={localFilters.comissoesVisao}
+            onChangeComissoesVisao={(next) => setVisao("comissoesVisao", next)}
             onAdd={() => setModal({ type: "commission", mode: "create" })}
             onDelete={(record) => destroy(`/api/finance/commissions/${record.id}`, "comissão")}
             onStatus={async (id, status) => {
               await apiJson(`/api/finance/commission-installments/${id}`, "PATCH", { status });
               refresh("Parcela atualizada.");
+            }}
+            onToggleRealCommission={async (paymentId, status) => {
+              await apiJson(`/api/finance/revenue-payments/${paymentId}/commission-status`, "PATCH", { status });
+              refresh("Comissão atualizada.");
             }}
           />
         ) : null}
@@ -1176,6 +1629,19 @@ export default function FinanceiroClient({
           branches={activeBranches}
           sellers={activeSellers}
           paymentMethods={activePaymentMethods}
+          onCreateCategory={createCategory}
+        />
+      ) : null}
+
+      {paymentsPanelRevenue ? (
+        <RevenuePaymentsPanel
+          revenue={paymentsPanelRevenue}
+          cardBrands={catalog.cardBrands.filter((brand) => brand.active)}
+          onClose={() => setPaymentsPanelRevenue(null)}
+          onChanged={(updatedRevenue) => {
+            setPaymentsPanelRevenue(updatedRevenue);
+            refresh();
+          }}
         />
       ) : null}
     </div>
@@ -1189,73 +1655,35 @@ function DashboardTab({
   filters,
 }: {
   summary: FinanceDashboardSummary;
-  chartMonthly: Array<{ mes: string; receitas: number; despesas: number; lucro: number; fixos: number; variaveis: number; saldo: number }>;
+  chartMonthly: ChartMonthlyPoint[];
   month: string;
   filters: FinanceFilters;
 }) {
   return (
     <div className="space-y-5">
+      <FinanceOverviewPanel summary={summary} />
+
+      <FinanceAlertsPanel alerts={summary.alerts} />
+
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
         {summary.kpis.map((kpi) => <KpiCard key={kpi.key} kpi={kpi} />)}
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">
         <ChartCard title="Fluxo de Caixa Mensal">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={chartMonthly}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="mes" />
-              <YAxis tickFormatter={(value) => `${Number(value) / 1000}k`} />
-              <Tooltip formatter={(value) => money(Number(value))} />
-              <Line type="monotone" dataKey="receitas" stroke="#06a8d8" strokeWidth={3} dot={false} />
-              <Line type="monotone" dataKey="despesas" stroke="#e54666" strokeWidth={3} dot={false} />
-              <Line type="monotone" dataKey="lucro" stroke="#12a594" strokeWidth={3} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <CashFlowMonthlyChart data={chartMonthly} />
         </ChartCard>
 
         <ChartCard title="Receitas x Despesas">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartMonthly}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="mes" />
-              <YAxis tickFormatter={(value) => `${Number(value) / 1000}k`} />
-              <Tooltip formatter={(value) => money(Number(value))} />
-              <Bar dataKey="receitas" fill="#06a8d8" radius={[6, 6, 0, 0]} />
-              <Bar dataKey="despesas" fill="#e54666" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <RevenueExpenseChart data={chartMonthly} />
         </ChartCard>
 
         <ChartCard title="Lucro Mensal">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={chartMonthly}>
-              <defs>
-                <linearGradient id="profitGradient" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="5%" stopColor="#12a594" stopOpacity={0.32} />
-                  <stop offset="95%" stopColor="#12a594" stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="mes" />
-              <YAxis tickFormatter={(value) => `${Number(value) / 1000}k`} />
-              <Tooltip formatter={(value) => money(Number(value))} />
-              <Area type="monotone" dataKey="lucro" stroke="#12a594" strokeWidth={3} fill="url(#profitGradient)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          <ProfitMonthlyChart data={chartMonthly} />
         </ChartCard>
 
         <ChartCard title="Distribuição de Despesas">
-          {summary.expenseDistribution.length === 0 ? <EmptyChart /> : (
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Tooltip formatter={(value) => money(Number(value))} />
-                <Pie data={summary.expenseDistribution.map((item) => ({ name: item.name, value: item.value }))} dataKey="value" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3}>
-                  {summary.expenseDistribution.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
-          )}
+          <ExpenseDistributionChart data={summary.expenseDistribution} />
         </ChartCard>
 
         <ChartCard title="Receita por Curso">
@@ -1289,22 +1717,284 @@ function DashboardTab({
   );
 }
 
+function ChartLegend({ items }: { items: Array<{ label: string; color: string }> }) {
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1">
+      {items.map((item) => (
+        <span key={item.label} className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600">
+          <span className="size-2.5 rounded-sm" style={{ backgroundColor: item.color }} />
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function SingleMonthTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: { name?: string; value?: number; color?: string } }>;
+}) {
+  const item = payload?.[0]?.payload;
+  if (!active || !item) return null;
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-lg">
+      <div className="flex items-center gap-2">
+        <span className="size-2.5 rounded-sm" style={{ backgroundColor: item.color ?? "#64748b" }} />
+        <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{item.name}</span>
+      </div>
+      <p className="mt-1 text-sm font-black text-slate-950">{money(item.value)}</p>
+    </div>
+  );
+}
+
+function SingleMonthBars({ data }: { data: Array<{ name: string; value: number; color: string }> }) {
+  if (data.length === 0) return <EmptyChart />;
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data} margin={{ top: 12, right: 18, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="name" tick={{ fontSize: 11 }} interval={0} />
+        <YAxis tickFormatter={chartTick} width={62} tick={{ fontSize: 11 }} />
+        <ReferenceLine y={0} stroke="#94a3b8" />
+        <Tooltip cursor={false} content={<SingleMonthTooltip />} />
+        <Bar dataKey="value" maxBarSize={52} radius={[6, 6, 0, 0]}>
+          {data.map((item) => <Cell key={item.name} fill={item.color} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+function CashFlowMonthlyChart({ data }: { data: ChartMonthlyPoint[] }) {
+  if (data.length === 0) return <EmptyChart />;
+  const legend = [
+    { label: "Receitas", color: "#06a8d8" },
+    { label: "Despesas", color: "#e54666" },
+    { label: "Lucro", color: "#12a594" },
+  ];
+  if (data.length === 1) {
+    const point = data[0];
+    return (
+      <div className="h-full">
+        <ChartLegend items={legend} />
+        <div className="h-[calc(100%-1.75rem)]">
+          <SingleMonthBars
+            data={[
+              { name: "Receitas", value: point.receitas, color: "#06a8d8" },
+              { name: "Despesas", value: point.despesas, color: "#e54666" },
+              { name: "Lucro", value: point.lucro, color: point.lucro >= 0 ? "#12a594" : "#e54666" },
+            ]}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full">
+      <ChartLegend items={legend} />
+      <div className="h-[calc(100%-1.75rem)]">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ right: 18, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={chartTick} width={62} tick={{ fontSize: 11 }} />
+            <ReferenceLine y={0} stroke="#94a3b8" />
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Line type="monotone" dataKey="receitas" stroke="#06a8d8" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+            <Line type="monotone" dataKey="despesas" stroke="#e54666" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+            <Line type="monotone" dataKey="lucro" stroke="#12a594" strokeWidth={3} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function RevenueExpenseChart({ data }: { data: ChartMonthlyPoint[] }) {
+  if (data.length === 0) return <EmptyChart />;
+  const legend = [
+    { label: "Receitas", color: "#06a8d8" },
+    { label: "Despesas", color: "#e54666" },
+  ];
+  if (data.length === 1) {
+    const point = data[0];
+    return (
+      <div className="h-full">
+        <ChartLegend items={legend} />
+        <div className="h-[calc(100%-1.75rem)]">
+          <SingleMonthBars
+            data={[
+              { name: "Receitas", value: point.receitas, color: "#06a8d8" },
+              { name: "Despesas", value: point.despesas, color: "#e54666" },
+            ]}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full">
+      <ChartLegend items={legend} />
+      <div className="h-[calc(100%-1.75rem)]">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} barCategoryGap="42%" margin={{ right: 18, left: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+            <YAxis tickFormatter={chartTick} width={62} tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Bar dataKey="receitas" fill="#06a8d8" radius={[6, 6, 0, 0]} maxBarSize={42} />
+            <Bar dataKey="despesas" fill="#e54666" radius={[6, 6, 0, 0]} maxBarSize={42} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ProfitMonthlyChart({ data }: { data: ChartMonthlyPoint[] }) {
+  if (data.length === 0) return <EmptyChart />;
+  if (data.length === 1) {
+    const point = data[0];
+    const margin = point.receitas > 0 ? (point.lucro / point.receitas) * 100 : 0;
+    return (
+      <div className="grid h-full gap-4 md:grid-cols-[0.9fr_1.25fr]">
+        <div className="grid content-center gap-3">
+          <MetricRow label="Lucro líquido" value={money(point.lucro)} tone={point.lucro >= 0 ? "good" : "bad"} />
+          <MetricRow label="Margem" value={percent(margin)} />
+          <MetricRow label="Receitas" value={money(point.receitas)} />
+          <MetricRow label="Despesas" value={money(point.despesas)} />
+        </div>
+        <div className="min-h-36 md:min-h-0">
+          <SingleMonthBars data={[{ name: "Lucro", value: point.lucro, color: point.lucro >= 0 ? "#12a594" : "#e54666" }]} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ right: 18, left: 0 }}>
+        <defs>
+          <linearGradient id="profitGradient" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="5%" stopColor="#12a594" stopOpacity={0.32} />
+            <stop offset="95%" stopColor="#12a594" stopOpacity={0.02} />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="mes" tick={{ fontSize: 11 }} />
+        <YAxis tickFormatter={chartTick} width={62} tick={{ fontSize: 11 }} />
+        <ReferenceLine y={0} stroke="#94a3b8" />
+        <Tooltip formatter={(value) => money(Number(value))} />
+        <Area type="monotone" dataKey="lucro" stroke="#12a594" strokeWidth={3} fill="url(#profitGradient)" dot={{ r: 3 }} activeDot={{ r: 5 }} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+function MetricRow({
+  label,
+  value,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "good" | "bad";
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-slate-100 pb-2 last:border-0 last:pb-0">
+      <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">{label}</span>
+      <span
+        className={cn(
+          "text-sm font-black",
+          tone === "good" ? "text-emerald-700" : tone === "bad" ? "text-rose-700" : "text-slate-950"
+        )}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function ExpenseDistributionChart({ data }: { data: Array<{ name: string; value: number }> }) {
+  if (data.length === 0) return <EmptyChart />;
+  const ordered = [...data].sort((left, right) => right.value - left.value);
+  const total = ordered.reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <div className="grid h-full gap-4 lg:grid-cols-[0.95fr_1.2fr]">
+      <div className="min-h-36 lg:min-h-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Tooltip formatter={(value) => money(Number(value))} />
+            <Pie data={ordered} dataKey="value" nameKey="name" innerRadius={52} outerRadius={86} paddingAngle={3}>
+              {ordered.map((_, index) => <Cell key={index} fill={COLORS[index % COLORS.length]} />)}
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="min-h-0 overflow-y-auto pr-1">
+        <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-2">
+          <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-500">Total</span>
+          <span className="text-sm font-black text-slate-950">{money(total)}</span>
+        </div>
+        <div className="space-y-2">
+          {ordered.map((item, index) => {
+            const share = total > 0 ? (item.value / total) * 100 : 0;
+            return (
+              <div key={item.name} className="grid gap-1">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="inline-flex min-w-0 items-center gap-2 text-sm font-bold text-slate-700">
+                    <span className="size-2.5 flex-shrink-0 rounded-sm" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                    <span className="truncate">{item.name}</span>
+                  </span>
+                  <span className="whitespace-nowrap text-sm font-black text-slate-950">{money(item.value)}</span>
+                </div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full" style={{ width: `${share}%`, backgroundColor: COLORS[index % COLORS.length] }} />
+                </div>
+                <p className="text-right text-[11px] font-bold text-slate-500">{percent(share)}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SimpleBarChart({ data }: { data: Array<{ name: string; value: number }> }) {
   if (data.length === 0) return <EmptyChart />;
   return (
     <ResponsiveContainer width="100%" height="100%">
       <BarChart data={data} layout="vertical" margin={{ left: 18, right: 16 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-        <XAxis type="number" tickFormatter={(value) => `${Number(value) / 1000}k`} />
+        <XAxis type="number" tickFormatter={chartTick} />
         <YAxis type="category" dataKey="name" width={116} tick={{ fontSize: 11 }} />
         <Tooltip formatter={(value) => money(Number(value))} />
-        <Bar dataKey="value" fill="#06a8d8" radius={[0, 6, 6, 0]} />
+        <Bar dataKey="value" fill="#06a8d8" radius={[0, 6, 6, 0]} maxBarSize={32} />
       </BarChart>
     </ResponsiveContainer>
   );
 }
 
-function FluxoTab({ monthly, cashBalance }: { monthly: FinanceMonthTotals[]; cashBalance: number }) {
+function FluxoTab({
+  monthly,
+  cashBalance,
+  month,
+  fluxoVisao,
+  onChangeFluxoVisao,
+}: {
+  monthly: FinanceMonthTotals[];
+  cashBalance: number;
+  month: string;
+  fluxoVisao: "mes" | "todos";
+  onChangeFluxoVisao: (next: "mes" | "todos") => void;
+}) {
   const current = monthly[monthly.length - 1];
   return (
     <div className="space-y-5">
@@ -1317,6 +2007,7 @@ function FluxoTab({ monthly, cashBalance }: { monthly: FinanceMonthTotals[]; cas
         <KpiMini label="Margem" value={percent(current?.margin)} />
         <KpiMini label="Saldo Final" value={money(cashBalance)} />
       </div>
+      <VisaoToggle visao={fluxoVisao} month={month} onChange={onChangeFluxoVisao} itemsLabel="Tabela mensal" />
       <Section>
         <SectionHeader title="Fluxo de caixa dinâmico" subtitle="Uma tela por período, atualizada pelo seletor de mês e ano." />
         <div className="p-5">
@@ -1338,7 +2029,7 @@ function FluxoTab({ monthly, cashBalance }: { monthly: FinanceMonthTotals[]; cas
   );
 }
 
-function KpiMini({ label, value }: { label: string; value: string }) {
+export function KpiMini({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-[var(--dashboard-card-shadow)]">
       <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">{label}</p>
@@ -1353,45 +2044,196 @@ function RowActions({ children }: { children: ReactNode }) {
 
 function ReceitasTab({
   rows,
+  month,
+  receitasVisao,
+  onChangeReceitasVisao,
   onAdd,
   onEdit,
   onDelete,
+  onOpenPayments,
+  onAddEnrollment,
 }: {
   rows: FinanceRevenue[];
+  month: string;
+  receitasVisao: "mes" | "todos";
+  onChangeReceitasVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
   onEdit: (record: FinanceRevenue) => void;
   onDelete: (record: FinanceRevenue) => void;
+  onOpenPayments: (record: FinanceRevenue) => void;
+  onAddEnrollment: () => void;
 }) {
-  const total = rows.reduce((sum, item) => sum + item.amount, 0);
+  const [scope, setScope] = useState<"todas" | "avulsas" | "parcelas">("todas");
+  const visibleRows = rows.filter((item) => scope === "todas" || (scope === "avulsas" ? item.revenueMode === "avulso" : item.enrollmentId !== null));
+  const activeRows = visibleRows.filter((item) => item.status !== "cancelado");
+  const total = activeRows.reduce((sum, item) => sum + item.amount, 0);
+  // Parcelas legadas não têm pagamentos parciais; seu status continua sendo a fonte de verdade.
+  const totalRecebido = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.paidAmount : item.status === "recebido" ? item.amount : 0), 0);
+  const totalSaldo = Math.max(0, total - totalRecebido);
+  const totalAtrasado = activeRows.filter((item) => item.status === "atrasado").reduce((sum, item) => sum + item.amount, 0);
+  const totalTaxas = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.paymentsFeeTotal : item.feeAmount), 0);
+  const totalComissao = activeRows.reduce((sum, item) => sum + item.paymentsCommissionTotal, 0);
+  const totalLiquidoRecebido = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.netReceived : item.status === "recebido" ? item.amount - item.feeAmount : 0), 0);
+  const totalLiquidoPrevisto = Math.max(0, total - totalTaxas);
   return (
-    <Section>
-      <SectionHeader
-        title="Receitas"
-        subtitle={`Total de receitas: ${money(total)}`}
-        action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar</button>}
-      />
-      <div className="p-5">
-        <SmartTable
-          rows={rows}
-          columns={[
-            { key: "date", label: "Data", render: (r) => r.date, value: (r) => r.date },
-            { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => r.description },
-            { key: "category", label: "Categoria", render: (r) => r.categoryName ?? "Sem categoria", value: (r) => r.categoryName },
-            { key: "origin", label: "Origem", render: (r) => r.origin ?? "-", value: (r) => r.origin },
-            { key: "student", label: "Aluno", render: (r) => r.student ?? "-", value: (r) => r.student },
-            { key: "payment", label: "Pagamento", render: (r) => r.paymentMethodName ?? "-", value: (r) => r.paymentMethodName },
-            { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
-            { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
-          ]}
-          actions={(record) => (
-            <RowActions>
-              <IconButton title="Editar receita" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
-              <IconButton title="Excluir receita" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
-            </RowActions>
-          )}
-        />
+    <div className="space-y-5">
+      <VisaoToggle visao={receitasVisao} month={month} onChange={onChangeReceitasVisao} itemsLabel="Lista" />
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
+        <span className="font-black">Leitura financeira:</span>
+        <span>vendas e matrículas ficam na aba própria; aqui você acompanha parcelas, recebimentos e receitas no período.</span>
       </div>
-    </Section>
+      <div className="flex flex-wrap items-center gap-2">
+        {(["todas", "avulsas", "parcelas"] as const).map((item) => (
+          <button key={item} type="button" onClick={() => setScope(item)} className={cn("rounded-lg border px-3 py-2 text-xs font-black", scope === item ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-cyan-300") }>
+            {item === "todas" ? "Todas" : item === "avulsas" ? "Receitas avulsas" : "Parcelas de matrículas"}
+          </button>
+        ))}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <KpiMini label="Previsto no período" value={money(total)} />
+        <KpiMini label="Recebido" value={money(totalRecebido)} />
+        <KpiMini label="Saldo a receber" value={money(totalSaldo)} />
+        <KpiMini label="Em atraso" value={money(totalAtrasado)} />
+        <KpiMini label="Total de Taxas" value={money(totalTaxas)} />
+        <KpiMini label="Total de Comissão" value={money(totalComissao)} />
+        <KpiMini label="Líquido Recebido" value={money(totalLiquidoRecebido)} />
+        <KpiMini label="Líquido Previsto" value={money(totalLiquidoPrevisto)} />
+      </div>
+      <Section>
+        <SectionHeader
+          title="Receitas e contas a receber"
+          subtitle={`${visibleRows.length} lançamento(s) · previsto: ${money(total)} · recebido: ${money(totalRecebido)}`}
+          action={<div className="flex flex-wrap gap-2"><button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Receita avulsa</button><button type="button" onClick={onAddEnrollment} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:border-cyan-300 hover:text-cyan-700"><CalendarDays size={16} />Matrícula</button></div>}
+        />
+        <div className="p-5">
+          <SmartTable
+            rows={visibleRows}
+            columns={[
+              { key: "date", label: "Data", render: (r) => r.date, value: (r) => r.date },
+              { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => r.description },
+              { key: "category", label: "Categoria", render: (r) => r.categoryName ?? "Sem categoria", value: (r) => r.categoryName },
+              { key: "dueDate", label: "Vencimento", render: (r) => (r.dueDate ? dateLabel(r.dueDate) : "-"), value: (r) => r.dueDate },
+              { key: "student", label: "Aluno/Lead", render: (r) => r.leadName ?? r.student ?? "-", value: (r) => r.leadName ?? r.student },
+              { key: "seller", label: "Vendedor", render: (r) => r.sellerName ?? "-", value: (r) => r.sellerName },
+              { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
+              {
+                key: "paid",
+                label: "Recebido",
+                render: (r) => (r.revenueMode === "avulso" ? money(r.paidAmount) : "-"),
+                value: (r) => (r.revenueMode === "avulso" ? r.paidAmount : null),
+              },
+              {
+                key: "balance",
+                label: "Saldo Restante",
+                render: (r) => (r.revenueMode === "avulso" ? money(r.balanceRemaining) : "-"),
+                value: (r) => (r.revenueMode === "avulso" ? r.balanceRemaining : null),
+              },
+              {
+                key: "status",
+                label: "Status",
+                render: (r) => (
+                  <StatusBadge status={r.status} label={r.revenueMode === "avulso" ? AVULSO_STATUS_LABELS[r.status] : undefined} />
+                ),
+                value: (r) => r.status,
+              },
+              {
+                key: "invoice",
+                label: "Comprovante",
+                render: (r) => <InvoiceLinks fileHref={r.hasInvoiceFile ? `/api/finance/revenues/${r.id}/invoice` : null} filename={r.invoiceFilename} />,
+                value: (r) => r.invoiceFilename,
+              },
+            ]}
+            actions={(record) => (
+              <RowActions>
+                {record.revenueMode === "avulso" ? (
+                  <IconButton title="Histórico de pagamentos" onClick={() => onOpenPayments(record)}><WalletCards size={15} /></IconButton>
+                ) : null}
+                <IconButton title="Editar receita" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
+                <IconButton title="Excluir receita" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
+              </RowActions>
+            )}
+          />
+        </div>
+      </Section>
+    </div>
+  );
+}
+
+/**
+ * Ordem de exibição das despesas fixas dentro da mesma lista: logística
+ * primeiro (bloco fixo, em ordem alfabética entre si), depois folha de
+ * pagamento (bloco fixo), depois todas as demais categorias — incluindo
+ * "Sem categoria" — em ordem alfabética pelo nome, cada uma formando seu
+ * próprio bloco (um item nunca "fura a fila" para outro bloco só porque a
+ * descrição dele viria antes no alfabeto). Dentro de cada bloco, ordem
+ * alfabética pela descrição.
+ */
+const FIXED_LOGISTICS_CATEGORY_ORDER = ["Agência de Marketing", "Água", "Aluguel/IPTU", "Impressoras", "Internet", "Luz", "Seguro"];
+const FIXED_PAYROLL_CATEGORY_NAME = "Folha de Pagamento";
+const FIXED_UNCATEGORIZED_LABEL = "Sem categoria";
+
+function fixedCategoryGroupRank(categoryName: string | null): number {
+  const logisticsIndex = categoryName === null ? -1 : FIXED_LOGISTICS_CATEGORY_ORDER.indexOf(categoryName);
+  if (logisticsIndex !== -1) return logisticsIndex;
+  if (categoryName === FIXED_PAYROLL_CATEGORY_NAME) return FIXED_LOGISTICS_CATEGORY_ORDER.length;
+  // Todas as demais categorias (e "Sem categoria") caem no mesmo nível e são
+  // desempatadas abaixo pelo nome, então cada uma vira seu próprio bloco em
+  // ordem alfabética — sem posição fixa reservada para "Sem categoria".
+  return FIXED_LOGISTICS_CATEGORY_ORDER.length + 1;
+}
+
+/** Chave de ordenação (categoria → alfabética) usada só para ordenar; a célula continua mostrando a descrição normal. */
+function fixedExpenseSortKey(row: FinanceFixedExpense): string {
+  const rank = String(fixedCategoryGroupRank(row.categoryName)).padStart(2, "0");
+  const category = (row.categoryName ?? FIXED_UNCATEGORIZED_LABEL).toLowerCase();
+  return `${rank}|${category}|${row.description.toLowerCase()}`;
+}
+
+/** Addon "ver todos os meses" — reaproveitado nas abas Despesas, Receitas, Fluxo, Matrículas e Comissões. */
+function VisaoToggle({
+  visao,
+  month,
+  onChange,
+  itemsLabel = "Cards e listas",
+}: {
+  visao: "mes" | "todos";
+  month: string;
+  onChange: (next: "mes" | "todos") => void;
+  itemsLabel?: string;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
+      <div>
+        <p className="text-sm font-black text-slate-900">
+          {itemsLabel} exibindo: {visao === "todos" ? "todos os meses" : monthLabel(month)}
+        </p>
+        <p className="text-xs text-slate-500">
+          Por padrão mostra só o mês selecionado no filtro do topo.
+        </p>
+      </div>
+      <div className="grid h-10 grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
+        <button
+          type="button"
+          onClick={() => onChange("mes")}
+          className={cn(
+            "rounded-md px-3 text-xs font-black transition",
+            visao === "mes" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
+          )}
+        >
+          Mês selecionado
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange("todos")}
+          className={cn(
+            "rounded-md px-3 text-xs font-black transition",
+            visao === "todos" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
+          )}
+        >
+          Todos os meses
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -1399,6 +2241,9 @@ function GastosTab({
   fixed,
   variable,
   totals,
+  month,
+  gastosVisao,
+  onChangeGastosVisao,
   onAddFixed,
   onEditFixed,
   onDeleteFixed,
@@ -1409,6 +2254,9 @@ function GastosTab({
   fixed: FinanceFixedExpense[];
   variable: FinanceVariableExpense[];
   totals: FinanceMonthTotals;
+  month: string;
+  gastosVisao: "mes" | "todos";
+  onChangeGastosVisao: (next: "mes" | "todos") => void;
   onAddFixed: () => void;
   onEditFixed: (record: FinanceFixedExpense) => void;
   onDeleteFixed: (record: FinanceFixedExpense) => void;
@@ -1433,6 +2281,8 @@ function GastosTab({
         <KpiMini label="Lucro Líquido" value={money(totals.profit)} />
         <KpiMini label="Margem" value={percent(totals.margin)} />
       </div>
+
+      <VisaoToggle visao={gastosVisao} month={month} onChange={onChangeGastosVisao} itemsLabel="Cards e listas" />
 
       <Section>
         <SectionHeader
@@ -1471,14 +2321,25 @@ function GastosTab({
       </Section>
 
       <Section>
-        <SectionHeader title="Despesas Fixas" subtitle="Folha separada em salário, benefícios e total. Comissões vêm do módulo de comissões." action={<button type="button" onClick={onAddFixed} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar fixa</button>} />
+        <SectionHeader title="Despesas Fixas" subtitle="Ordenadas por categoria — logística primeiro, depois folha de pagamento, depois as demais — e alfabeticamente dentro de cada categoria." action={<button type="button" onClick={onAddFixed} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar fixa</button>} />
         <div className="p-5">
           <SmartTable
             rows={fixed}
+            defaultSortDir="asc"
+            defaultSortKey={gastosVisao === "todos" ? "month" : undefined}
             columns={[
-              { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => r.description },
-              { key: "category", label: "Categoria", render: (r) => r.categoryName ?? "-", value: (r) => r.categoryName },
+              ...(gastosVisao === "todos"
+                ? [{ key: "month", label: "Mês", render: (r: FinanceFixedExpense) => monthLabel(r.month), value: (r: FinanceFixedExpense) => r.month }]
+                : []),
+              { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => fixedExpenseSortKey(r) },
+              {
+                key: "category",
+                label: "Categoria",
+                render: (r) => r.categoryName ? r.categoryName : <span className="inline-flex items-center gap-1 font-black text-amber-700"><BellRing size={12} />{FIXED_UNCATEGORIZED_LABEL}</span>,
+                value: (r) => r.categoryName,
+              },
               { key: "due", label: "Vencimento", render: (r) => r.dueDate ?? "-", value: (r) => r.dueDate },
+              { key: "lock", label: "Trava", render: (r) => <RecurringLockBadge record={r} />, value: (r) => r.recurringLocked ? `travado-${r.recurringDueDay ?? ""}` : "livre" },
               { key: "salary", label: "Salário", render: (r) => r.kind === "folha" ? money(r.amount) : "-", value: (r) => r.kind === "folha" ? r.amount : 0 },
               { key: "benefits", label: "Benefícios", render: (r) => r.kind === "folha" ? money(r.benefitsAmount) : "-", value: (r) => r.benefitsAmount ?? 0 },
               { key: "amount", label: "Total", render: (r) => money(r.amount + (r.benefitsAmount ?? 0)), value: (r) => r.amount + (r.benefitsAmount ?? 0) },
@@ -1501,10 +2362,19 @@ function GastosTab({
         <div className="p-5">
           <SmartTable
             rows={variable}
+            defaultSortDir="asc"
+            defaultSortKey="description"
             columns={[
               { key: "date", label: "Data", render: (r) => r.date, value: (r) => r.date },
               { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => r.description },
-              { key: "category", label: "Categoria", render: (r) => r.categoryName ?? "-", value: (r) => r.categoryName },
+              {
+                key: "category",
+                label: "Categoria",
+                render: (r) => r.categoryName ?? "-",
+                // Ordenar por esta coluna forma blocos por categoria (e, dentro de cada
+                // categoria, ordem alfabética pela descrição) — fora isso a lista é plana.
+                value: (r) => `${(r.categoryName ?? "Sem categoria").toLowerCase()}|${r.description.toLowerCase()}`,
+              },
               { key: "branch", label: "Unidade", render: (r) => r.branchName ?? "-", value: (r) => r.branchName },
               { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
               { key: "invoice", label: "Nota", render: (r) => <InvoiceLinks fileHref={r.hasInvoiceFile ? `/api/finance/variable-expenses/${r.id}/invoice` : null} invoiceUrl={r.invoiceUrl} filename={r.invoiceFilename} />, value: (r) => r.invoiceFilename ?? r.invoiceUrl },
@@ -1523,87 +2393,314 @@ function GastosTab({
   );
 }
 
+function branchItemPhaseLabel(phase: BranchItemPhase): string {
+  return phase === "pre_operacional" ? "Pré-operacional" : "Implementação";
+}
+
+type BranchCategorySummary = {
+  name: string;
+  value: number;
+  count: number;
+  implementation: number;
+  preOperational: number;
+};
+
+function BranchCategoryBreakdown({
+  data,
+  selectedCategories,
+  onToggleCategory,
+}: {
+  data: BranchCategorySummary[];
+  selectedCategories: string[];
+  onToggleCategory: (category: string) => void;
+}) {
+  if (data.length === 0) return null;
+  const total = data.reduce((sum, item) => sum + item.value, 0);
+  const maxValue = Math.max(...data.map((item) => item.value), 1);
+  const featured = data.slice(0, 4);
+
+  return (
+    <Section>
+      <SectionHeader
+        title="Resumo Visual por Categoria"
+        subtitle={`Unidade Tatuapé · ${data.length} categorias · ${money(total)} no total`}
+      />
+      <div className="space-y-5 p-5 lg:p-6">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {featured.map((item, index) => {
+            const share = total > 0 ? (item.value / total) * 100 : 0;
+            const selected = selectedCategories.includes(item.name);
+            return (
+              <button
+                key={item.name}
+                type="button"
+                onClick={() => onToggleCategory(item.name)}
+                className={cn(
+                  "rounded-lg border p-4 text-left shadow-[var(--dashboard-card-shadow)] transition hover:border-cyan-200 hover:bg-cyan-50/50",
+                  selected ? "border-cyan-300 bg-cyan-50" : "border-slate-200 bg-white"
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <span className="grid size-7 place-content-center rounded-md bg-slate-950 text-xs font-black text-white">
+                    {index + 1}
+                  </span>
+                  <span className="rounded-md bg-cyan-50 px-2 py-1 text-xs font-black text-cyan-800 ring-1 ring-cyan-100">
+                    {percent(share)}
+                  </span>
+                </div>
+                <p className="mt-3 min-h-9 text-sm font-black leading-tight text-slate-950">{item.name}</p>
+                <p className="mt-3 text-xl font-black text-slate-950">{money(item.value)}</p>
+                <p className="mt-2 text-xs font-bold text-slate-500">
+                  {item.count} {item.count === 1 ? "item" : "itens"}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-[var(--dashboard-card-shadow)] lg:p-5">
+          <div className="mb-4 flex flex-col gap-3 border-b border-slate-100 pb-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h3 className="text-sm font-black text-slate-950">Distribuição por gasto</h3>
+            </div>
+            <div className="flex flex-wrap gap-2.5 text-xs font-bold text-slate-600">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2.5 rounded-sm bg-cyan-500" />
+                Implementação
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2.5 rounded-sm bg-amber-400" />
+                Pré-operação
+              </span>
+            </div>
+          </div>
+          <div className="grid max-h-[420px] gap-3 overflow-y-auto pr-1">
+            {data.map((item, index) => {
+              const share = total > 0 ? (item.value / total) * 100 : 0;
+              const barWidth = Math.max(2, (item.value / maxValue) * 100);
+              const implementationShare = item.value > 0 ? (item.implementation / item.value) * 100 : 0;
+              const preOperationalShare = item.value > 0 ? (item.preOperational / item.value) * 100 : 0;
+              const selected = selectedCategories.includes(item.name);
+              return (
+                <button
+                  key={item.name}
+                  type="button"
+                  onClick={() => onToggleCategory(item.name)}
+                  className={cn(
+                    "rounded-lg border p-3 text-left transition hover:border-cyan-200 hover:bg-cyan-50/30 lg:p-4",
+                    selected ? "border-cyan-300 bg-cyan-50" : "border-slate-200 bg-white"
+                  )}
+                >
+                  <div className="grid gap-3 xl:grid-cols-[minmax(230px,340px)_1fr_minmax(150px,190px)] xl:items-center">
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5 grid size-6 flex-none place-content-center rounded-md bg-slate-100 text-[11px] font-black text-slate-700">
+                          {index + 1}
+                        </span>
+                        <div className="min-w-0">
+                          <p className="text-sm font-black leading-snug text-slate-950">{item.name}</p>
+                          <p className="mt-1 text-xs font-bold text-slate-500">
+                            {item.count} {item.count === 1 ? "item" : "itens"} · {percent(share)} do total
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 space-y-2">
+                      <div className="h-5 overflow-hidden rounded-md bg-slate-100">
+                        <div
+                          className="flex h-full overflow-hidden rounded-md"
+                          style={{ width: `${barWidth}%` }}
+                        >
+                          {item.implementation > 0 ? (
+                            <div className="h-full bg-cyan-500" style={{ width: `${implementationShare}%` }} />
+                          ) : null}
+                          {item.preOperational > 0 ? (
+                            <div className="h-full bg-amber-400" style={{ width: `${preOperationalShare}%` }} />
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs font-bold text-slate-500">
+                        {item.implementation > 0 ? <span>Implementação {money(item.implementation)}</span> : null}
+                        {item.preOperational > 0 ? <span>Pré-operação {money(item.preOperational)}</span> : null}
+                      </div>
+                    </div>
+
+                    <div className="text-left lg:text-right">
+                      <p className="text-base font-black text-slate-950">{money(item.value)}</p>
+                      <p className="text-xs font-bold text-slate-500">
+                        {selected ? "Filtro ativo" : "Clique para filtrar"}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+function BranchItemsPhaseGroup({
+  phase,
+  rows,
+  onEdit,
+  onDelete,
+  onChangePhase,
+}: {
+  phase: BranchItemPhase;
+  rows: FinanceBranchItem[];
+  onEdit: (record: FinanceBranchItem) => void;
+  onDelete: (record: FinanceBranchItem) => void;
+  onChangePhase: (record: FinanceBranchItem, phase: BranchItemPhase) => void;
+}) {
+  const otherPhase: BranchItemPhase = phase === "pre_operacional" ? "implementacao" : "pre_operacional";
+  const subtotal = rows.reduce((sum, item) => sum + item.amount, 0);
+  return (
+    <Section>
+      <SectionHeader
+        title={branchItemPhaseLabel(phase)}
+        subtitle={`${rows.length} ${rows.length === 1 ? "item" : "itens"} · ${money(subtotal)}`}
+      />
+      <div className="p-5">
+        <SmartTable
+          rows={rows}
+          searchPlaceholder={`Pesquisar em ${branchItemPhaseLabel(phase).toLowerCase()}`}
+          columns={[
+            { key: "branch", label: "Unidade", render: (r) => r.branchName, value: (r) => r.branchName },
+            { key: "item", label: "Item", render: (r) => r.item, value: (r) => r.item },
+            { key: "category", label: "Categoria", render: (r) => r.category, value: (r) => r.category },
+            { key: "supplier", label: "Fornecedor", render: (r) => r.supplier ?? "-", value: (r) => r.supplier },
+            { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
+            { key: "date", label: "Data", render: (r) => r.date ?? "-", value: (r) => r.date },
+            { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
+            { key: "invoice", label: "Nota", render: (r) => <InvoiceLinks fileHref={r.hasInvoiceFile ? `/api/finance/branch-items/${r.id}/invoice` : null} invoiceUrl={r.invoiceUrl} filename={r.invoiceFilename} />, value: (r) => r.invoiceFilename ?? r.invoiceUrl },
+          ]}
+          actions={(record) => (
+            <RowActions>
+              <IconButton title={`Mover para ${branchItemPhaseLabel(otherPhase)}`} onClick={() => onChangePhase(record, otherPhase)}><ArrowLeftRight size={15} /></IconButton>
+              <IconButton title="Editar item" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
+              <IconButton title="Excluir item" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
+            </RowActions>
+          )}
+        />
+      </div>
+    </Section>
+  );
+}
+
 function FiliaisTab({
   rows,
   onAdd,
   onEdit,
   onDelete,
+  onChangePhase,
 }: {
   rows: FinanceBranchItem[];
   onAdd: () => void;
   onEdit: (record: FinanceBranchItem) => void;
   onDelete: (record: FinanceBranchItem) => void;
+  onChangePhase: (record: FinanceBranchItem, phase: BranchItemPhase) => void;
 }) {
-  const [costFilter, setCostFilter] = useState<"todos" | "fixo" | "variavel">("todos");
-  const visibleRows = costFilter === "todos" ? rows : rows.filter((item) => item.costKind === costFilter);
-  const totalFixo = rows.filter((item) => item.costKind === "fixo").reduce((sum, item) => sum + item.amount, 0);
-  const totalVariavel = rows.filter((item) => item.costKind === "variavel").reduce((sum, item) => sum + item.amount, 0);
-  const byCategory = Object.values(rows.reduce<Record<string, { name: string; value: number }>>((acc, item) => {
-    const current = acc[item.category] ?? { name: item.category, value: 0 };
+  const categories = useMemo(
+    () => Array.from(new Set(rows.map((item) => item.category))).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [rows]
+  );
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const visibleRows = selectedCategories.length === 0 ? rows : rows.filter((item) => selectedCategories.includes(item.category));
+  const totalGeral = rows.reduce((sum, item) => sum + item.amount, 0);
+  const totalImplementacao = rows.filter((item) => item.phase !== "pre_operacional").reduce((sum, item) => sum + item.amount, 0);
+  const totalPreOperacional = rows.filter((item) => item.phase === "pre_operacional").reduce((sum, item) => sum + item.amount, 0);
+  const byCategory = Object.values(rows.reduce<Record<string, BranchCategorySummary>>((acc, item) => {
+    const current = acc[item.category] ?? { name: item.category, value: 0, count: 0, implementation: 0, preOperational: 0 };
     current.value += item.amount;
+    current.count += 1;
+    if (item.phase === "pre_operacional") {
+      current.preOperational += item.amount;
+    } else {
+      current.implementation += item.amount;
+    }
     acc[item.category] = current;
     return acc;
-  }, {}));
+  }, {})).sort((left, right) => right.value - left.value);
+
+  function toggleCategory(category: string) {
+    setSelectedCategories((current) =>
+      current.includes(category) ? current.filter((item) => item !== category) : [...current, category]
+    );
+  }
 
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-3">
-        <KpiMini label="Total Fixo" value={money(totalFixo)} />
-        <KpiMini label="Total Variável" value={money(totalVariavel)} />
-        <KpiMini label="Total Geral" value={money(totalFixo + totalVariavel)} />
+        <KpiMini label="Total Geral" value={money(totalGeral)} />
+        <KpiMini label="Implementação" value={money(totalImplementacao)} />
+        <KpiMini label="Pré-operacional" value={money(totalPreOperacional)} />
       </div>
-      <ChartCard title="Unidade Tatuapé por Categoria">
-        <SimpleBarChart data={byCategory} />
-      </ChartCard>
+      <BranchCategoryBreakdown
+        data={byCategory}
+        selectedCategories={selectedCategories}
+        onToggleCategory={toggleCategory}
+      />
       <Section>
-        <SectionHeader title="Unidade Tatuapé" action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar item</button>} />
+        <SectionHeader
+          title="Unidade Tatuapé"
+          subtitle="Escolha a fase de cada item pelo formulário ou mova depois pelo botão de transição na tabela."
+          action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar item</button>}
+        />
         <div className="p-5">
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-2">
             <p className="text-sm font-bold text-slate-500">
               {visibleRows.length} de {rows.length} itens exibidos
             </p>
-            <div className="grid h-10 grid-cols-3 rounded-lg border border-slate-200 bg-slate-50 p-1 sm:w-[360px]">
-              {[
-                ["todos", "Todos"],
-                ["fixo", "Fixos"],
-                ["variavel", "Variáveis"],
-              ].map(([value, label]) => (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedCategories([])}
+                className={cn(
+                  "rounded-full border px-3 py-1.5 text-xs font-black transition",
+                  selectedCategories.length === 0
+                    ? "border-slate-950 bg-slate-950 text-white"
+                    : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-white"
+                )}
+              >
+                Todas
+              </button>
+              {categories.map((category) => (
                 <button
-                  key={value}
+                  key={category}
                   type="button"
-                  onClick={() => setCostFilter(value as "todos" | "fixo" | "variavel")}
+                  onClick={() => toggleCategory(category)}
                   className={cn(
-                    "rounded-md text-xs font-black transition",
-                    costFilter === value ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white"
+                    "rounded-full border px-3 py-1.5 text-xs font-black transition",
+                    selectedCategories.includes(category)
+                      ? "border-slate-950 bg-slate-950 text-white"
+                      : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-white"
                   )}
                 >
-                  {label}
+                  {category}
                 </button>
               ))}
             </div>
           </div>
-          <SmartTable
-            rows={visibleRows}
-            columns={[
-              { key: "branch", label: "Unidade", render: (r) => r.branchName, value: (r) => r.branchName },
-              { key: "item", label: "Item", render: (r) => r.item, value: (r) => r.item },
-              { key: "category", label: "Categoria", render: (r) => r.category, value: (r) => r.category },
-              { key: "supplier", label: "Fornecedor", render: (r) => r.supplier ?? "-", value: (r) => r.supplier },
-              { key: "costKind", label: "Tipo", render: (r) => r.costKind === "fixo" ? "Fixo" : "Variável", value: (r) => r.costKind },
-              { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
-              { key: "date", label: "Data", render: (r) => r.date ?? "-", value: (r) => r.date },
-              { key: "status", label: "Status", render: (r) => <StatusBadge status={r.status} />, value: (r) => r.status },
-              { key: "invoice", label: "Nota", render: (r) => <InvoiceLinks fileHref={r.hasInvoiceFile ? `/api/finance/branch-items/${r.id}/invoice` : null} invoiceUrl={r.invoiceUrl} filename={r.invoiceFilename} />, value: (r) => r.invoiceFilename ?? r.invoiceUrl },
-            ]}
-            actions={(record) => (
-              <RowActions>
-                <IconButton title="Editar item" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
-                <IconButton title="Excluir item" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
-              </RowActions>
-            )}
-          />
         </div>
       </Section>
+      <BranchItemsPhaseGroup
+        phase="implementacao"
+        rows={visibleRows.filter((item) => item.phase !== "pre_operacional")}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onChangePhase={onChangePhase}
+      />
+      <BranchItemsPhaseGroup
+        phase="pre_operacional"
+        rows={visibleRows.filter((item) => item.phase === "pre_operacional")}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onChangePhase={onChangePhase}
+      />
     </div>
   );
 }
@@ -1611,33 +2708,65 @@ function FiliaisTab({
 function MatriculasTab({
   rows,
   catalog,
+  month,
+  matriculasVisao,
+  onChangeMatriculasVisao,
   onAdd,
+  onEdit,
   onDelete,
 }: {
   rows: FinanceEnrollment[];
   catalog: FinanceCatalog;
+  month: string;
+  matriculasVisao: "mes" | "todos";
+  onChangeMatriculasVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
+  onEdit: (record: FinanceEnrollment) => void;
   onDelete: (record: FinanceEnrollment) => void;
 }) {
   const [amount, setAmount] = useState(3000);
   const [installments, setInstallments] = useState(4);
+  const [brandId, setBrandId] = useState<number | null>(null);
   const parts = splitInstallmentsClient(amount, installments);
-  const rate = catalog.installmentRates.find((item) => item.installments === installments)?.ratePct ?? 0;
+  const rate = catalog.installmentRates.find((item) => item.installments === installments && item.brandId === brandId)?.ratePct ?? 0;
   return (
     <div className="space-y-5">
       <Section>
         <SectionHeader title="Simulador inteligente" subtitle="Parcelas, taxas de cartão, receita líquida e projeção mensal." action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Cadastrar matrícula</button>} />
         <div className="grid gap-5 p-5 lg:grid-cols-[320px_1fr]">
           <div className="grid gap-3">
-            <DecimalInput label="Valor do Curso" name="simAmount" defaultValue={amount} />
+            <Field label="Valor do Curso">
+              <input
+                defaultValue={amount}
+                onChange={(event) => setAmount(parseDecimal(event.target.value))}
+                type="text"
+                inputMode="decimal"
+                className={inputClass}
+              />
+            </Field>
+            <Field label="Bandeira do Cartão">
+              <select
+                value={brandId ?? ""}
+                onChange={(event) => setBrandId(event.target.value ? Number(event.target.value) : null)}
+                className={inputClass}
+              >
+                <option value="">Padrão (sem bandeira)</option>
+                {catalog.cardBrands.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </Field>
             <input type="range" min={1} max={12} value={installments} onChange={(event) => setInstallments(Number(event.target.value))} />
             <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
               <span>{installments} parcelas</span>
               <span>Taxa {percent(rate)}</span>
             </div>
-            <button type="button" onClick={() => setAmount(amount + 500)} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
-              Simular + R$ 500
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => setAmount((value) => Math.max(0, value - 500))} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
+                − R$ 500
+              </button>
+              <button type="button" onClick={() => setAmount((value) => value + 500)} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
+                + R$ 500
+              </button>
+            </div>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             {parts.map((part, index) => (
@@ -1650,8 +2779,9 @@ function MatriculasTab({
           </div>
         </div>
       </Section>
+      <VisaoToggle visao={matriculasVisao} month={month} onChange={onChangeMatriculasVisao} itemsLabel="Lista" />
       <Section>
-        <SectionHeader title="Matrículas Parceladas" />
+        <SectionHeader title="Matrículas" />
         <div className="p-5">
           <SmartTable
             rows={rows}
@@ -1661,11 +2791,18 @@ function MatriculasTab({
               { key: "amount", label: "Valor", render: (r) => money(r.totalAmount), value: (r) => r.totalAmount },
               { key: "installments", label: "Parcelas", render: (r) => `${r.installments}x`, value: (r) => r.installments },
               { key: "payment", label: "Pagamento", render: (r) => r.paymentMethodName ?? "-", value: (r) => r.paymentMethodName },
+              { key: "brand", label: "Bandeira", render: (r) => r.cardBrandName ?? "-", value: (r) => r.cardBrandName },
               { key: "first", label: "Mês inicial", render: (r) => r.firstMonth, value: (r) => r.firstMonth },
               { key: "seller", label: "Vendedor", render: (r) => r.sellerName ?? "-", value: (r) => r.sellerName },
+              { key: "commissionPct", label: "Comissão", render: (r) => r.sellerName ? percent(r.commissionPct) : "-", value: (r) => r.commissionPct },
               { key: "net", label: "Receita líquida", render: (r) => money(r.netTotal), value: (r) => r.netTotal },
             ]}
-            actions={(record) => <IconButton title="Excluir matrícula" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>}
+            actions={(record) => (
+              <RowActions>
+                <IconButton title="Editar matrícula" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
+                <IconButton title="Excluir matrícula" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
+              </RowActions>
+            )}
           />
         </div>
       </Section>
@@ -1676,17 +2813,25 @@ function MatriculasTab({
 function ComissoesTab({
   rows,
   panel,
+  overview,
   month,
+  comissoesVisao,
+  onChangeComissoesVisao,
   onAdd,
   onDelete,
   onStatus,
+  onToggleRealCommission,
 }: {
   rows: FinanceCommission[];
   panel: FinanceCommissionPanel;
+  overview: CommissionsOverview;
   month: string;
+  comissoesVisao: "mes" | "todos";
+  onChangeComissoesVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
   onDelete: (record: FinanceCommission) => void;
   onStatus: (id: number, status: "pago" | "pendente") => Promise<void>;
+  onToggleRealCommission: (paymentId: number, status: CommissionStatus) => Promise<void>;
 }) {
   return (
     <div className="space-y-5">
@@ -1699,6 +2844,72 @@ function ComissoesTab({
           <Plus size={16} /> Nova comissão
         </button>
       </div>
+      <VisaoToggle visao={comissoesVisao} month={month} onChange={onChangeComissoesVisao} itemsLabel="Lista" />
+
+      <div className="grid gap-3 sm:grid-cols-3">
+        <KpiMini label="Comissões Geradas (receitas)" value={money(overview.totals.realGenerated)} />
+        <KpiMini label="Comissões Pagas (receitas)" value={money(overview.totals.realPaid)} />
+        <KpiMini label="Projetado (saldo em aberto)" value={money(overview.totals.projected)} />
+      </div>
+
+      <Section>
+        <SectionHeader title="Comissões Reais (Pagamentos)" subtitle="Uma linha por pagamento avulso já registrado numa receita." />
+        <div className="p-5">
+          <SmartTable
+            rows={overview.real}
+            columns={[
+              { key: "date", label: "Data", render: (r) => dateLabel(r.date), value: (r) => r.date },
+              { key: "seller", label: "Vendedor", render: (r) => r.sellerName, value: (r) => r.sellerName },
+              { key: "revenue", label: "Receita", render: (r) => r.revenueDescription, value: (r) => r.revenueDescription },
+              { key: "lead", label: "Lead", render: (r) => r.leadName ?? "-", value: (r) => r.leadName },
+              { key: "sale", label: "Valor da Venda", render: (r) => money(r.saleAmount), value: (r) => r.saleAmount },
+              { key: "payment", label: "Valor do Pagamento", render: (r) => money(r.paymentAmount), value: (r) => r.paymentAmount },
+              { key: "percent", label: "%", render: (r) => percent(r.commissionPct), value: (r) => r.commissionPct },
+              { key: "commission", label: "Comissão", render: (r) => money(r.commissionAmount), value: (r) => r.commissionAmount },
+              {
+                key: "status",
+                label: "Status",
+                render: (r) => <StatusBadge status={r.status === "paga" ? "pago" : "pendente"} label={r.status === "paga" ? "Comissão paga" : "Comissão disponível"} />,
+                value: (r) => r.status,
+              },
+            ]}
+            actions={(record) => (
+              <RowActions>
+                <IconButton
+                  title={record.status === "paga" ? "Marcar como disponível" : "Marcar como paga"}
+                  onClick={() => onToggleRealCommission(record.paymentId, record.status === "paga" ? "disponivel" : "paga")}
+                >
+                  <CheckCircle2 size={15} />
+                </IconButton>
+              </RowActions>
+            )}
+          />
+        </div>
+      </Section>
+
+      <Section>
+        <SectionHeader title="Comissões Projetadas (Aguardando Pagamento)" subtitle="Calculado a partir do saldo ainda não pago pelo cliente — nunca é liberado antecipadamente." />
+        <div className="p-5">
+          <SmartTable
+            rows={overview.projected}
+            columns={[
+              { key: "seller", label: "Vendedor", render: (r) => r.sellerName, value: (r) => r.sellerName },
+              { key: "revenue", label: "Receita", render: (r) => r.revenueDescription, value: (r) => r.revenueDescription },
+              { key: "lead", label: "Lead", render: (r) => r.leadName ?? "-", value: (r) => r.leadName },
+              { key: "sale", label: "Valor da Venda", render: (r) => money(r.saleAmount), value: (r) => r.saleAmount },
+              { key: "balance", label: "Saldo em Aberto", render: (r) => money(r.balanceRemaining), value: (r) => r.balanceRemaining },
+              { key: "percent", label: "%", render: (r) => percent(r.commissionPct), value: (r) => r.commissionPct },
+              { key: "commission", label: "Comissão Projetada", render: (r) => money(r.projectedCommissionAmount), value: (r) => r.projectedCommissionAmount },
+              {
+                key: "status",
+                label: "Status",
+                render: () => <StatusBadge status="pendente" label="Aguardando pagamento do cliente" />,
+                value: () => "aguardando_pagamento",
+              },
+            ]}
+          />
+        </div>
+      </Section>
 
       {panel.sellers.map((seller) => {
         const sellerRows = rows.filter((row) => row.sellerId === seller.sellerId);
@@ -1784,6 +2995,22 @@ function TrimestralTab({ summary, month, filters }: { summary: FinanceDashboardS
   );
 }
 
+/** Monta a grade completa (1x-12x) para "Padrão" + cada bandeira ativa, preenchendo com 0 onde ainda não existe taxa cadastrada. */
+function buildInstallmentRateRows(catalog: FinanceCatalog): FinanceInstallmentRate[] {
+  const tiers: Array<{ brandId: number | null; brandName: string | null }> = [
+    { brandId: null, brandName: null },
+    ...catalog.cardBrands.filter((brand) => brand.active).map((brand) => ({ brandId: brand.id, brandName: brand.name })),
+  ];
+  const rows: FinanceInstallmentRate[] = [];
+  for (const tier of tiers) {
+    for (let n = 1; n <= 12; n += 1) {
+      const existing = catalog.installmentRates.find((item) => item.installments === n && item.brandId === tier.brandId);
+      rows.push(existing ?? { installments: n, brandId: tier.brandId, brandName: tier.brandName, ratePct: 0 });
+    }
+  }
+  return rows;
+}
+
 function ConfiguracoesTab({
   catalog,
   onSaved,
@@ -1793,13 +3020,65 @@ function ConfiguracoesTab({
   onSaved: () => void;
   apiJson: (endpoint: string, method: "POST" | "PATCH" | "DELETE", body?: Record<string, unknown>) => Promise<{ id?: number; ok?: boolean }>;
 }) {
-  const [rates, setRates] = useState(() => catalog.installmentRates.filter((item) => item.installments <= 12));
+  const [rates, setRates] = useState(() => buildInstallmentRateRows(catalog));
   const [initialBalance, setInitialBalance] = useState(catalog.initialBalance);
+  const [boletoFee, setBoletoFee] = useState(catalog.boletoFee);
+
+  // Bandeira nova cadastrada: reconstrói a grade pra ela aparecer sem precisar recarregar a página.
+  useEffect(() => {
+    setRates(buildInstallmentRateRows(catalog));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalog.cardBrands.length]);
+
+  function updateRate(brandId: number | null, installments: number, value: string) {
+    setRates((current) =>
+      current.map((item) =>
+        item.installments === installments && item.brandId === brandId
+          ? { ...item, ratePct: parseDecimal(value) }
+          : item
+      )
+    );
+  }
+
+  const rateTiers = [
+    { brandId: null as number | null, label: "Padrão (sem bandeira)" },
+    ...catalog.cardBrands.filter((brand) => brand.active).map((brand) => ({ brandId: brand.id, label: brand.name })),
+  ];
+  const [selectedTierId, setSelectedTierId] = useState<number | null>(null);
+  const selectedTier = rateTiers.find((tier) => tier.brandId === selectedTierId) ?? rateTiers[0];
+
+  const [addingBrand, setAddingBrand] = useState(false);
+  const [newBrandName, setNewBrandName] = useState("");
+  const [savingBrand, setSavingBrand] = useState(false);
+  const [brandError, setBrandError] = useState<string | null>(null);
+
+  async function createBrand() {
+    const name = newBrandName.trim();
+    if (!name) return;
+    setSavingBrand(true);
+    setBrandError(null);
+    try {
+      const result = await apiJson("/api/finance/catalog/card-brands", "POST", { name });
+      if (result.id) setSelectedTierId(result.id);
+      setNewBrandName("");
+      setAddingBrand(false);
+      onSaved();
+    } catch (error) {
+      setBrandError(error instanceof Error ? error.message : "Falha ao criar bandeira.");
+    } finally {
+      setSavingBrand(false);
+    }
+  }
 
   async function submitCatalog(event: FormEvent<HTMLFormElement>, entity: string) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const body = Object.fromEntries(form.entries());
+    const body: Record<string, unknown> = {};
+    for (const [key, raw] of form.entries()) {
+      const value = String(raw).trim();
+      if (!value) continue; // campo em branco: deixa o banco usar o valor padrão da coluna
+      body[key] = CATALOG_DECIMAL_FIELDS.has(key) ? parseDecimal(value) : value;
+    }
     await apiJson(`/api/finance/catalog/${entity}`, "POST", body);
     event.currentTarget.reset();
     onSaved();
@@ -1812,6 +3091,11 @@ function ConfiguracoesTab({
 
   async function saveInitialBalance() {
     await apiJson("/api/finance/settings", "PATCH", { initialBalance });
+    onSaved();
+  }
+
+  async function saveBoletoFee() {
+    await apiJson("/api/finance/settings", "PATCH", { boletoFee });
     onSaved();
   }
 
@@ -1836,19 +3120,79 @@ function ConfiguracoesTab({
       </Section>
 
       <Section>
-        <SectionHeader title="Taxas das Parcelas" action={<button type="button" onClick={saveRates} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white"><SlidersHorizontal size={16} />Salvar taxas</button>} />
-        <div className="grid gap-3 p-5 sm:grid-cols-3 xl:grid-cols-4">
-          {rates.map((rate, index) => (
-            <Field key={rate.installments} label={`${rate.installments}x`}>
+        <SectionHeader
+          title="Taxas das Parcelas"
+          subtitle="Uma grade de 1x a 12x por bandeira — a bandeira escolhida na matrícula define qual taxa é aplicada."
+          action={<button type="button" onClick={saveRates} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white"><SlidersHorizontal size={16} />Salvar taxas</button>}
+        />
+        <div className="p-5">
+          <div className="mb-5 flex items-end gap-2 sm:max-w-md">
+            <div className="flex-1">
+              <Field label="Bandeira">
+                <select
+                  value={selectedTier.brandId ?? ""}
+                  onChange={(event) => setSelectedTierId(event.target.value ? Number(event.target.value) : null)}
+                  className={inputClass}
+                >
+                  {rateTiers.map((tier) => (
+                    <option key={tier.brandId ?? "default"} value={tier.brandId ?? ""}>{tier.label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <button
+              type="button"
+              title="Nova bandeira"
+              onClick={() => setAddingBrand((value) => !value)}
+              className={cn(
+                "flex size-10 flex-none items-center justify-center rounded-lg border transition",
+                addingBrand ? "border-cyan-300 bg-cyan-50 text-cyan-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              )}
+            >
+              <Plus size={16} />
+            </button>
+          </div>
+          {addingBrand ? (
+            <div className="mb-5 flex gap-2 sm:max-w-md">
               <input
-                type="text"
-                inputMode="decimal"
-                value={rate.ratePct}
-                onChange={(event) => setRates((current) => current.map((item, idx) => idx === index ? { ...item, ratePct: parseDecimal(event.target.value) } : item))}
+                autoFocus
+                value={newBrandName}
+                onChange={(event) => setNewBrandName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    createBrand();
+                  }
+                }}
+                placeholder="Nome da nova bandeira"
                 className={inputClass}
               />
-            </Field>
-          ))}
+              <button
+                type="button"
+                onClick={createBrand}
+                disabled={savingBrand || !newBrandName.trim()}
+                className="h-10 flex-none rounded-lg bg-slate-950 px-4 text-sm font-black text-white disabled:opacity-50"
+              >
+                {savingBrand ? "Criando..." : "Criar"}
+              </button>
+            </div>
+          ) : null}
+          {brandError ? <p className="mb-3 text-xs font-bold text-rose-600">{brandError}</p> : null}
+          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4">
+            {rates
+              .filter((rate) => rate.brandId === selectedTier.brandId)
+              .map((rate) => (
+                <Field key={`${selectedTier.brandId ?? "default"}-${rate.installments}`} label={`${rate.installments}x`}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    defaultValue={rate.ratePct}
+                    onChange={(event) => updateRate(selectedTier.brandId, rate.installments, event.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+              ))}
+          </div>
         </div>
       </Section>
 
@@ -1886,7 +3230,16 @@ function ConfiguracoesTab({
         <SectionHeader title="Saldo em Caixa" action={<button type="button" onClick={saveInitialBalance} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white">Salvar</button>} />
         <div className="p-5">
           <Field label="Saldo inicial">
-            <input value={initialBalance} onChange={(event) => setInitialBalance(parseDecimal(event.target.value))} type="text" inputMode="decimal" className={inputClass} />
+            <input defaultValue={initialBalance} onChange={(event) => setInitialBalance(parseDecimal(event.target.value))} type="text" inputMode="decimal" className={inputClass} />
+          </Field>
+        </div>
+      </Section>
+
+      <Section>
+        <SectionHeader title="Taxa de Boleto" subtitle="Aplicada automaticamente a cada pagamento avulso em boleto (Receitas)." action={<button type="button" onClick={saveBoletoFee} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white">Salvar</button>} />
+        <div className="p-5">
+          <Field label="Taxa de emissão do boleto (R$)">
+            <input defaultValue={boletoFee} onChange={(event) => setBoletoFee(parseDecimal(event.target.value))} type="text" inputMode="decimal" className={inputClass} />
           </Field>
         </div>
       </Section>
@@ -1932,6 +3285,7 @@ function FinanceModal({
   branches,
   sellers,
   paymentMethods,
+  onCreateCategory,
 }: {
   modal: NonNullable<ModalState>;
   catalog: FinanceCatalog;
@@ -1946,13 +3300,14 @@ function FinanceModal({
   branches: FinanceCatalog["branches"];
   sellers: FinanceCatalog["sellers"];
   paymentMethods: FinanceCatalog["paymentMethods"];
+  onCreateCategory: (kind: FinanceCategoryKind, name: string) => Promise<number | undefined>;
 }) {
   const titleByType: Record<NonNullable<ModalState>["type"], string> = {
     revenue: "Receita",
     fixed: "Despesa Fixa",
     variable: "Despesa Variável",
     branch: "Item da Unidade",
-    enrollment: "Matrícula Parcelada",
+    enrollment: "Matrícula",
     commission: "Comissão",
   };
   const title = `${modal.mode === "edit" ? "Editar" : "Adicionar"} ${titleByType[modal.type]}`;
@@ -1968,11 +3323,11 @@ function FinanceModal({
         </div>
         <form onSubmit={onSubmit} className="overflow-y-auto p-5">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {modal.type === "revenue" ? <RevenueForm record={modal.record} categories={revenueCategories} courses={courses} branches={branches} sellers={sellers} paymentMethods={paymentMethods} /> : null}
-            {modal.type === "fixed" ? <FixedForm record={modal.record} categories={fixedCategories} month={month} /> : null}
-            {modal.type === "variable" ? <VariableForm record={modal.record} categories={variableCategories} branches={branches} /> : null}
+            {modal.type === "revenue" ? <RevenueForm record={modal.record} categories={revenueCategories} courses={courses} branches={branches} sellers={sellers} paymentMethods={paymentMethods} onCreateCategory={onCreateCategory} /> : null}
+            {modal.type === "fixed" ? <FixedForm record={modal.record} categories={fixedCategories} month={month} onCreateCategory={onCreateCategory} /> : null}
+            {modal.type === "variable" ? <VariableForm record={modal.record} categories={variableCategories} branches={branches} month={month} onCreateCategory={onCreateCategory} /> : null}
             {modal.type === "branch" ? <BranchForm record={modal.record} branches={branches} /> : null}
-            {modal.type === "enrollment" ? <EnrollmentForm catalog={catalog} month={month} /> : null}
+            {modal.type === "enrollment" ? <EnrollmentForm catalog={catalog} month={month} record={modal.record} /> : null}
             {modal.type === "commission" ? <CommissionForm catalog={catalog} /> : null}
           </div>
           <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 pt-4">
@@ -1987,7 +3342,7 @@ function FinanceModal({
   );
 }
 
-function Options({
+export function Options({
   items,
   emptyLabel = "Selecione",
 }: {
@@ -2002,6 +3357,187 @@ function Options({
   );
 }
 
+function CategorySelectInput({
+  label,
+  name,
+  kind,
+  categories,
+  defaultValue,
+  onCreateCategory,
+}: {
+  label: string;
+  name: string;
+  kind: FinanceCategoryKind;
+  categories: FinanceCatalog["categories"];
+  defaultValue?: number | null;
+  onCreateCategory: (kind: FinanceCategoryKind, name: string) => Promise<number | undefined>;
+}) {
+  const [selected, setSelected] = useState(defaultValue ? String(defaultValue) : "");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleCreate() {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const id = await onCreateCategory(kind, trimmed);
+      if (id) setSelected(String(id));
+      setNewName("");
+      setCreating(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Falha ao criar categoria.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Field label={label}>
+      <div className="flex gap-2">
+        <select name={name} value={selected} onChange={(event) => setSelected(event.target.value)} className={inputClass}>
+          <Options items={categories} />
+        </select>
+        <button
+          type="button"
+          title="Nova categoria"
+          onClick={() => setCreating((value) => !value)}
+          className={cn(
+            "flex size-10 flex-none items-center justify-center rounded-lg border transition hover:bg-slate-50",
+            creating ? "border-cyan-300 bg-cyan-50 text-cyan-700" : "border-slate-200 bg-white text-slate-600"
+          )}
+        >
+          <Plus size={16} />
+        </button>
+      </div>
+      {creating ? (
+        <div className="mt-2 flex gap-2">
+          <input
+            autoFocus
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                handleCreate();
+              }
+            }}
+            placeholder="Nome da nova categoria"
+            className={inputClass}
+          />
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={saving || !newName.trim()}
+            className="h-10 flex-none rounded-lg bg-slate-950 px-3 text-xs font-black text-white disabled:opacity-50"
+          >
+            {saving ? "Criando..." : "Criar"}
+          </button>
+        </div>
+      ) : null}
+      {error ? <p className="mt-1 text-xs font-bold text-rose-600">{error}</p> : null}
+    </Field>
+  );
+}
+
+interface LeadSearchResult {
+  id: number;
+  nome: string | null;
+  telefone: string | null;
+  treinamento: string | null;
+  criadoEm: string;
+}
+
+/** Autocomplete de lead (nome/telefone/whatsapp) reaproveitando /api/inscricoes/search — mesmo padrão do MergeLeadsModal. Vínculo opcional: sem seleção, a receita segue funcionando normalmente. */
+function LeadAutocompleteField({
+  defaultLeadId,
+  defaultLeadName,
+  defaultLeadPhone,
+}: {
+  defaultLeadId?: number | null;
+  defaultLeadName?: string | null;
+  defaultLeadPhone?: string | null;
+}) {
+  const [selected, setSelected] = useState<{ id: number; nome: string | null; telefone: string | null } | null>(
+    defaultLeadId ? { id: defaultLeadId, nome: defaultLeadName ?? null, telefone: defaultLeadPhone ?? null } : null
+  );
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<LeadSearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function handleSearch(value: string) {
+    setQuery(value);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    if (!value.trim()) {
+      setResults([]);
+      return;
+    }
+    timeoutRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(`/api/inscricoes/search?q=${encodeURIComponent(value)}&limit=8`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { results?: LeadSearchResult[] };
+        setResults(data.results ?? []);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+  }
+
+  return (
+    <Field label="Lead (opcional)">
+      <input type="hidden" name="leadInscricaoId" value={selected?.id ?? ""} />
+      <input type="hidden" name="leadName" value={selected?.nome ?? ""} />
+      <input type="hidden" name="leadPhone" value={selected?.telefone ?? ""} />
+      {selected ? (
+        <div className="flex h-10 items-center justify-between rounded-lg border border-cyan-200 bg-cyan-50 px-3 text-sm">
+          <span className="truncate font-bold text-cyan-900">
+            {selected.nome ?? "Sem nome"} <span className="font-normal text-cyan-700">{selected.telefone ?? ""}</span>
+          </span>
+          <button type="button" onClick={() => setSelected(null)} className="ml-2 text-cyan-700 hover:text-cyan-900" aria-label="Remover lead selecionado">
+            <X size={15} />
+          </button>
+        </div>
+      ) : (
+        <div className="relative">
+          <input
+            type="text"
+            value={query}
+            onChange={(event) => handleSearch(event.target.value)}
+            placeholder="Nome, telefone, WhatsApp…"
+            className={inputClass}
+          />
+          {searching ? <p className="mt-1 text-xs text-slate-400">Buscando…</p> : null}
+          {results.length > 0 ? (
+            <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+              {results.map((result) => (
+                <button
+                  key={result.id}
+                  type="button"
+                  onClick={() => {
+                    setSelected({ id: result.id, nome: result.nome, telefone: result.telefone });
+                    setQuery("");
+                    setResults([]);
+                  }}
+                  className="flex w-full flex-col items-start gap-0.5 border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50"
+                >
+                  <span className="text-xs font-bold text-slate-900">{result.nome ?? "Sem nome"}</span>
+                  <span className="text-[11px] text-slate-400">{result.telefone ?? "—"}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+    </Field>
+  );
+}
+
 function RevenueForm({
   record,
   categories,
@@ -2009,6 +3545,7 @@ function RevenueForm({
   branches,
   sellers,
   paymentMethods,
+  onCreateCategory,
 }: {
   record?: FinanceRevenue;
   categories: FinanceCatalog["categories"];
@@ -2016,37 +3553,112 @@ function RevenueForm({
   branches: FinanceCatalog["branches"];
   sellers: FinanceCatalog["sellers"];
   paymentMethods: FinanceCatalog["paymentMethods"];
+  onCreateCategory: (kind: FinanceCategoryKind, name: string) => Promise<number | undefined>;
 }) {
+  // Registro novo (sem record) sempre entra no fluxo "avulso" (pagamentos
+  // parciais, status automático); registros "legacy" (matrícula ou
+  // lançamento manual anterior a esta feature) mantêm o formulário antigo,
+  // intocado, para não alterar o comportamento de dados já existentes.
+  const isLegacy = record?.revenueMode === "legacy";
+  const [commissionPct, setCommissionPct] = useState<string>(String(record?.commissionPct ?? 0));
+
+  if (isLegacy) {
+    return (
+      <>
+        <TextInput label="Data" name="date" type="date" required defaultValue={toInputDate(record?.date) || new Date().toISOString().slice(0, 10)} />
+        <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
+        <CategorySelectInput label="Categoria" name="categoryId" kind="receita" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
+        <TextInput label="Origem" name="origin" defaultValue={record?.origin} />
+        <TextInput label="Aluno" name="student" defaultValue={record?.student} />
+        <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={courses} emptyLabel="Sem curso" /></SelectInput>
+        <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
+        <SelectInput label="Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId}><Options items={paymentMethods} emptyLabel="Sem forma" /></SelectInput>
+        <SelectInput label="Vendedor" name="sellerId" defaultValue={record?.sellerId}><Options items={sellers} emptyLabel="Sem vendedor" /></SelectInput>
+        <DecimalInput label="Valor" name="amount" required defaultValue={record?.amount} />
+        <DecimalInput label="Taxa" name="feeAmount" defaultValue={record?.feeAmount ?? 0} />
+        <SelectInput label="Status" name="status" defaultValue={record?.status ?? "previsto"}>
+          <option value="previsto">Previsto</option>
+          <option value="recebido">Recebido</option>
+          <option value="atrasado">Atrasado</option>
+          <option value="cancelado">Cancelado</option>
+        </SelectInput>
+        <InvoiceFileInput label="Anexar comprovante" accept="image/*,.pdf" currentFilename={record?.invoiceFilename} />
+        <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" defaultValue={record?.notes} /></div>
+      </>
+    );
+  }
+
   return (
     <>
-      <TextInput label="Data" name="date" type="date" required defaultValue={toInputDate(record?.date) || new Date().toISOString().slice(0, 10)} />
-      <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
-      <SelectInput label="Categoria" name="categoryId" defaultValue={record?.categoryId}><Options items={categories} /></SelectInput>
+      <div className="md:col-span-2 xl:col-span-3 rounded-lg border border-cyan-100 bg-cyan-50 px-4 py-3 text-sm text-cyan-950">
+        <p className="font-black">Este formulário cria uma receita avulsa.</p>
+        <p className="mt-1">Para registrar uma matrícula, use o formulário de matrícula. Ele cria a venda e suas parcelas automaticamente quando a forma de pagamento permitir parcelamento.</p>
+      </div>
+      <TextInput label="Data da venda" name="date" type="date" required defaultValue={toInputDate(record?.date) || new Date().toISOString().slice(0, 10)} />
+      <TextInput label="Nome da receita" name="description" required defaultValue={record?.description} />
+      <CategorySelectInput label="Categoria" name="categoryId" kind="receita" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
       <TextInput label="Origem" name="origin" defaultValue={record?.origin} />
-      <TextInput label="Aluno" name="student" defaultValue={record?.student} />
+      <TextInput label="Vencimento" name="dueDate" type="date" defaultValue={toInputDate(record?.dueDate)} />
       <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={courses} emptyLabel="Sem curso" /></SelectInput>
       <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
-      <SelectInput label="Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId}><Options items={paymentMethods} emptyLabel="Sem forma" /></SelectInput>
-      <SelectInput label="Vendedor" name="sellerId" defaultValue={record?.sellerId}><Options items={sellers} emptyLabel="Sem vendedor" /></SelectInput>
-      <DecimalInput label="Valor" name="amount" required defaultValue={record?.amount} />
-      <DecimalInput label="Taxa" name="feeAmount" defaultValue={record?.feeAmount ?? 0} />
-      <SelectInput label="Status" name="status" defaultValue={record?.status ?? "previsto"}>
-        <option value="previsto">Previsto</option>
-        <option value="recebido">Recebido</option>
-        <option value="atrasado">Atrasado</option>
-        <option value="cancelado">Cancelado</option>
+      <SelectInput
+        label="Vendedor"
+        name="sellerId"
+        defaultValue={record?.sellerId}
+        onChange={(value) => {
+          const seller = sellers.find((item) => item.id === Number(value));
+          if (seller) setCommissionPct(String(seller.defaultPct));
+        }}
+      >
+        <Options items={sellers} emptyLabel="Sem vendedor" />
       </SelectInput>
+      <Field label="Comissão do vendedor (%)">
+        <input
+          name="commissionPct"
+          type="text"
+          inputMode="decimal"
+          value={commissionPct}
+          onChange={(event) => setCommissionPct(event.target.value)}
+          className={inputClass}
+        />
+      </Field>
+      <DecimalInput label="Valor fechado da venda" name="amount" required defaultValue={record?.amount} />
+      <LeadAutocompleteField defaultLeadId={record?.leadInscricaoId} defaultLeadName={record?.leadName} defaultLeadPhone={record?.leadPhone} />
+      <Field label="Status">
+        <div className="flex h-10 items-center gap-3">
+          <StatusBadge status={record?.status ?? "previsto"} label={AVULSO_STATUS_LABELS[record?.status ?? "previsto"]} />
+          {record ? (
+            <label className="inline-flex items-center gap-2 text-xs font-bold text-rose-700">
+              <input type="checkbox" name="cancelReceita" defaultChecked={record.status === "cancelado"} className="size-4 accent-rose-600" />
+              Cancelar venda
+            </label>
+          ) : (
+            <span className="text-xs text-slate-400">Definido automaticamente pelos pagamentos.</span>
+          )}
+        </div>
+      </Field>
+      <InvoiceFileInput label="Anexar comprovante" accept="image/*,.pdf" currentFilename={record?.invoiceFilename} />
       <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" defaultValue={record?.notes} /></div>
     </>
   );
 }
 
-function FixedForm({ record, categories, month }: { record?: FinanceFixedExpense; categories: FinanceCatalog["categories"]; month: string }) {
+function FixedForm({
+  record,
+  categories,
+  month,
+  onCreateCategory,
+}: {
+  record?: FinanceFixedExpense;
+  categories: FinanceCatalog["categories"];
+  month: string;
+  onCreateCategory: (kind: FinanceCategoryKind, name: string) => Promise<number | undefined>;
+}) {
   return (
     <>
       <TextInput label="Mês" name="monthDisplay" type="month" defaultValue={record?.month ?? month} />
       <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
-      <SelectInput label="Categoria" name="categoryId" defaultValue={record?.categoryId}><Options items={categories} /></SelectInput>
+      <CategorySelectInput label="Categoria" name="categoryId" kind="gasto_fixo" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
       <TextInput label="Vencimento" name="dueDate" type="date" defaultValue={toInputDate(record?.dueDate)} />
       <DecimalInput label="Salário / Valor" name="amount" required defaultValue={record?.amount} />
       <DecimalInput label="Benefícios" name="benefitsAmount" defaultValue={record?.benefitsAmount} />
@@ -2058,17 +3670,32 @@ function FixedForm({ record, categories, month }: { record?: FinanceFixedExpense
       <TextInput label="Pago em" name="paidAt" type="date" defaultValue={toInputDate(record?.paidAt)} />
       <TextInput label="Link da Nota Fiscal" name="invoiceUrl" defaultValue={record?.invoiceUrl} />
       <InvoiceFileInput currentFilename={record?.invoiceFilename} />
+      <div className="md:col-span-2 xl:col-span-3">
+        <LockCheckbox defaultChecked={record?.recurringLocked ?? false} />
+      </div>
       <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" defaultValue={record?.notes} /></div>
     </>
   );
 }
 
-function VariableForm({ record, categories, branches }: { record?: FinanceVariableExpense; categories: FinanceCatalog["categories"]; branches: FinanceCatalog["branches"] }) {
+function VariableForm({
+  record,
+  categories,
+  branches,
+  month,
+  onCreateCategory,
+}: {
+  record?: FinanceVariableExpense;
+  categories: FinanceCatalog["categories"];
+  branches: FinanceCatalog["branches"];
+  month: string;
+  onCreateCategory: (kind: FinanceCategoryKind, name: string) => Promise<number | undefined>;
+}) {
   return (
     <>
-      <TextInput label="Data" name="date" type="date" required defaultValue={toInputDate(record?.date) || new Date().toISOString().slice(0, 10)} />
+      <TextInput label="Data" name="date" type="date" required defaultValue={toInputDate(record?.date) || `${month}-01`} />
       <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
-      <SelectInput label="Categoria" name="categoryId" defaultValue={record?.categoryId}><Options items={categories} /></SelectInput>
+      <CategorySelectInput label="Categoria" name="categoryId" kind="gasto_variavel" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
       <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
       <DecimalInput label="Valor" name="amount" required defaultValue={record?.amount} />
       <TextInput label="Link da Nota Fiscal" name="invoiceUrl" defaultValue={record?.invoiceUrl} />
@@ -2092,9 +3719,9 @@ function BranchForm({ record, branches }: { record?: FinanceBranchItem; branches
         <option value="pago">Pago</option>
         <option value="atrasado">Atrasado</option>
       </SelectInput>
-      <SelectInput label="Tipo de custo" name="costKind" defaultValue={record?.costKind ?? "fixo"}>
-        <option value="fixo">Fixo</option>
-        <option value="variavel">Variável</option>
+      <SelectInput label="Fase" name="phase" defaultValue={record?.phase ?? "implementacao"}>
+        <option value="implementacao">Implementação</option>
+        <option value="pre_operacional">Pré-operacional</option>
       </SelectInput>
       <TextInput label="Link da Nota Fiscal" name="invoiceUrl" defaultValue={record?.invoiceUrl} />
       <InvoiceFileInput currentFilename={record?.invoiceFilename} />
@@ -2103,19 +3730,55 @@ function BranchForm({ record, branches }: { record?: FinanceBranchItem; branches
   );
 }
 
-function EnrollmentForm({ catalog, month }: { catalog: FinanceCatalog; month: string }) {
+function EnrollmentForm({ catalog, month, record }: { catalog: FinanceCatalog; month: string; record?: FinanceEnrollment }) {
+  const [paymentMethodId, setPaymentMethodId] = useState(record?.paymentMethodId ? String(record.paymentMethodId) : "");
+  const [sellerId, setSellerId] = useState(record?.sellerId ? String(record.sellerId) : "");
+  const initialSeller = catalog.sellers.find((item) => String(item.id) === sellerId);
+  const [commissionPct, setCommissionPct] = useState(String(record?.commissionPct ?? initialSeller?.defaultPct ?? 0));
+  const selectedPaymentMethod = catalog.paymentMethods.find((item) => String(item.id) === paymentMethodId);
+  const isInstallmentPayment = selectedPaymentMethod?.kind === "parcelado";
+
   return (
     <>
-      <TextInput label="Aluno" name="student" required />
-      <SelectInput label="Curso" name="courseId"><Options items={catalog.courses.filter((item) => item.active)} /></SelectInput>
-      <DecimalInput label="Valor do Curso" name="totalAmount" required defaultValue={3000} />
-      <TextInput label="Quantidade de Parcelas" name="installments" type="number" required defaultValue={4} />
-      <SelectInput label="Forma de Pagamento" name="paymentMethodId"><Options items={catalog.paymentMethods.filter((item) => item.active)} /></SelectInput>
-      <TextInput label="Mês Inicial" name="firstMonth" type="month" required defaultValue={month} />
-      <TextInput label="Data" name="saleDate" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} />
-      <SelectInput label="Vendedor" name="sellerId"><Options items={catalog.sellers.filter((item) => item.active)} /></SelectInput>
-      <SelectInput label="Unidade" name="branchId"><Options items={catalog.branches.filter((item) => item.active)} /></SelectInput>
-      <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" /></div>
+      <TextInput label="Aluno" name="student" required defaultValue={record?.student} />
+      <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={catalog.courses.filter((item) => item.active)} /></SelectInput>
+      <DecimalInput label="Valor do Curso" name="totalAmount" required defaultValue={record?.totalAmount ?? 3000} />
+      {isInstallmentPayment ? (
+        <TextInput label="Quantidade de Parcelas" name="installments" type="number" required defaultValue={record?.installments ?? 4} />
+      ) : (
+        <input type="hidden" name="installments" value="1" />
+      )}
+      <SelectInput label="Forma de Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId} onChange={setPaymentMethodId}><Options items={catalog.paymentMethods.filter((item) => item.active)} /></SelectInput>
+      {isInstallmentPayment ? <SelectInput label="Bandeira do Cartão" name="cardBrandId" defaultValue={record?.cardBrandId}><Options items={catalog.cardBrands.filter((item) => item.active)} emptyLabel="Padrão (sem bandeira)" /></SelectInput> : <input type="hidden" name="cardBrandId" value="" />}
+      {!paymentMethodId ? <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-slate-500">Escolha uma forma de pagamento para definir se haverá parcelas e taxa.</p> : null}
+      {paymentMethodId && !isInstallmentPayment ? <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-emerald-700">Pagamento à vista: 1x, sem taxa de parcelamento.</p> : null}
+      <TextInput label="Mês Inicial" name="firstMonth" type="month" required defaultValue={record?.firstMonth ?? month} />
+      <TextInput label="Data" name="saleDate" type="date" required defaultValue={toInputDate(record?.saleDate) || new Date().toISOString().slice(0, 10)} />
+      <SelectInput
+        label="Vendedor"
+        name="sellerId"
+        defaultValue={record?.sellerId}
+        onChange={(value) => {
+          setSellerId(value);
+          const seller = catalog.sellers.find((item) => String(item.id) === value);
+          setCommissionPct(String(seller?.defaultPct ?? 0));
+        }}
+      >
+        <Options items={catalog.sellers.filter((item) => item.active)} />
+      </SelectInput>
+      <Field label="Comissão do vendedor (%)">
+        <input
+          name="commissionPct"
+          type="text"
+          inputMode="decimal"
+          value={commissionPct}
+          onChange={(event) => setCommissionPct(event.target.value)}
+          disabled={!sellerId}
+          className={inputClass}
+        />
+      </Field>
+      <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={catalog.branches.filter((item) => item.active)} /></SelectInput>
+      <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" defaultValue={record?.notes} /></div>
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { getPool, autoMergeNewLeadByPhone } from "@/lib/db";
 import { ensureCommercialSchema } from "@/lib/commercial";
+import { normalizeMetaAdsAttributionPayload } from "@/lib/vozupTrafficAttribution";
 
 const NOTIFY_NUMBER = "5511988874277";
 const COMMERCIAL_SCHEMA = "dashboard";
@@ -70,15 +71,21 @@ export async function ingestVozupLead(
   payload: Record<string, unknown>,
   options: { notify: boolean }
 ): Promise<number | null> {
-  const telefone = String(payload.telefone || payload.whatsapp || payload.phone || "").trim();
-  const origemValor = String(payload.origem || "Voz UP").trim();
+  // Trava server-side: `fbclid` e fontes genericas (`ig`/`facebook`) nao
+  // provam compra de midia. Normalizar antes do INSERT tambem impede que o
+  // merge grave um falso Meta Ads como origem adicional.
+  const normalizedPayload = normalizeMetaAdsAttributionPayload(payload);
+  const telefone = String(
+    normalizedPayload.telefone || normalizedPayload.whatsapp || normalizedPayload.phone || ""
+  ).trim();
+  const origemValor = String(normalizedPayload.origem || "Voz UP").trim();
 
   let savedId: number | null = null;
   try {
     const pool = getPool();
     const result = await pool.query<{ id: number }>(
       "INSERT INTO inscricoes.inscricoes (payload) VALUES ($1) RETURNING id",
-      [JSON.stringify(payload)]
+      [JSON.stringify(normalizedPayload)]
     );
     savedId = result.rows[0]?.id ?? null;
   } catch (err) {
@@ -102,7 +109,7 @@ export async function ingestVozupLead(
   }
 
   if (savedId && options.notify) {
-    sendWhatsApp(buildNotifyMessage(payload)).catch((err) => {
+    sendWhatsApp(buildNotifyMessage(normalizedPayload)).catch((err) => {
       console.error("[vozupLeadIngest] Erro ao enviar WhatsApp:", err);
     });
   }

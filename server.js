@@ -113,3 +113,26 @@ if (cluster.isPrimary && process.env.FACEBOOK_LEAD_SYNC_ENABLED !== "false") {
   setInterval(triggerFacebookLeadSync, syncIntervalMs);
   setTimeout(triggerFacebookLeadSync, 20_000);
 }
+
+// Metricas de campanha (Meta Ads): estrutura (campanha/conjunto/anuncio/
+// criativo) + insights diarios por anuncio. Mesmo padrao de loopback dos
+// blocos acima; roda com intervalo maior porque a estrutura/insights nao
+// mudam a cada poucos minutos como um lead novo.
+if (cluster.isPrimary && process.env.META_ADS_SYNC_ENABLED !== "false") {
+  const metaAdsSyncIntervalMs = Number.parseInt(process.env.META_ADS_SYNC_INTERVAL_MS || "900000", 10);
+  const metaAdsSyncToken = process.env.DASHBOARD_TOKEN || "";
+  const metaAdsSyncUrl = `http://127.0.0.1:${port}/api/internal/meta-ads-sync`;
+
+  const triggerMetaAdsSync = () => {
+    if (!metaAdsSyncToken || !process.env.FACEBOOK_PAGE_ACCESS_TOKEN || !process.env.META_ADS_AD_ACCOUNT_ID) return;
+    fetch(metaAdsSyncUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${metaAdsSyncToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] meta ads sync trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerMetaAdsSync, metaAdsSyncIntervalMs);
+  setTimeout(triggerMetaAdsSync, 30_000);
+}

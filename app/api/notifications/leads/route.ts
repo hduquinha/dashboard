@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { assertAuthenticatedRequest } from "@/lib/auth";
 import { getPool } from "@/lib/db";
-import { describeLeadSource } from "@/lib/leadFields";
+import { describeLeadSource, isMetaOuGoogleAdsOrigem } from "@/lib/leadFields";
 import { parsePayload } from "@/lib/parsePayload";
 
 export const dynamic = "force-dynamic";
@@ -59,20 +59,23 @@ export async function GET(request: NextRequest) {
     );
 
     let latestId = afterId;
-    const leads: NewLeadNotificationItem[] = rows.map((row) => {
+    const leads: NewLeadNotificationItem[] = [];
+    for (const row of rows) {
       latestId = Math.max(latestId, row.id);
       const payload = (row.payload ?? {}) as Record<string, unknown>;
+      // Notificações restritas a leads de tráfego pago Meta/Google Ads.
+      if (!isMetaOuGoogleAdsOrigem(payload.origem as string | undefined)) continue;
       const parsed = parsePayload(payload);
       const source = describeLeadSource(payload);
       const criadoEm =
         row.criado_em instanceof Date ? row.criado_em.toISOString() : String(row.criado_em ?? "");
-      return {
+      leads.push({
         id: row.id,
         nome: typeof parsed.nome === "string" && parsed.nome.trim() ? parsed.nome.trim() : null,
         origem: source.formName ?? source.origem ?? source.paginaOrigem ?? source.fonte ?? null,
         criadoEm,
-      };
-    });
+      });
+    }
 
     return NextResponse.json({ latestId, leads });
   } catch (error) {

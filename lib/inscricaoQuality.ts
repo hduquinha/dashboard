@@ -107,6 +107,47 @@ const TECHNICAL_PAYLOAD_KEYS = new Set([
   "presenca_treinamento_id",
 ]);
 
+// Rotulos/metadados escolhidos pela equipe (nome de campanha, anuncio,
+// formulario, origem etc.) — nao sao conteudo digitado pelo participante,
+// entao nao devem ser varridos pela deteccao de "teste/aleatorio". Sem isso,
+// uma campanha real chamada "... TESTE DE CRIATIVO ..." (nome interno comum
+// em times de trafego pago) ou um timestamp que termina em "+0000" (bate no
+// padrao de teclado "00000") derrubavam leads legitimos do Facebook Lead Ads
+// para fora da Chegada de Leads.
+const LABEL_METADATA_KEYS = new Set([
+  "campaign_name",
+  "campaignname",
+  "campaign_source",
+  "campaignsource",
+  "ad_name",
+  "adname",
+  "adset_name",
+  "adsetname",
+  "form_name",
+  "formname",
+  "facebook_form_name",
+  "facebookformname",
+  "facebook_platform",
+  "facebookplatform",
+  "facebook_created_time",
+  "facebookcreatedtime",
+  "origem",
+  "treinamento_nome",
+  "treinamentonome",
+  "unidade_negocio",
+  "unidadenegocio",
+  "utm_campaign",
+  "utmcampaign",
+  "utm_source",
+  "utmsource",
+  "utm_medium",
+  "utmmedium",
+  "utm_term",
+  "utmterm",
+  "utm_content",
+  "utmcontent",
+]);
+
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "")
     .normalize("NFD")
@@ -257,13 +298,17 @@ function collectPayloadStrings(value: unknown, output: string[], depth = 0): voi
   if (value && typeof value === "object") {
     for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
       const normalizedKey = normalizeText(key);
+      const compactKey = compactText(key);
       if (
         normalizedKey.startsWith("_") ||
         normalizedKey.startsWith("dashboard_") ||
         normalizedKey.startsWith("presenca_") ||
         normalizedKey.startsWith("is_") ||
         normalizedKey.endsWith("_id") ||
-        TECHNICAL_PAYLOAD_KEYS.has(normalizedKey)
+        normalizedKey.endsWith("_time") ||
+        TECHNICAL_PAYLOAD_KEYS.has(normalizedKey) ||
+        LABEL_METADATA_KEYS.has(normalizedKey) ||
+        LABEL_METADATA_KEYS.has(compactKey)
       ) {
         continue;
       }
@@ -302,6 +347,11 @@ export function analyzeInscricaoQuality(inscricao: InscricaoItem): InscricaoQual
   const city = inscricao.cidade ?? readPayloadText(inscricao.payload, ["cidade", "city"]);
   const profession =
     inscricao.profissao ?? readPayloadText(inscricao.payload, ["profissao", "profissao_area", "occupation", "job"]);
+  // Formularios nativos do Facebook Lead Ads sao configurados pela propria
+  // equipe de trafego e, nesses formularios, normalmente nao ha pergunta de
+  // cidade/profissao — cobrar isso aqui gera falso positivo em todo lead
+  // desse canal, nao um sinal real de cadastro incompleto.
+  const isFacebookLeadAd = Boolean(readPayloadText(inscricao.payload, ["facebook_lead_id"]));
 
   if (!name || !phone) {
     addIssue(
@@ -311,7 +361,7 @@ export function analyzeInscricaoQuality(inscricao: InscricaoItem): InscricaoQual
       "Nome ou telefone ausente, que sao campos essenciais para identificar o participante.",
       "high"
     );
-  } else if (!city && !profession) {
+  } else if (!city && !profession && !isFacebookLeadAd) {
     addIssue(
       issues,
       "dados-incompletos",

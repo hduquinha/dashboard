@@ -6,9 +6,13 @@ import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import {
   currentMonth,
+  getAllTimeExpenseTotals,
   getCommissionPanel,
+  getCommissionsOverview,
   getFinanceCatalog,
   getFinanceDashboardSummary,
+  listAllFixedExpenses,
+  listAllMonthlyTotals,
   listBranchItems,
   listCommissions,
   listEnrollments,
@@ -61,23 +65,60 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
     sellerId: parseOptionalNumber(pick(resolved.sellerId)),
     paymentMethodId: parseOptionalNumber(pick(resolved.paymentMethodId)),
   };
+  const expenseMonthFilters: FinanceFilters = { ...filters, from: month, to: month };
+  // Addon "ver todos os meses": disponível em Despesas, Receitas, Fluxo de
+  // Caixa, Matrículas e Comissões. Cada aba tem seu próprio toggle
+  // independente — por padrão cada aba mostra o mês/período selecionado acima;
+  // em Despesas, as listas mensais ficam presas ao mês base para não misturar
+  // gastos variáveis de meses anteriores. Com <aba>Visao=todos essa aba
+  // específica passa a mostrar os itens de todos os meses.
+  const gastosVisao = pick(resolved.gastosVisao) === "todos" ? "todos" : "mes";
+  const receitasVisao = pick(resolved.receitasVisao) === "todos" ? "todos" : "mes";
+  const fluxoVisao = pick(resolved.fluxoVisao) === "todos" ? "todos" : "mes";
+  const matriculasVisao = pick(resolved.matriculasVisao) === "todos" ? "todos" : "mes";
+  const comissoesVisao = pick(resolved.comissoesVisao) === "todos" ? "todos" : "mes";
 
-  const [catalog, summary, revenues, fixedExpenses, variableExpenses, enrollments, commissions, branchItems, commissionPanel] =
-    await Promise.all([
-      getFinanceCatalog(),
-      getFinanceDashboardSummary(month, filters),
-      listRevenues(filters),
-      listFixedExpenses(month),
-      listVariableExpenses(filters),
-      listEnrollments({
-        ...filters,
-      }),
-      listCommissions({
-        ...filters,
-      }),
-      listBranchItems(filters.branchId),
-      getCommissionPanel(month),
-    ]);
+  const [
+    catalog,
+    summary,
+    revenues,
+    fixedExpenses,
+    variableExpenses,
+    enrollments,
+    commissions,
+    branchItems,
+    commissionPanel,
+    allTimeTotals,
+    allMonthlyTotals,
+    commissionsOverview,
+  ] = await Promise.all([
+    getFinanceCatalog(),
+    getFinanceDashboardSummary(month, filters),
+    receitasVisao === "todos"
+      ? listRevenues({
+          branchId: filters.branchId,
+          courseId: filters.courseId,
+          categoryId: filters.categoryId,
+          sellerId: filters.sellerId,
+          paymentMethodId: filters.paymentMethodId,
+        })
+      : listRevenues(filters),
+    gastosVisao === "todos" ? listAllFixedExpenses() : listFixedExpenses(month),
+    gastosVisao === "todos"
+      ? listVariableExpenses({ categoryId: filters.categoryId })
+      : listVariableExpenses(expenseMonthFilters),
+    matriculasVisao === "todos"
+      ? listEnrollments({ courseId: filters.courseId, sellerId: filters.sellerId })
+      : listEnrollments({ ...filters }),
+    comissoesVisao === "todos" ? listCommissions({ sellerId: filters.sellerId }) : listCommissions({ ...filters }),
+    listBranchItems(filters.branchId),
+    getCommissionPanel(month),
+    gastosVisao === "todos" ? getAllTimeExpenseTotals() : Promise.resolve(null),
+    fluxoVisao === "todos" ? listAllMonthlyTotals() : Promise.resolve(null),
+    comissoesVisao === "todos"
+      ? getCommissionsOverview({ sellerId: filters.sellerId })
+      : getCommissionsOverview({ ...filters }),
+  ]);
 
   return (
     <FinanceiroClient
@@ -93,6 +134,14 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
       filters={filters}
       month={month}
       periodMode={periodMode}
+      gastosVisao={gastosVisao}
+      receitasVisao={receitasVisao}
+      fluxoVisao={fluxoVisao}
+      matriculasVisao={matriculasVisao}
+      comissoesVisao={comissoesVisao}
+      allTimeTotals={allTimeTotals}
+      allMonthlyTotals={allMonthlyTotals}
+      commissionsOverview={commissionsOverview}
     />
   );
 }

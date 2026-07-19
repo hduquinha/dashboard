@@ -7,6 +7,7 @@ import { ExportMenu } from "@/components/ExportMenu";
 import type { CommercialStage, InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { CommercialWorkspace } from "@/types/commercial";
+import type { Funnel } from "@/types/funnel";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 import { humanizeName } from "@/lib/utils";
 import { hasPermission, type PermissionUser } from "@/lib/permissions";
@@ -15,6 +16,7 @@ import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { MergeLeadsModal } from "@/components/MergeLeadsModal";
 import { CreateLeadModal } from "@/components/CreateLeadModal";
 import { CrmKanbanView } from "@/components/CrmKanbanView";
+import { buildStageBadgeMap, FALLBACK_STAGE_BADGE } from "@/lib/stageColors";
 
 /* ───────── Types ───────── */
 
@@ -97,16 +99,6 @@ const PIPELINE: { key: string; label: string; color: string; bg: string; icon: s
   { key: "rejeitado", label: "Descartado", color: "text-rose-700", bg: "bg-rose-100", icon: "🚫" },
 ];
 
-const COMMERCIAL_STAGE_STYLE: Record<CommercialStage, { label: string; className: string }> = {
-  novo: { label: "Novo", className: "bg-slate-100 text-slate-700" },
-  primeiro_contato: { label: "Primeiro contato", className: "bg-cyan-50 text-cyan-700" },
-  em_atendimento: { label: "Em atendimento", className: "bg-blue-50 text-blue-700" },
-  agendado: { label: "Agendado", className: "bg-violet-50 text-violet-700" },
-  fechamento: { label: "Fechamento", className: "bg-amber-50 text-amber-700" },
-  ganho: { label: "Ganho", className: "bg-emerald-50 text-emerald-700" },
-  perdido: { label: "Perdido", className: "bg-rose-50 text-rose-700" },
-  no_show: { label: "No-show", className: "bg-orange-50 text-orange-700" },
-};
 
 function pipelineFor(status?: InscricaoStatus) {
   return PIPELINE.find((p) => p.key === status) ?? PIPELINE[0];
@@ -175,9 +167,38 @@ export default function CrmClient({
   const filterBarRef = useRef<HTMLDivElement>(null);
   const canCreateLead = !currentUser || hasPermission(currentUser, "crm.create_leads");
 
+  const [funnels, setFunnels] = useState<Funnel[]>(commercial.funnels);
+  const commercialFresh = useMemo(() => ({ ...commercial, funnels }), [commercial, funnels]);
+
   useEffect(() => { setRecords(inscricoes); }, [inscricoes]);
   useEffect(() => { setSearchText(filters.q || filters.nome); }, [filters.q, filters.nome]);
   useEffect(() => { setShowMergeModal(false); }, [selectedId]);
+  // Busca os funis atualizados — a prop `commercial` so vem fresca numa
+  // navegacao completa. Refaz ao montar E ao recuperar o foco da aba/janela
+  // (edicao feita em /funis noutra aba so aparecia apos F5, e mesmo assim so
+  // se o Next remontasse o componente).
+  useEffect(() => {
+    let cancelled = false;
+
+    function loadFunnels() {
+      fetch("/api/funnels")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { funnels?: Funnel[] } | null) => {
+          if (cancelled || !data?.funnels) return;
+          setFunnels(data.funnels);
+        })
+        .catch(() => {});
+    }
+
+    loadFunnels();
+    window.addEventListener("focus", loadFunnels);
+    document.addEventListener("visibilitychange", loadFunnels);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", loadFunnels);
+      document.removeEventListener("visibilitychange", loadFunnels);
+    };
+  }, []);
   useEffect(() => {
     if (!activePopover) return;
     function onMouseDown(e: MouseEvent) {
@@ -200,6 +221,25 @@ export default function CrmClient({
     for (const t of trainingOptions) map[t.id] = t;
     return map;
   }, [trainingOptions]);
+
+  const stageStyleMap = useMemo(() => buildStageBadgeMap(funnels), [funnels]);
+  function stageStyle(key: string | null | undefined) {
+    return (key ? stageStyleMap.get(key) : null) ?? FALLBACK_STAGE_BADGE;
+  }
+
+  // Funil ativo no Kanban: vendedor pode ter varios funis atribuidos e
+  // trocar entre eles (mesma UX do Kanban da equipe em /produtividade).
+  const [activeFunnelId, setActiveFunnelId] = useState<number | null>(
+    () => funnels.find((funnel) => funnel.isDefault)?.id ?? funnels[0]?.id ?? null
+  );
+  const activeFunnel = funnels.find((funnel) => funnel.id === activeFunnelId) ?? funnels[0] ?? null;
+  useEffect(() => {
+    setActiveFunnelId((current) =>
+      current !== null && funnels.some((funnel) => funnel.id === current)
+        ? current
+        : funnels.find((funnel) => funnel.isDefault)?.id ?? funnels[0]?.id ?? null
+    );
+  }, [funnels]);
 
   /* ─── URL helpers ─── */
 
@@ -352,6 +392,24 @@ export default function CrmClient({
                 Kanban
               </button>
             </div>
+            {view === "kanban" && funnels.length > 1 && (
+              <select
+                value={activeFunnelId ?? ""}
+                onChange={(event) => {
+                  const parsed = Number.parseInt(event.target.value, 10);
+                  setActiveFunnelId(Number.isFinite(parsed) && parsed > 0 ? parsed : null);
+                }}
+                className="h-7 rounded-lg border border-neutral-200 bg-white px-2 text-xs font-medium text-neutral-700"
+                title="Funil"
+                aria-label="Funil"
+              >
+                {funnels.map((funnel) => (
+                  <option key={funnel.id} value={funnel.id}>
+                    {funnel.name}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="flex items-center gap-2">
             {canCreateLead ? (
@@ -805,9 +863,7 @@ export default function CrmClient({
                     : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50"
                 }`}
               >
-                {filters.commercialStage
-                  ? (COMMERCIAL_STAGE_STYLE[filters.commercialStage]?.label ?? "Etapa")
-                  : "Etapa"}
+                {filters.commercialStage ? stageStyle(filters.commercialStage).label : "Etapa"}
                 <ChevronDown className="h-3 w-3 opacity-60" />
               </button>
 
@@ -969,6 +1025,7 @@ export default function CrmClient({
             produto={filters.produto ?? null}
             assignedSellerEmail={filters.assignedSellerEmail || undefined}
             isSupervisor={commercial.isSupervisor}
+            stages={activeFunnel?.stages ?? []}
           />
         )}
 
@@ -1145,8 +1202,8 @@ export default function CrmClient({
                       </td>
                       {/* Stage */}
                       <td className="px-4 py-3">
-                        <span className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ${COMMERCIAL_STAGE_STYLE[lead.commercial?.stage ?? "novo"].className}`}>
-                          {COMMERCIAL_STAGE_STYLE[lead.commercial?.stage ?? "novo"].label}
+                        <span className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ${stageStyle(lead.commercial?.stage).className}`}>
+                          {stageStyle(lead.commercial?.stage).label}
                         </span>
                       </td>
                       {/* Stars */}
@@ -1195,7 +1252,7 @@ export default function CrmClient({
         }}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
-        commercial={commercial}
+        commercial={commercialFresh}
         currentUser={currentUser}
       />
 

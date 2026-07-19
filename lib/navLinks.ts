@@ -109,6 +109,15 @@ export const NAV_LINKS: NavLink[] = [
     group: "secondary",
     brand: "instituto-up",
   },
+  {
+    key: "funis",
+    href: "/funis",
+    label: "Funis",
+    description: "Funis de vendas e etapas do Kanban",
+    icon: "🧩",
+    group: "secondary",
+    brand: "instituto-up",
+  },
 
   // ── VozUP ──────────────────────────────────────────────────────
   {
@@ -121,11 +130,29 @@ export const NAV_LINKS: NavLink[] = [
     brand: "vozup",
   },
   {
+    key: "vozup-rotas",
+    href: "/vozup/rotas",
+    label: "Mapa de Rotas",
+    description: "Rotas de captação por pasta e tema",
+    icon: "🗺️",
+    group: "primary",
+    brand: "vozup",
+  },
+  {
     key: "vozup-financeiro",
     href: "/financeiro",
     label: "Gestão Financeira",
     description: "ERP financeiro VozUP",
     icon: "💳",
+    group: "primary",
+    brand: "vozup",
+  },
+  {
+    key: "campanhas",
+    href: "/campanhas",
+    label: "Métricas de Campanha",
+    description: "Gasto, leads e qualificação real por anúncio",
+    icon: "📈",
     group: "primary",
     brand: "vozup",
   },

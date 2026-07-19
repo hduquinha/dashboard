@@ -110,7 +110,10 @@ const DASHBOARD_TRAINING_EXPRESSION = payloadTextExpression("i", ["dashboard_tre
 // Exportado para as queries da área VozUP (lib/vozupFolders.ts) — pressupõe alias "i".
 export const UPDAY_PAYLOAD_CONDITION = `(
   LOWER(${EXPLICIT_TRAINING_EXPRESSION}) LIKE '%up day%'
-  OR LOWER(${payloadTextExpression("i", ["origem", "source", "origin"])}) = 'landing-inscricao-agosto-2026'
+  OR LOWER(${EXPLICIT_TRAINING_EXPRESSION}) LIKE '%up-day%'
+  OR ${EXPLICIT_TRAINING_EXPRESSION} ~ '^\\d{1,2} ?e ?\\d{1,2}/'
+  OR LOWER(${payloadTextExpression("i", ["origem", "source", "origin"])}) LIKE 'landing-inscricao-%'
+  OR LOWER(${payloadTextExpression("i", ["origem", "source", "origin"])}) LIKE '%up-day%'
   OR (
     ${payloadTextExpression("i", ["tamanho_camiseta", "tamanhoCamiseta", "multa_ciente", "multaCiente", "cancelamento_ciente", "cancelamentoCiente"])} <> ''
     AND ${UPDAY_TRAINING_DATE_EXPRESSION} <> ''
@@ -247,6 +250,9 @@ async function ensureCommercialSchemaForReads(): Promise<void> {
     );
 
     ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS funnel_id INTEGER;
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS commercial_stage_kind TEXT NOT NULL DEFAULT 'entry';
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS contact_attempts SMALLINT NOT NULL DEFAULT 0 CHECK (contact_attempts BETWEEN 0 AND 10);
 
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage);
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage_position ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage, position);
@@ -520,6 +526,9 @@ interface DbRow {
   campaign_term: string | null;
   landing_page: string | null;
   commercial_stage: CommercialStage | null;
+  commercial_stage_kind: string | null;
+  contact_attempts: number | string | null;
+  funnel_id: number | null;
   commercial_position: number | string | null;
   assigned_seller_id: number | null;
   assigned_seller_email: string | null;
@@ -601,14 +610,21 @@ function toIsoOrNull(value: Date | string | null | undefined): string | null {
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
 }
 
+// Chave de etapa é livre por funil (ver lib/funnels.ts) — aqui só normaliza
+// formato, sem validar contra uma lista fixa (isso quebraria leads de
+// funis customizados, que sempre cairiam em "novo").
 function normalizeCommercialStage(value: unknown): CommercialStage {
   if (typeof value === "string") {
     const normalized = value.trim().toLowerCase();
-    if (COMMERCIAL_STAGE_VALUES.includes(normalized as CommercialStage)) {
-      return normalized as CommercialStage;
-    }
+    if (normalized) return normalized;
   }
   return "novo";
+}
+
+function normalizeStageKind(value: unknown): "entry" | "normal" | "won" | "lost" {
+  return value === "entry" || value === "normal" || value === "won" || value === "lost"
+    ? value
+    : "entry";
 }
 
 function buildPresencaDia(payload: Record<string, unknown>, dia: number): import("@/types/inscricao").PresencaDia | null {
@@ -858,6 +874,11 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       campaignTerm: row.campaign_term ?? null,
       landingPage: row.landing_page ?? null,
       stage: normalizeCommercialStage(row.commercial_stage),
+      stageKind: normalizeStageKind(row.commercial_stage_kind),
+      contactAttempts: row.contact_attempts === null || row.contact_attempts === undefined
+        ? 0
+        : Number(row.contact_attempts),
+      funnelId: row.funnel_id ?? null,
       position: row.commercial_position === null || row.commercial_position === undefined
         ? null
         : Number(row.commercial_position),
@@ -1468,6 +1489,9 @@ export async function listInscricoes(
       COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
       COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
       cl.commercial_stage,
+      cl.commercial_stage_kind,
+      cl.contact_attempts,
+      cl.funnel_id,
       cl.assigned_seller_id,
       cl.assigned_seller_email,
       cl.assigned_seller_name,
@@ -1744,6 +1768,9 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
       COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
       COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
       cl.commercial_stage,
+      cl.commercial_stage_kind,
+      cl.contact_attempts,
+      cl.funnel_id,
       cl.assigned_seller_id,
       cl.assigned_seller_email,
       cl.assigned_seller_name,
@@ -3030,6 +3057,9 @@ export async function listInscricoesByIds(ids: number[]): Promise<InscricaoItem[
       COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) AS campaign_term,
       COALESCE(cl.landing_page, ${LANDING_PAGE_EXPRESSION}) AS landing_page,
       cl.commercial_stage,
+      cl.commercial_stage_kind,
+      cl.contact_attempts,
+      cl.funnel_id,
       cl.assigned_seller_id,
       cl.assigned_seller_email,
       cl.assigned_seller_name,
@@ -3512,6 +3542,7 @@ function buildCommercialDashboardBaseQuery(trainingCondition: string): string {
           i.payload,
           i.criado_em,
           COALESCE(cl.commercial_stage, 'novo') AS commercial_stage,
+          COALESCE(cl.commercial_stage_kind, 'entry') AS commercial_stage_kind,
           cl.assigned_seller_id,
           cl.assigned_seller_email,
           cl.assigned_seller_name,
@@ -3573,14 +3604,14 @@ export async function getCommercialDashboardStats(
         SELECT
           COUNT(*)::bigint AS total_leads,
           COUNT(*) FILTER (WHERE criado_em >= CURRENT_DATE)::bigint AS new_leads_today,
-          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido'))::bigint AS active_leads,
+          COUNT(*) FILTER (WHERE commercial_stage_kind NOT IN ('won', 'lost'))::bigint AS active_leads,
           COUNT(*) FILTER (
-            WHERE commercial_stage NOT IN ('ganho', 'perdido')
+            WHERE commercial_stage_kind NOT IN ('won', 'lost')
               AND assigned_seller_id IS NULL
               AND COALESCE(TRIM(assigned_seller_email), '') = ''
           )::bigint AS unassigned_leads,
           COUNT(*) FILTER (
-            WHERE commercial_stage NOT IN ('ganho', 'perdido')
+            WHERE commercial_stage_kind NOT IN ('won', 'lost')
               AND COALESCE(updated_at, assigned_at, criado_em) < NOW() - INTERVAL '48 hours'
           )::bigint AS stale_leads,
           COUNT(*) FILTER (
@@ -3588,8 +3619,8 @@ export async function getCommercialDashboardStats(
           )::bigint AS hot_leads,
           COUNT(*) FILTER (WHERE assigned_at >= CURRENT_DATE)::bigint AS assigned_today,
           COUNT(*) FILTER (WHERE commercial_stage = 'fechamento')::bigint AS closing_leads,
-          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won_leads,
-          COUNT(*) FILTER (WHERE commercial_stage = 'perdido')::bigint AS lost_leads,
+          COUNT(*) FILTER (WHERE commercial_stage_kind = 'won')::bigint AS won_leads,
+          COUNT(*) FILTER (WHERE commercial_stage_kind = 'lost')::bigint AS lost_leads,
           COUNT(*) FILTER (WHERE commercial_stage = 'no_show')::bigint AS no_show_leads
         FROM unique_inscricoes
       `,
@@ -3617,7 +3648,7 @@ export async function getCommercialDashboardStats(
           NULLIF(TRIM(COALESCE(campaign_source, '')), '') AS campaign_source,
           NULLIF(TRIM(COALESCE(campaign_name, '')), '') AS campaign_name,
           COUNT(*)::bigint AS leads,
-          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won,
+          COUNT(*) FILTER (WHERE commercial_stage_kind = 'won')::bigint AS won,
           COUNT(*) FILTER (WHERE COALESCE(payload->>'dashboard_stars', '') = '5')::bigint AS hot
         FROM unique_inscricoes
         GROUP BY 1, 2
@@ -3638,14 +3669,14 @@ export async function getCommercialDashboardStats(
         SELECT
           NULLIF(TRIM(COALESCE(assigned_seller_name, '')), '') AS seller_name,
           NULLIF(TRIM(COALESCE(assigned_seller_email, '')), '') AS seller_email,
-          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido'))::bigint AS active,
+          COUNT(*) FILTER (WHERE commercial_stage_kind NOT IN ('won', 'lost'))::bigint AS active,
           COUNT(*) FILTER (WHERE commercial_stage = 'fechamento')::bigint AS closing,
-          COUNT(*) FILTER (WHERE commercial_stage = 'ganho')::bigint AS won
+          COUNT(*) FILTER (WHERE commercial_stage_kind = 'won')::bigint AS won
         FROM unique_inscricoes
         GROUP BY 1, 2
         ORDER BY
-          COUNT(*) FILTER (WHERE commercial_stage NOT IN ('ganho', 'perdido')) DESC,
-          COUNT(*) FILTER (WHERE commercial_stage = 'ganho') DESC
+          COUNT(*) FILTER (WHERE commercial_stage_kind NOT IN ('won', 'lost')) DESC,
+          COUNT(*) FILTER (WHERE commercial_stage_kind = 'won') DESC
         LIMIT 6
       `,
       queryValues

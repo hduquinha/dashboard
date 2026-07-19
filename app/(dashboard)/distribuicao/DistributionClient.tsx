@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CheckSquare,
   Filter,
+  FolderOpen,
   MessageCirclePlus,
   RefreshCw,
+  Search,
   Send,
   Square,
   UserRoundCheck,
@@ -19,6 +21,7 @@ import { CreateLeadModal } from "@/components/CreateLeadModal";
 import type {
   ManualDistributionCandidate,
   ManualDistributionFilters,
+  ManualDistributionFolderOption,
   ManualDistributionResult,
   ManualDistributionStrategy,
 } from "@/lib/manualDistribution";
@@ -30,6 +33,7 @@ interface DistributionClientProps {
   total: number;
   limit: number;
   filters: ManualDistributionFilters;
+  folderOptions: ManualDistributionFolderOption[];
   sellers: CommercialSeller[];
   trainingOptions: TrainingOption[];
   isSupervisor: boolean;
@@ -87,6 +91,13 @@ function signalLabel(group: LeadGroup): string {
   if (group.signals.length === 0) return "Sem sinal";
   if (group.signals.length === 1) return group.signals[0];
   return `${group.signals.length} sinais de entrada`;
+}
+
+function folderBlockLabel(block: ManualDistributionFolderOption["blocks"][number]): string {
+  if (block.subpasta && block.subpasta !== block.bloco) {
+    return `${block.subpasta} · ${block.bloco}`;
+  }
+  return block.bloco;
 }
 
 function buildGroups(rows: ManualDistributionCandidate[]): LeadGroup[] {
@@ -150,12 +161,14 @@ function buildGroups(rows: ManualDistributionCandidate[]): LeadGroup[] {
 }
 
 const ALL_GROUPS_KEY = "__all__";
+const FOLDER_CANDIDATE_LIMIT = 500;
 
 export default function DistributionClient({
   candidates,
   total,
   limit,
   filters,
+  folderOptions,
   sellers,
   isSupervisor,
   currentUser,
@@ -168,10 +181,18 @@ export default function DistributionClient({
   const [singleSellerId, setSingleSellerId] = useState(() => String(sellers[0]?.chatwootUserId ?? ""));
   const [roundRobinSellerIds, setRoundRobinSellerIds] = useState<number[]>(() => uniqueSellerIds(sellers));
   const [overwriteAssigned, setOverwriteAssigned] = useState(false);
-  const [busyScope, setBusyScope] = useState<"selected" | "group" | null>(null);
+  const [busyScope, setBusyScope] = useState<"selected" | "group" | "folder" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showOrganicModal, setShowOrganicModal] = useState(false);
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [folderKey, setFolderKey] = useState(() => folderOptions[0]?.key ?? "");
+  const [folderBlock, setFolderBlock] = useState(() => folderOptions[0]?.blocks[0]?.bloco ?? "");
+  const [folderRows, setFolderRows] = useState<ManualDistributionCandidate[]>([]);
+  const [folderSelectedIds, setFolderSelectedIds] = useState<Set<number>>(new Set());
+  const [folderSearch, setFolderSearch] = useState("");
+  const [folderLoading, setFolderLoading] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
 
   const groups = useMemo(() => buildGroups(rows), [rows]);
 
@@ -212,6 +233,73 @@ export default function DistributionClient({
     }
     return roundRobinSellerIds;
   }, [roundRobinSellerIds, singleSellerId, strategy]);
+  const activeFolder = useMemo(
+    () => folderOptions.find((folder) => folder.key === folderKey) ?? folderOptions[0] ?? null,
+    [folderKey, folderOptions]
+  );
+  const activeFolderBlocks = activeFolder?.blocks ?? [];
+  const activeFolderBlock =
+    activeFolderBlocks.find((block) => block.bloco === folderBlock) ?? activeFolderBlocks[0] ?? null;
+  const visibleFolderRows = useMemo(() => {
+    const q = folderSearch.trim().toLowerCase();
+    if (!q) return folderRows;
+    const phoneQuery = q.replace(/\D/g, "");
+    return folderRows.filter((row) =>
+      (row.name ?? "").toLowerCase().includes(q) ||
+      (phoneQuery.length > 0 && (row.phone ?? "").replace(/\D/g, "").includes(phoneQuery)) ||
+      (row.city ?? "").toLowerCase().includes(q) ||
+      (row.campaignName ?? "").toLowerCase().includes(q) ||
+      (row.assignedSellerName ?? "").toLowerCase().includes(q) ||
+      (row.trainingLabel ?? "").toLowerCase().includes(q)
+    );
+  }, [folderRows, folderSearch]);
+  const folderSelectedLeadIds = useMemo(() => Array.from(folderSelectedIds), [folderSelectedIds]);
+  const folderSelectedCount = folderSelectedLeadIds.length;
+  const allVisibleFolderSelected =
+    visibleFolderRows.length > 0 && visibleFolderRows.every((row) => folderSelectedIds.has(row.id));
+
+  useEffect(() => {
+    if (!showFolderModal) return;
+    if (!activeFolder || !activeFolderBlock) {
+      setFolderRows([]);
+      setFolderSelectedIds(new Set());
+      return;
+    }
+
+    const controller = new AbortController();
+    const params = new URLSearchParams({
+      folderKey: activeFolder.key,
+      block: activeFolderBlock.bloco,
+      limit: String(FOLDER_CANDIDATE_LIMIT),
+      overwriteAssigned: overwriteAssigned ? "1" : "0",
+    });
+
+    setFolderLoading(true);
+    setFolderError(null);
+    setFolderSelectedIds(new Set());
+
+    fetch(`/api/distribuicao/manual?${params.toString()}`, { signal: controller.signal })
+      .then(async (response) => {
+        const data = (await response.json().catch(() => ({}))) as {
+          candidates?: ManualDistributionCandidate[];
+          error?: string;
+        };
+        if (!response.ok) {
+          throw new Error(data.error ?? "Falha ao carregar leads da pasta.");
+        }
+        setFolderRows(data.candidates ?? []);
+      })
+      .catch((error) => {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        setFolderRows([]);
+        setFolderError(error instanceof Error ? error.message : "Falha ao carregar leads da pasta.");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setFolderLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [activeFolder?.key, activeFolderBlock?.bloco, overwriteAssigned, showFolderModal]);
 
   if (!isSupervisor) {
     return (
@@ -259,6 +347,29 @@ export default function DistributionClient({
     setSelectedIds(new Set());
   }
 
+  function applyDistributionResult(result: ManualDistributionResult) {
+    const assignedById = new Map(result.assigned.map((item) => [item.inscricaoId, item]));
+    setRows((current) =>
+      filters.unassignedOnly && !overwriteAssigned
+        ? current.filter((row) => !assignedById.has(row.id))
+        : current.map((row) => {
+            const assigned = assignedById.get(row.id);
+            return assigned
+              ? {
+                  ...row,
+                  assignedSellerName: assigned.sellerName,
+                  assignedSellerEmail: assigned.sellerEmail,
+                }
+              : row;
+          })
+    );
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      for (const item of result.assigned) next.delete(item.inscricaoId);
+      return next;
+    });
+  }
+
   function toggleRoundRobinSeller(id: number) {
     setRoundRobinSellerIds((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id]
@@ -304,11 +415,97 @@ export default function DistributionClient({
       }
 
       const result = data.result;
+      applyDistributionResult(result);
+      setMessage(resultMessage(result));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Falha ao distribuir leads.");
+    } finally {
+      setBusyScope(null);
+    }
+  }
+
+  function handleFolderChange(nextFolderKey: string) {
+    const nextFolder = folderOptions.find((folder) => folder.key === nextFolderKey);
+    setFolderKey(nextFolderKey);
+    setFolderBlock(nextFolder?.blocks[0]?.bloco ?? "");
+    setFolderSearch("");
+    setFolderSelectedIds(new Set());
+  }
+
+  function handleFolderBlockChange(nextBlock: string) {
+    setFolderBlock(nextBlock);
+    setFolderSearch("");
+    setFolderSelectedIds(new Set());
+  }
+
+  function toggleFolderRow(id: number) {
+    setFolderSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleVisibleFolderRows() {
+    setFolderSelectedIds((current) => {
+      const next = new Set(current);
+      if (allVisibleFolderSelected) {
+        for (const row of visibleFolderRows) next.delete(row.id);
+      } else {
+        for (const row of visibleFolderRows) next.add(row.id);
+      }
+      return next;
+    });
+  }
+
+  async function distributeFolderBlock() {
+    if (!isSupervisor) {
+      setMessage("Apenas usuarios master podem distribuir leads.");
+      return;
+    }
+
+    if (chosenSellerIds.length === 0) {
+      setMessage("Selecione pelo menos um usuario de destino.");
+      return;
+    }
+
+    if (!activeFolder || !activeFolderBlock) {
+      setMessage("Selecione uma pasta e um bloco de leads.");
+      return;
+    }
+
+    if (folderSelectedLeadIds.length === 0) {
+      setMessage("Selecione manualmente pelo menos um lead da pasta.");
+      return;
+    }
+
+    setBusyScope("folder");
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/distribuicao/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "selected",
+          leadIds: folderSelectedLeadIds,
+          sellerIds: chosenSellerIds,
+          strategy,
+          overwriteAssigned,
+        }),
+      });
+      const data = (await response.json()) as { result?: ManualDistributionResult; error?: string };
+      if (!response.ok || !data.result) {
+        throw new Error(data.error ?? "Falha ao distribuir leads.");
+      }
+
+      const result = data.result;
+      applyDistributionResult(result);
       const assignedById = new Map(result.assigned.map((item) => [item.inscricaoId, item]));
-      setRows((current) =>
-        filters.unassignedOnly && !overwriteAssigned
-          ? current.filter((row) => !assignedById.has(row.id))
-          : current.map((row) => {
+      setFolderRows((current) =>
+        overwriteAssigned
+          ? current.map((row) => {
               const assigned = assignedById.get(row.id);
               return assigned
                 ? {
@@ -318,13 +515,11 @@ export default function DistributionClient({
                   }
                 : row;
             })
+          : current.filter((row) => !assignedById.has(row.id))
       );
-      setSelectedIds((current) => {
-        const next = new Set(current);
-        for (const item of result.assigned) next.delete(item.inscricaoId);
-        return next;
-      });
-      setMessage(resultMessage(result));
+      setFolderSelectedIds(new Set());
+      setShowFolderModal(false);
+      setMessage(`${activeFolder.label} · ${activeFolderBlock.bloco}: ${resultMessage(result)}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Falha ao distribuir leads.");
     } finally {
@@ -351,15 +546,27 @@ export default function DistributionClient({
             {total > rows.length ? ` · ${total.toLocaleString("pt-BR")} no recorte` : ""}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowOrganicModal(true)}
-          className="inline-flex h-9 items-center gap-2 self-start rounded-lg border border-[rgb(var(--border-strong))] bg-white px-3 text-xs font-semibold text-[rgb(var(--slate-11))] transition hover:bg-[rgb(var(--slate-2))] sm:self-auto"
-          title="Inserir manualmente um lead que chamou no WhatsApp"
-        >
-          <MessageCirclePlus className="h-4 w-4 text-[rgb(var(--blue-9))]" />
-          Lead orgânico (WhatsApp)
-        </button>
+        <div className="flex flex-wrap gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setShowFolderModal(true)}
+            disabled={folderOptions.length === 0}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[rgb(var(--border-strong))] bg-white px-3 text-xs font-semibold text-[rgb(var(--slate-11))] transition hover:bg-[rgb(var(--slate-2))] disabled:cursor-not-allowed disabled:opacity-50"
+            title="Distribuir leads de qualquer pasta da área VozUP"
+          >
+            <FolderOpen className="h-4 w-4 text-[rgb(var(--blue-9))]" />
+            Distribuir por pasta
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowOrganicModal(true)}
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-[rgb(var(--border-strong))] bg-white px-3 text-xs font-semibold text-[rgb(var(--slate-11))] transition hover:bg-[rgb(var(--slate-2))]"
+            title="Inserir manualmente um lead que chamou no WhatsApp"
+          >
+            <MessageCirclePlus className="h-4 w-4 text-[rgb(var(--blue-9))]" />
+            Lead orgânico (WhatsApp)
+          </button>
+        </div>
       </div>
 
       {/* ── Painel principal ───────────────────────────────────── */}
@@ -847,6 +1054,208 @@ export default function DistributionClient({
             >
               <X className="h-4 w-4" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Distribuir qualquer pasta de leads ────────────────── */}
+      {showFolderModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[90vh] w-full max-w-xl flex-col rounded-2xl bg-white shadow-2xl">
+            <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-100 px-6 py-4">
+              <div>
+                <p className="text-sm font-bold text-neutral-900">Distribuir por pasta</p>
+                <p className="text-xs text-neutral-400">Escolha a origem e marque manualmente os leads</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFolderModal(false)}
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-100"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+              {folderOptions.length === 0 ? (
+                <p className="rounded-lg bg-neutral-50 px-3 py-2 text-sm font-semibold text-neutral-500">
+                  Nenhuma pasta com leads disponível.
+                </p>
+              ) : (
+                <>
+                  <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+                    Pasta
+                    <select
+                      value={activeFolder?.key ?? ""}
+                      onChange={(event) => handleFolderChange(event.target.value)}
+                      className="h-10 rounded-lg border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-900 focus:border-cyan-400 focus:bg-white focus:outline-none"
+                    >
+                      {folderOptions.map((folder) => (
+                        <option key={folder.key} value={folder.key}>
+                          {folder.emoji} {folder.label} ({folder.blocks.length})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+                    Bloco / formulário
+                    <select
+                      value={activeFolderBlock?.bloco ?? ""}
+                      onChange={(event) => handleFolderBlockChange(event.target.value)}
+                      className="h-10 rounded-lg border border-neutral-200 bg-neutral-50 px-3 text-sm text-neutral-900 focus:border-cyan-400 focus:bg-white focus:outline-none"
+                    >
+                      {activeFolderBlocks.map((block) => (
+                        <option key={`${block.subpasta}:${block.bloco}`} value={block.bloco}>
+                          {folderBlockLabel(block)} ({block.total})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <div className="grid gap-3 sm:grid-cols-[1fr_220px]">
+                    <label className="grid gap-1 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+                      Buscar lead
+                      <span className="relative">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" />
+                        <input
+                          type="search"
+                          value={folderSearch}
+                          onChange={(event) => setFolderSearch(event.target.value)}
+                          placeholder="Nome, telefone, cidade..."
+                          className="h-10 w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 pl-9 text-sm text-neutral-900 focus:border-cyan-400 focus:bg-white focus:outline-none"
+                        />
+                      </span>
+                    </label>
+
+                    <div className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Destino atual</p>
+                      <p className="mt-1 truncate text-sm font-bold text-neutral-900">
+                        {strategy === "single" && assignedSeller
+                          ? assignedSeller.name
+                          : `${roundRobinSellerIds.length} vendedor(es) em rodízio`}
+                      </p>
+                      <p className="mt-0.5 text-xs text-neutral-500">
+                        {overwriteAssigned ? "Sobrescreve responsáveis atuais" : "Somente leads sem responsável"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {activeFolderBlock && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Total</p>
+                        <p className="text-lg font-bold text-neutral-900">{activeFolderBlock.total}</p>
+                      </div>
+                      <div className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">7 dias</p>
+                        <p className="text-lg font-bold text-neutral-900">{activeFolderBlock.semana}</p>
+                      </div>
+                      <div className="rounded-lg border border-neutral-100 bg-neutral-50 px-3 py-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Último</p>
+                        <p className="text-sm font-bold text-neutral-900">{dateLabel(activeFolderBlock.ultimaConversao)}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-100 bg-neutral-50 px-3 py-2">
+                      <button
+                        type="button"
+                        onClick={toggleVisibleFolderRows}
+                        disabled={folderLoading || visibleFolderRows.length === 0}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {allVisibleFolderSelected ? <CheckSquare className="h-3.5 w-3.5 text-cyan-700" /> : <Square className="h-3.5 w-3.5" />}
+                        {allVisibleFolderSelected ? "Limpar visíveis" : "Selecionar visíveis"}
+                      </button>
+                      <p className="text-xs font-semibold text-neutral-500">
+                        {folderSelectedCount.toLocaleString("pt-BR")} selecionado(s) · {visibleFolderRows.length.toLocaleString("pt-BR")} exibido(s)
+                      </p>
+                    </div>
+
+                    {folderLoading ? (
+                      <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm font-semibold text-neutral-500">
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Carregando leads da pasta...
+                      </div>
+                    ) : folderError ? (
+                      <div className="px-4 py-8 text-center text-sm font-semibold text-rose-600">
+                        {folderError}
+                      </div>
+                    ) : visibleFolderRows.length === 0 ? (
+                      <div className="px-4 py-8 text-center text-sm font-semibold text-neutral-500">
+                        Nenhum lead disponível neste bloco com os filtros atuais.
+                      </div>
+                    ) : (
+                      <div className="max-h-72 overflow-y-auto">
+                        {visibleFolderRows.map((row) => {
+                          const selected = folderSelectedIds.has(row.id);
+                          return (
+                            <label
+                              key={row.id}
+                              className={`grid cursor-pointer grid-cols-[auto_1fr_auto] items-start gap-3 border-b border-neutral-100 px-3 py-3 last:border-b-0 hover:bg-cyan-50/40 ${
+                                selected ? "bg-cyan-50/70" : "bg-white"
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selected}
+                                onChange={() => toggleFolderRow(row.id)}
+                                className="mt-1 h-4 w-4 rounded border-neutral-300"
+                              />
+                              <span className="min-w-0">
+                                <span className="block truncate text-sm font-bold text-neutral-900">
+                                  {row.name || `Lead #${row.id}`}
+                                </span>
+                                <span className="mt-0.5 block truncate text-xs font-semibold text-neutral-500">
+                                  {row.phone || "Sem telefone"} · {row.city || "Sem cidade"}
+                                </span>
+                                <span className="mt-1 block truncate text-[11px] text-neutral-400">
+                                  {row.campaignName ?? row.trainingLabel ?? row.entryChannel}
+                                </span>
+                              </span>
+                              <span className="text-right text-[11px] font-semibold text-neutral-400">
+                                <span className="block">{dateLabel(row.createdAt)}</span>
+                                <span className={row.assignedSellerName ? "mt-1 block max-w-32 truncate text-amber-600" : "mt-1 block text-emerald-700"}>
+                                  {row.assignedSellerName ?? "Sem responsável"}
+                                </span>
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {folderRows.length >= FOLDER_CANDIDATE_LIMIT ? (
+                    <p className="text-xs font-semibold text-neutral-400">
+                      Mostrando os {FOLDER_CANDIDATE_LIMIT} leads mais recentes deste bloco.
+                    </p>
+                  ) : null}
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-shrink-0 justify-end gap-2 border-t border-neutral-100 px-6 py-4">
+              <button
+                type="button"
+                onClick={() => setShowFolderModal(false)}
+                disabled={busyScope === "folder"}
+                className="rounded-lg border border-neutral-200 px-3 py-1.5 text-xs font-semibold text-neutral-600 hover:bg-neutral-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={distributeFolderBlock}
+                disabled={busyScope !== null || folderLoading || !activeFolder || !activeFolderBlock || folderSelectedCount === 0}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-cyan-700 disabled:opacity-50"
+              >
+                {busyScope === "folder" ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                Distribuir {folderSelectedCount.toLocaleString("pt-BR")} selecionado(s)
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -1,8 +1,7 @@
 "use client";
 
-import type { EnrollmentSummary, InscricaoItem } from "@/types/inscricao";
-import { formatTrainingDateLabel } from "@/lib/trainings";
-import { leadFieldLabel, STANDARD_PAYLOAD_KEYS } from "@/lib/leadFields";
+import type { InscricaoItem } from "@/types/inscricao";
+import { FORM_TRACKING_KEYS, leadFieldLabel, STANDARD_PAYLOAD_KEYS } from "@/lib/leadFields";
 
 /* ─── Config ─── */
 
@@ -44,42 +43,37 @@ function formatValue(value: unknown): string | null {
 }
 
 /**
- * Um campo é "interno" (não vira pergunta/resposta em "Respostas do Formulário")
- * quando já é exibido em outro bloco fixo da ficha do lead (Informações Padrão,
- * Origem do Lead, Treinamento, Indicador) ou é bookkeeping do próprio dashboard.
+ * Um campo é "interno" (não vira campo de "Informações Padrão do Lead" a
+ * partir do formulário) quando já é exibido em outro bloco fixo da ficha do
+ * lead (Origem do Lead, Treinamento, Indicador), é metadado técnico
+ * (FORM_TRACKING_KEYS) ou é bookkeeping do próprio dashboard.
  */
 function isInternalKey(key: string): boolean {
   if (SKIP_KEYS.has(key)) return true;
   if (STANDARD_PAYLOAD_KEYS.has(key)) return true;
+  if (FORM_TRACKING_KEYS.has(key)) return true;
   if (key.startsWith("presenca_dia")) return true;
   if (key.startsWith("_")) return true;
   if (key.startsWith("dashboard_")) return true;
   return false;
 }
 
-function productIcon(trainingId: string | null, treinamentoNome: string | null): string {
-  const src = `${trainingId ?? ""} ${treinamentoNome ?? ""}`.toLowerCase();
-  if (src.includes("voz") || src.includes("vozup")) return "🎤";
-  if (src.includes("up day") || src.includes("upday")) return "📅";
-  if (src.includes("online") || src.includes("encontro")) return "💻";
-  return "📋";
+interface LeadFormAnswerField {
+  key: string;
+  label: string;
+  value: string;
 }
 
-function fmtDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
-}
-
-function enrollmentLabel(e: EnrollmentSummary): string {
-  if (e.treinamentoNome) return e.treinamentoNome;
-  if (e.treinamentoId) return formatTrainingDateLabel(e.treinamentoId) ?? e.treinamentoId;
-  return "Formulário";
-}
-
-function payloadFields(payload: Record<string, unknown>): { key: string; label: string; value: string }[] {
+function payloadFields(payload: Record<string, unknown>): LeadFormAnswerField[] {
   return Object.entries(payload)
     .filter(([key, value]) => key !== "facebook_field_data" && !isInternalKey(key) && formatValue(value) !== null)
+    .map(([key, value]) => ({ key, label: leadFieldLabel(key), value: formatValue(value)! }));
+}
+
+/** Só os campos técnicos/de rastreamento (ver FORM_TRACKING_KEYS) — exibidos numa seção própria no final da ficha. */
+function trackingPayloadFields(payload: Record<string, unknown>): LeadFormAnswerField[] {
+  return Object.entries(payload)
+    .filter(([key, value]) => FORM_TRACKING_KEYS.has(key) && formatValue(value) !== null)
     .map(([key, value]) => ({ key, label: leadFieldLabel(key), value: formatValue(value)! }));
 }
 
@@ -102,10 +96,42 @@ function cleanFacebookText(raw: string): string {
 }
 
 /**
+ * Perguntas longas e conhecidas do formulário do Meta, resumidas só pra
+ * exibição na ficha do lead — a pergunta em si (na origem/no formulário) não
+ * muda, isso é puramente cosmético pra facilitar a leitura rápida.
+ * Casamento por trecho (case-insensitive) pra tolerar variações de pontuação.
+ */
+const QUESTION_SHORTENERS: { includes: string; short: string }[] = [
+  { includes: "quando pretende começar", short: "Quando pretende começar" },
+  { includes: "consultoria personalizada e gratuita", short: "Consultoria" },
+  { includes: "por que você se interessou", short: "Motivo de interesse" },
+  { includes: "estar presencialmente", short: "Consegue vir presencial" },
+];
+
+function shortenFormQuestion(question: string): string {
+  const normalized = question.toLowerCase();
+  const rule = QUESTION_SHORTENERS.find((r) => normalized.includes(r.includes));
+  return rule ? rule.short : question;
+}
+
+/**
+ * Perguntas do Facebook que já duplicam campos fixos de "Informações Padrão
+ * do Lead" (nome/e-mail/telefone) — não repetir aqui, o dado já apareceu
+ * em cima. Casamento pelo texto limpo da pergunta (case-insensitive).
+ */
+const DUPLICATE_STANDARD_QUESTIONS = new Set([
+  "nome completo", "nome", "e-mail", "email", "telefone", "whatsapp", "telefone / whatsapp", "celular",
+]);
+
+function isDuplicateStandardQuestion(question: string): boolean {
+  return DUPLICATE_STANDARD_QUESTIONS.has(question.trim().toLowerCase());
+}
+
+/**
  * As respostas do formulário do Meta chegam em `facebook_field_data` como
  * [{ name: "pergunta_com_underscores?", values: ["-_resposta"] }, ...] — é a
  * informação mais valiosa pro vendedor (objetivo, disponibilidade, quando quer
- * começar), então vira um bloco de destaque em vez de JSON cru.
+ * começar), então vira campos de "Informações Padrão do Lead" em vez de JSON cru.
  */
 function parseFacebookQA(payload: Record<string, unknown>): FormQA[] {
   const raw = payload.facebook_field_data;
@@ -115,159 +141,89 @@ function parseFacebookQA(payload: Record<string, unknown>): FormQA[] {
     if (!entry || typeof entry !== "object") continue;
     const { name, values } = entry as { name?: unknown; values?: unknown };
     if (typeof name !== "string" || !name.trim()) continue;
+    const cleanedQuestion = cleanFacebookText(name);
+    if (isDuplicateStandardQuestion(cleanedQuestion)) continue;
     const answer = (Array.isArray(values) ? values : [values])
       .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
       .map(cleanFacebookText)
       .filter(Boolean)
       .join(", ");
     if (!answer) continue;
-    result.push({ question: cleanFacebookText(name), answer });
+    result.push({ question: shortenFormQuestion(cleanedQuestion), answer });
   }
   return result;
 }
 
-function FacebookQABlock({ qa }: { qa: FormQA[] }) {
-  if (qa.length === 0) return null;
-  return (
-    <div className="border-b border-cyan-100 bg-cyan-50/60 px-4 py-3">
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-cyan-700">
-        Respostas do formulário
-      </p>
-      <div className="space-y-1.5">
-        {qa.map((item, index) => (
-          <div
-            key={`${item.question}-${index}`}
-            className="rounded-lg border border-cyan-100 border-l-4 border-l-cyan-500 bg-white px-3 py-2 shadow-sm"
-          >
-            <p className="text-[11px] leading-snug text-neutral-500">{item.question}</p>
-            <p className="mt-0.5 break-words text-[13px] font-bold leading-snug text-neutral-900">
-              {item.answer}
-            </p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/* ─── Sub-components ─── */
-
-function EnrollmentCard({ e, index, total }: { e: EnrollmentSummary; index: number; total: number }) {
-  const icon = productIcon(e.treinamentoId, e.treinamentoNome);
-  const label = enrollmentLabel(e);
-  const dateLabel = e.treinamentoData
-    ? formatTrainingDateLabel(e.treinamentoData) ?? fmtDate(e.treinamentoData)
-    : null;
-  const fields = e.payload ? payloadFields(e.payload) : [];
-  const facebookQA = e.payload ? parseFacebookQA(e.payload) : [];
-
-  return (
-    <div className="overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-sm">
-      {/* Header */}
-      <div className="flex items-start gap-3 border-b border-neutral-100 bg-neutral-50 px-4 py-3">
-        <span className="mt-0.5 text-base leading-none">{icon}</span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-xs font-semibold text-neutral-900">{label}</p>
-            {total > 1 && (
-              <span className="shrink-0 rounded-full bg-neutral-200 px-2 py-0.5 text-[9px] font-bold text-neutral-500">
-                {index + 1}/{total}
-              </span>
-            )}
-          </div>
-          {dateLabel && <p className="text-[10px] text-neutral-400">{dateLabel}</p>}
-          <p className="text-[10px] text-neutral-400">Inscrito em {fmtDate(e.criadoEm)}</p>
-        </div>
-        <div className="flex-shrink-0">
-          {e.presencaAprovada ? (
-            <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">✓ Presente</span>
-          ) : e.presencaValidada ? (
-            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">⚠ Parcial</span>
-          ) : null}
-        </div>
-      </div>
-
-      {/* Respostas do formulário do Meta em destaque */}
-      <FacebookQABlock qa={facebookQA} />
-
-      {/* Form fields */}
-      {fields.length > 0 && (
-        <div className="divide-y divide-neutral-50">
-          {fields.map(({ key, label: lbl, value }) => (
-            <div key={key} className="flex items-start gap-2 px-4 py-1.5">
-              <span className="min-w-[120px] shrink-0 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-                {lbl}
-              </span>
-              <span className="min-w-0 break-words text-xs text-neutral-800">{value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* ─── Component ─── */
+/* ─── Componente ─── */
 
 interface FormHistoryViewProps {
   inscricao: InscricaoItem;
 }
 
-export function FormHistoryView({ inscricao }: FormHistoryViewProps) {
+/**
+ * Respostas do formulário (perguntas do Facebook Lead Ads já resumidas +
+ * demais campos do payload) como uma lista simples de campo/valor — usada
+ * diretamente no grid de "Informações Padrão do Lead" (mesmo componente
+ * InfoCard dos demais campos), sem cabeçalho, ícone ou card próprio.
+ */
+export function leadFormAnswerFields(inscricao: InscricaoItem): LeadFormAnswerField[] {
   const enrollments = inscricao.allEnrollments ?? [];
-  const currentPayload = (inscricao.payload ?? {}) as Record<string, unknown>;
+  const enrollmentPayloads = enrollments
+    .map((e) => e.payload)
+    .filter((p): p is Record<string, unknown> => p != null);
+  const payloads = enrollmentPayloads.length > 0
+    ? enrollmentPayloads
+    : [(inscricao.payload ?? {}) as Record<string, unknown>];
 
-  // If we have enrollments with payloads, show each as a complete form card.
-  // Otherwise, fall back to showing the current lead's payload only.
-  const hasEnrollmentsWithPayload = enrollments.some((e) => e.payload != null);
+  const seen = new Set<string>();
+  const result: LeadFormAnswerField[] = [];
 
-  if (hasEnrollmentsWithPayload || enrollments.length > 0) {
-    return (
-      <div className="space-y-4">
-        <p className="text-[10px] font-bold uppercase tracking-widest text-neutral-400">
-          {enrollments.length === 1 ? "1 formulário" : `${enrollments.length} formulários`}
-        </p>
-        {enrollments.map((e, i) => (
-          <EnrollmentCard key={e.id} e={e} index={i} total={enrollments.length} />
-        ))}
-      </div>
-    );
+  for (const payload of payloads) {
+    for (const qa of parseFacebookQA(payload)) {
+      const dedupeKey = `qa:${qa.question.toLowerCase()}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      result.push({ key: dedupeKey, label: qa.question, value: qa.answer });
+    }
+    for (const field of payloadFields(payload)) {
+      if (seen.has(field.key)) continue;
+      seen.add(field.key);
+      result.push(field);
+    }
   }
 
-  // Fallback: show current lead's payload (allEnrollments null or empty)
-  const fields = payloadFields(currentPayload);
-  const facebookQA = parseFacebookQA(currentPayload);
+  return result;
+}
+
+/**
+ * Metadados técnicos do formulário (rastreamento de anúncio/campanha, IDs do
+ * Facebook etc. — ver FORM_TRACKING_KEYS) — deliberadamente fora do bloco
+ * "Informações Padrão do Lead" por não serem relevantes pra quem olha a
+ * ficha; exibidos numa seção própria no final da visualização.
+ */
+export function hasFormTrackingFields(inscricao: InscricaoItem): boolean {
+  const payload = (inscricao.payload ?? {}) as Record<string, unknown>;
+  return trackingPayloadFields(payload).length > 0;
+}
+
+export function FormTrackingFields({ inscricao }: FormHistoryViewProps) {
+  const currentPayload = (inscricao.payload ?? {}) as Record<string, unknown>;
+  const fields = trackingPayloadFields(currentPayload);
+  if (fields.length === 0) return null;
+
   return (
-    <div className="space-y-5">
-      {facebookQA.length > 0 && (
-        <section className="overflow-hidden rounded-xl border border-cyan-100">
-          <FacebookQABlock qa={facebookQA} />
-        </section>
-      )}
-      {fields.length > 0 ? (
-        <section>
-          <p className="mb-2.5 text-[10px] font-bold uppercase tracking-widest text-neutral-400">
-            Respostas do formulário
-          </p>
-          <div className="grid grid-cols-1 gap-1.5">
-            {fields.map(({ key, label, value }) => (
-              <div
-                key={key}
-                className="flex items-start gap-2 rounded-lg border border-neutral-100 bg-white px-3 py-2"
-              >
-                <span className="min-w-[120px] shrink-0 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-                  {label}
-                </span>
-                <span className="min-w-0 break-words text-xs text-neutral-800">{value}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : (
-        <p className="py-6 text-center text-xs text-neutral-400">
-          Carregando dados do formulário...
-        </p>
-      )}
+    <div className="grid grid-cols-1 gap-1.5">
+      {fields.map(({ key, label, value }) => (
+        <div
+          key={key}
+          className="flex items-start gap-2 rounded-lg border border-neutral-100 bg-white px-3 py-2"
+        >
+          <span className="min-w-[120px] shrink-0 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
+            {label}
+          </span>
+          <span className="min-w-0 break-words text-xs text-neutral-800">{value}</span>
+        </div>
+      ))}
     </div>
   );
 }

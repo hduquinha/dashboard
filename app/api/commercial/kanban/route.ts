@@ -24,12 +24,15 @@ const ACTIVE_STAGES: CommercialStage[] = [
 // nao so uma pagina. O indice (commercial_stage, position) mantem isso barato.
 const PAGE_SIZE = 200;
 
+// Chaves de etapa sao livres por funil (ver lib/funnels.ts) — aqui so
+// aceita o que o client mandou (etapas do funil selecionado), sem restringir
+// a uma lista fixa. Sem "stages" no request, cai no Funil Padrao.
 function parseStages(value: string | null): CommercialStage[] {
   if (!value) return ACTIVE_STAGES;
   const requested = value
     .split(",")
     .map((stage) => stage.trim())
-    .filter((stage): stage is CommercialStage => ACTIVE_STAGES.includes(stage as CommercialStage));
+    .filter((stage): stage is CommercialStage => stage.length > 0);
   return requested.length > 0 ? requested : ACTIVE_STAGES;
 }
 

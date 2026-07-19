@@ -9,7 +9,11 @@ export async function GET(request: NextRequest) {
   if (auth) return auth;
 
   const { searchParams } = new URL(request.url);
-  const variableExpenses = await listVariableExpenses(parseFinanceFilters(searchParams));
+  const filters = parseFinanceFilters(searchParams);
+  const month = searchParams.get("month");
+  const variableExpenses = await listVariableExpenses(
+    month && !filters.from && !filters.to ? { ...filters, from: month, to: month } : filters
+  );
   return NextResponse.json({ variableExpenses });
 }
 
