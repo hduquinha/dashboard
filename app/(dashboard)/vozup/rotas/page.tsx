@@ -70,7 +70,9 @@ export default function VozupRotasPage() {
                     {showClarity && (
                       <td>
                         <a
-                          href={clarityHeatmapUrl(`${VOZUP_SITE_ORIGIN}${row.rota === "/" ? "/" : row.rota}`)}
+                          href={clarityHeatmapUrl(`${VOZUP_SITE_ORIGIN}${row.rota}`, {
+                            match: row.rota === "/" ? "exact" : "prefix",
+                          })}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="vrm-heatmap-link"
