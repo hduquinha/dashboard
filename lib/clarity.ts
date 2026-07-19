@@ -15,7 +15,7 @@
  */
 
 export const CLARITY_PROJECT_ID: string =
-  process.env.NEXT_PUBLIC_CLARITY_PROJECT_ID || "__CLARITY_ID__";
+  process.env.NEXT_PUBLIC_CLARITY_PROJECT_ID || "xonuuydq5e";
 
 export function hasClarityProject(): boolean {
   return CLARITY_PROJECT_ID.length > 0 && !CLARITY_PROJECT_ID.startsWith("__");
