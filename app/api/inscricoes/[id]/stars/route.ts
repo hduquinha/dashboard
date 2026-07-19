@@ -4,7 +4,8 @@ import {
   getRequestDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
-import { setInscricaoStars } from "@/lib/db";
+import { getInscricaoById, setInscricaoStars } from "@/lib/db";
+import { logLeadTimelineEvent } from "@/lib/commercial";
 import { maskInscricaoForUser } from "@/lib/leadPermissions";
 import { hasPermission } from "@/lib/permissions";
 
@@ -81,7 +82,18 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
+    const before = await getInscricaoById(id);
     const inscricao = await setInscricaoStars(id, stars);
+
+    // Auditoria: mudança de temperatura (estrelas) na linha do tempo.
+    const previousStars = before?.stars ?? null;
+    if (previousStars !== stars) {
+      await logLeadTimelineEvent(session?.user ?? null, id, "lead_stars_changed", {
+        from: previousStars,
+        to: stars,
+      });
+    }
+
     return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {

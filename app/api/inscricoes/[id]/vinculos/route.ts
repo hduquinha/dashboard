@@ -4,6 +4,7 @@ import {
   getRequestDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
+import { logLeadTimelineEvent } from "@/lib/commercial";
 import { hasPermission } from "@/lib/permissions";
 import { addLeadVinculo, listLeadVinculos } from "@/lib/vozupFolders";
 
@@ -73,6 +74,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     await addLeadVinculo(leadId, pasta, bloco);
+    await logLeadTimelineEvent(session?.user ?? null, leadId, "lead_vinculo_added", { pasta, bloco });
     const vinculos = await listLeadVinculos(leadId);
     return NextResponse.json({ vinculos });
   } catch (error) {

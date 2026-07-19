@@ -4,7 +4,8 @@ import {
   getRequestDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
-import { setInscricaoStatus } from "@/lib/db";
+import { getInscricaoById, setInscricaoStatus } from "@/lib/db";
+import { logLeadTimelineEvent } from "@/lib/commercial";
 import { maskInscricaoForUser } from "@/lib/leadPermissions";
 import { hasPermission } from "@/lib/permissions";
 import type { InscricaoStatus } from "@/types/inscricao";
@@ -86,11 +87,23 @@ export async function PATCH(request: Request, context: RouteContext) {
     session?.user.name || session?.user.email || null;
 
   try {
+    const before = await getInscricaoById(id);
     const inscricao = await setInscricaoStatus(id, status, {
       whatsappContacted,
       note,
       author,
     });
+
+    // Auditoria: troca de status (Aguardando/Qualificado/Descartado) na linha do tempo.
+    const previousStatus = before?.status ?? "aguardando";
+    if (previousStatus !== status) {
+      await logLeadTimelineEvent(session?.user ?? null, id, "lead_status_changed", {
+        from: previousStatus,
+        to: status,
+        whatsappContacted: whatsappContacted ?? null,
+      });
+    }
+
     return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {

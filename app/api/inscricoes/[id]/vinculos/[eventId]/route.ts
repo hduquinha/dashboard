@@ -4,6 +4,7 @@ import {
   getRequestDashboardSession,
   UnauthorizedError,
 } from "@/lib/auth";
+import { logLeadTimelineEvent } from "@/lib/commercial";
 import { hasPermission } from "@/lib/permissions";
 import { listLeadVinculos, removeLeadVinculo, replaceLeadVinculo } from "@/lib/vozupFolders";
 
@@ -52,7 +53,14 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
+    const previous = (await listLeadVinculos(ids.leadId)).find((v) => v.eventId === ids.eventId);
     await replaceLeadVinculo(ids.leadId, ids.eventId, pasta, bloco);
+    await logLeadTimelineEvent(session?.user ?? null, ids.leadId, "lead_vinculo_replaced", {
+      fromPasta: previous?.pasta ?? null,
+      fromBloco: previous?.bloco ?? null,
+      pasta,
+      bloco,
+    });
     const vinculos = await listLeadVinculos(ids.leadId);
     return NextResponse.json({ vinculos });
   } catch (error) {
@@ -78,7 +86,12 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!ids) return NextResponse.json({ error: "Id inválido" }, { status: 400 });
 
   try {
+    const previous = (await listLeadVinculos(ids.leadId)).find((v) => v.eventId === ids.eventId);
     await removeLeadVinculo(ids.leadId, ids.eventId);
+    await logLeadTimelineEvent(session?.user ?? null, ids.leadId, "lead_vinculo_removed", {
+      pasta: previous?.pasta ?? null,
+      bloco: previous?.bloco ?? null,
+    });
     const vinculos = await listLeadVinculos(ids.leadId);
     return NextResponse.json({ vinculos });
   } catch (error) {

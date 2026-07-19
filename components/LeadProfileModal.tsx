@@ -10,6 +10,7 @@ import {
   FileText,
   Flag,
   Globe2,
+  History,
   Mail,
   MapPin,
   Phone,
@@ -19,7 +20,7 @@ import {
 import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import { TagBadge } from "@/components/TagBadge";
 import { LeadEditForm } from "@/components/LeadEditForm";
-import { FormHistoryView } from "@/components/FormHistoryView";
+import { FormTrackingFields, hasFormTrackingFields, leadFormAnswerFields } from "@/components/FormHistoryView";
 import { LeadTimeline } from "@/components/LeadTimeline";
 import { LeadVinculosSection } from "@/components/LeadVinculosSection";
 import { EncontroChatView } from "@/components/EncontroChatView";
@@ -32,17 +33,7 @@ import { buildOperationalTags, groupParticipantTags, isOnlineTraining } from "@/
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import { describeLeadSource } from "@/lib/leadFields";
 import { hasPermission, type PermissionUser } from "@/lib/permissions";
-
-const COMMERCIAL_STAGE_LABELS: Record<CommercialStage, { label: string; className: string }> = {
-  novo: { label: "Novo", className: "bg-slate-100 text-slate-700" },
-  primeiro_contato: { label: "Primeiro contato", className: "bg-cyan-50 text-cyan-700" },
-  em_atendimento: { label: "Em atendimento", className: "bg-blue-50 text-blue-700" },
-  agendado: { label: "Agendado", className: "bg-violet-50 text-violet-700" },
-  fechamento: { label: "Fechamento", className: "bg-amber-50 text-amber-700" },
-  ganho: { label: "Ganho", className: "bg-emerald-50 text-emerald-700" },
-  perdido: { label: "Perdido", className: "bg-rose-50 text-rose-700" },
-  no_show: { label: "No-show", className: "bg-orange-50 text-orange-700" },
-};
+import { buildStageBadgeMap, FALLBACK_STAGE_BADGE } from "@/lib/stageColors";
 
 interface RecruiterOption {
   code: string;
@@ -216,6 +207,22 @@ export function LeadProfileModal({
       cancelled = true;
     };
   }, [inscricao?.codigoProprio]);
+
+  const stageBadgeMap = useMemo(() => buildStageBadgeMap(commercial?.funnels ?? []), [commercial]);
+  function stageBadge(key: CommercialStage | null | undefined) {
+    return (key ? stageBadgeMap.get(key) : null) ?? FALLBACK_STAGE_BADGE;
+  }
+  // Etapas do proprio funil do lead — cada funil tem seu conjunto de etapas.
+  const leadFunnel = useMemo(() => {
+    const funnelId = inscricao?.commercial?.funnelId ?? null;
+    return (
+      commercial?.funnels.find((funnel) => funnel.id === funnelId) ??
+      commercial?.funnels.find((funnel) => funnel.isDefault) ??
+      null
+    );
+  }, [commercial, inscricao?.commercial?.funnelId]);
+  const leadStageOptions = leadFunnel?.stages ?? commercial?.stages ?? [];
+  const hasFechamentoStage = leadStageOptions.some((stage) => stage.key === "fechamento");
 
   const trainingOptionsById = useMemo(() => {
     return trainingOptions.reduce<Record<string, TrainingOption>>((acc, o) => {
@@ -492,6 +499,27 @@ export function LeadProfileModal({
     }
   }
 
+  async function handleMoveFunnel(funnelId: string) {
+    if (!inscricao || commercialSaving || !funnelId) return;
+    setCommercialSaving(true);
+    setCommercialMessage(null);
+    try {
+      const res = await fetch(`/api/commercial/leads/${inscricao.id}/funnel`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ funnelId: Number(funnelId) }),
+      });
+      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      if (!res.ok) throw new Error(data?.error ?? "Falha ao mover lead de funil.");
+      await refreshLead();
+      setCommercialMessage("Lead movido para outro funil.");
+    } catch (error) {
+      setCommercialMessage(error instanceof Error ? error.message : "Falha ao mover lead de funil.");
+    } finally {
+      setCommercialSaving(false);
+    }
+  }
+
   const nomeSugestoes = inscricao
     ? (() => {
         const p = (inscricao.payload ?? {}) as Record<string, unknown>;
@@ -738,8 +766,22 @@ export function LeadProfileModal({
                               inscricao.criadoEm
                           )}
                         />
+                        {/* Respostas do formulário viram campos normais aqui, sem cabeçalho próprio */}
+                        {canViewHistory
+                          ? leadFormAnswerFields(inscricao).map((field) => (
+                              <InfoCard key={field.key} label={field.label} value={field.value} />
+                            ))
+                          : null}
                       </div>
                     </div>
+                  </Section>
+
+                  {/* ── LINHA DO TEMPO ───────────────────── */}
+                  {/* Logo abaixo do contato: o vendedor registra "mandei
+                      mensagem"/"liguei" na hora, e quem pegar o lead depois vê
+                      todo o histórico (contatos + edições) sem procurar. */}
+                  <Section label="Linha do tempo · contatos e alterações">
+                    <LeadTimeline leadId={inscricao.id} canLog={canManageNotes} />
                   </Section>
 
                   {/* ── ORIGEM DO LEAD ───────────────────── */}
@@ -764,11 +806,6 @@ export function LeadProfileModal({
                     })()}
                   </Section>
 
-                  {/* ── LINHA DO TEMPO ───────────────────── */}
-                  <Section label="Linha do tempo do lead">
-                    <LeadTimeline leadId={inscricao.id} />
-                  </Section>
-
                   {/* ── VÍNCULOS (ATRIBUTOS DO LEAD) ─────── */}
                   {canManageLinks ? (
                     <Section label="Vínculos · aulas, treinamentos e origens">
@@ -779,13 +816,6 @@ export function LeadProfileModal({
                           router.refresh();
                         }}
                       />
-                    </Section>
-                  ) : null}
-
-                  {/* ── RESPOSTAS DO FORMULÁRIO ──────────── */}
-                  {canViewHistory ? (
-                    <Section label="Respostas do Formulário">
-                      <FormHistoryView inscricao={inscricao} />
                     </Section>
                   ) : null}
 
@@ -873,8 +903,8 @@ export function LeadProfileModal({
                       {commercial ? (
                         <>
                           <div className="mb-2 flex items-center justify-between">
-                            <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${COMMERCIAL_STAGE_LABELS[inscricao.commercial.stage].className}`}>
-                              {COMMERCIAL_STAGE_LABELS[inscricao.commercial.stage].label}
+                            <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${stageBadge(inscricao.commercial.stage).className}`}>
+                              {stageBadge(inscricao.commercial.stage).label}
                             </span>
                           </div>
                           {commercialMessage && (
@@ -887,7 +917,7 @@ export function LeadProfileModal({
                               disabled={commercialSaving}
                               className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
                             >
-                              {commercial.stages.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
+                              {leadStageOptions.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
                             </select>
                             {commercial.isSupervisor && (
                               <select
@@ -902,21 +932,39 @@ export function LeadProfileModal({
                                 ))}
                               </select>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => handleCommercialStageChange("fechamento")}
-                              disabled={commercialSaving || inscricao.commercial.stage === "fechamento"}
-                              className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-100 disabled:opacity-60"
-                            >
-                              Marcar como fechamento
-                            </button>
+                            {commercial.isSupervisor && commercial.funnels.length > 1 && (
+                              <select
+                                value=""
+                                onChange={(e) => handleMoveFunnel(e.target.value)}
+                                disabled={commercialSaving}
+                                title="O lead entra na etapa de entrada do funil de destino."
+                                className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+                              >
+                                <option value="">Mover para outro funil</option>
+                                {commercial.funnels
+                                  .filter((f) => f.id !== leadFunnel?.id)
+                                  .map((f) => (
+                                    <option key={f.id} value={f.id}>{f.name}</option>
+                                  ))}
+                              </select>
+                            )}
+                            {hasFechamentoStage && (
+                              <button
+                                type="button"
+                                onClick={() => handleCommercialStageChange("fechamento")}
+                                disabled={commercialSaving || inscricao.commercial.stage === "fechamento"}
+                                className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 hover:bg-neutral-100 disabled:opacity-60"
+                              >
+                                Marcar como fechamento
+                              </button>
+                            )}
                           </div>
                         </>
                       ) : (
                         <div>
                           <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-400">Etapa</p>
-                          <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${COMMERCIAL_STAGE_LABELS[inscricao.commercial.stage].className}`}>
-                            {COMMERCIAL_STAGE_LABELS[inscricao.commercial.stage].label}
+                          <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-semibold ${stageBadge(inscricao.commercial.stage).className}`}>
+                            {stageBadge(inscricao.commercial.stage).label}
                           </span>
                         </div>
                       )}
@@ -1064,6 +1112,13 @@ export function LeadProfileModal({
                     </Collapsible>
                   )}
 
+                  {/* ── DADOS TÉCNICOS DO FORMULÁRIO ─────── */}
+                  {canViewHistory && hasFormTrackingFields(inscricao) ? (
+                    <Section label="Dados técnicos do formulário">
+                      <FormTrackingFields inscricao={inscricao} />
+                    </Section>
+                  ) : null}
+
                   <div className="h-6" />
                 </>
               )}
@@ -1079,6 +1134,7 @@ export function LeadProfileModal({
 
 function renderIconForLabel(label: string, size: number) {
   const normalized = label.toLowerCase();
+  if (normalized.includes("linha do tempo")) return <History size={size} />;
   if (normalized.includes("origem")) return <Globe2 size={size} />;
   if (normalized.includes("nome") || normalized.includes("lead") || normalized.includes("vendedor")) return <UserRound size={size} />;
   if (normalized.includes("e-mail") || normalized.includes("email")) return <Mail size={size} />;

@@ -10,6 +10,8 @@ import {
   updateInscricao,
   type UpdateInscricaoInput,
 } from "@/lib/db";
+import { logLeadTimelineEvent } from "@/lib/commercial";
+import { diffLeadPayload } from "@/lib/leadAudit";
 import { maskInscricaoForUser } from "@/lib/leadPermissions";
 import { hasPermission, type PermissionKey } from "@/lib/permissions";
 
@@ -219,7 +221,18 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
+    const before = await getInscricaoById(id);
     const inscricao = await updateInscricao(id, updates);
+
+    // Auditoria: toda edição vira evento na linha do tempo do lead.
+    const changes = diffLeadPayload(
+      before?.payload as Record<string, unknown> | undefined,
+      inscricao.payload as Record<string, unknown> | undefined
+    );
+    if (changes.length > 0) {
+      await logLeadTimelineEvent(session?.user ?? null, id, "lead_edited", { changes });
+    }
+
     return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {

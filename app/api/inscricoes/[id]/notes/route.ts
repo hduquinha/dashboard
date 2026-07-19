@@ -5,6 +5,7 @@ import {
   UnauthorizedError,
 } from "@/lib/auth";
 import { addInscricaoNote } from "@/lib/db";
+import { logLeadTimelineEvent } from "@/lib/commercial";
 import { maskInscricaoForUser } from "@/lib/leadPermissions";
 import { hasPermission } from "@/lib/permissions";
 
@@ -71,6 +72,13 @@ export async function POST(request: Request, context: RouteContext) {
 
   try {
     const inscricao = await addInscricaoNote(id, content, { viaWhatsapp, author });
+
+    // Auditoria: observação interna também aparece na linha do tempo do lead.
+    await logLeadTimelineEvent(session?.user ?? null, id, "lead_note_added", {
+      content: content.trim().slice(0, 2000),
+      viaWhatsapp: viaWhatsapp ?? false,
+    });
+
     return NextResponse.json({ inscricao: maskInscricaoForUser(inscricao, session?.user ?? null) });
   } catch (error) {
     if (error instanceof Error && /encontrad/i.test(error.message)) {

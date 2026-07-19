@@ -8,11 +8,24 @@ import {
   upsertProductivityLeadAssignment,
 } from "@/lib/productivity";
 import { hasPermission } from "@/lib/permissions";
+import {
+  findStageByKey,
+  findStageByKind,
+  getDefaultFunnel,
+  getFunnelById,
+  listFunnelsForUser,
+  type Funnel,
+  type FunnelStage,
+} from "@/lib/funnels";
 import type { CommercialStage } from "@/types/inscricao";
 import type { CommercialSeller, CommercialWorkspace } from "@/types/commercial";
 
 const SCHEMA = "dashboard";
 
+/** Etapas do Funil Padrão, mantidas aqui só como referência estática para
+ * relatórios (lib/commercialReports.ts, CommercialCommandCenter) que ainda
+ * fazem contagens nomeadas por etapa — funis customizados não entram nelas
+ * (ver limitação documentada no plano de funis). */
 export const COMMERCIAL_STAGES: Array<{ key: CommercialStage; label: string }> = [
   { key: "novo", label: "Novo" },
   { key: "primeiro_contato", label: "Primeiro contato" },
@@ -23,8 +36,6 @@ export const COMMERCIAL_STAGES: Array<{ key: CommercialStage; label: string }> =
   { key: "perdido", label: "Perdido" },
   { key: "no_show", label: "No-show" },
 ];
-
-const COMMERCIAL_STAGE_KEYS = new Set(COMMERCIAL_STAGES.map((stage) => stage.key));
 
 let schemaReady = false;
 
@@ -38,11 +49,30 @@ function assertSupervisor(user: DashboardUser | null | undefined): void {
   }
 }
 
-function normalizeStage(value: unknown): CommercialStage {
-  if (typeof value === "string" && COMMERCIAL_STAGE_KEYS.has(value as CommercialStage)) {
-    return value as CommercialStage;
+async function getLeadFunnel(inscricaoId: number): Promise<Funnel> {
+  const row = await getPool().query<{ funnel_id: number | null }>(
+    `SELECT funnel_id FROM ${SCHEMA}.commercial_leads WHERE inscricao_id = $1`,
+    [inscricaoId]
+  );
+  const funnelId = row.rows[0]?.funnel_id ?? null;
+  const funnel = funnelId ? await getFunnelById(funnelId) : null;
+  return funnel ?? (await getDefaultFunnel());
+}
+
+function requireStageByKind(funnel: Funnel, kind: FunnelStage["kind"]): FunnelStage {
+  const stage = findStageByKind(funnel, kind);
+  if (!stage) {
+    throw new Error(`Funil "${funnel.name}" nao tem etapa do tipo ${kind}.`);
   }
-  throw new Error("Etapa comercial invalida.");
+  return stage;
+}
+
+function normalizeStage(funnel: Funnel, value: unknown): FunnelStage {
+  if (typeof value === "string") {
+    const stage = findStageByKey(funnel, value);
+    if (stage) return stage;
+  }
+  throw new Error("Etapa comercial invalida para este funil.");
 }
 
 export async function ensureCommercialSchema(): Promise<void> {
@@ -74,10 +104,13 @@ export async function ensureCommercialSchema(): Promise<void> {
     );
 
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS position DOUBLE PRECISION;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS funnel_id INTEGER;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS commercial_stage_kind TEXT NOT NULL DEFAULT 'entry';
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_reason TEXT;
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_course TEXT;
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_value NUMERIC;
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS contact_attempts SMALLINT NOT NULL DEFAULT 0 CHECK (contact_attempts BETWEEN 0 AND 10);
 
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.commercial_events (
       id BIGSERIAL PRIMARY KEY,
@@ -134,6 +167,26 @@ async function insertEvent(
   );
 }
 
+/**
+ * Registro genérico de auditoria na linha do tempo do lead (edições de campo,
+ * status, observações, vínculos...). Diferente das ações comerciais, NÃO cria
+ * linha em commercial_leads — o lead não entra no Kanban só por ter sido
+ * editado. Nunca lança: auditoria não pode derrubar a operação principal.
+ */
+export async function logLeadTimelineEvent(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  type: string,
+  payload: Record<string, unknown> = {}
+): Promise<void> {
+  try {
+    await ensureCommercialSchema();
+    await insertEvent(inscricaoId, type, user, payload);
+  } catch (error) {
+    console.error(`Falha ao registrar evento ${type} do lead ${inscricaoId}`, error);
+  }
+}
+
 async function ensureCommercialLeadRow(inscricaoId: number): Promise<void> {
   await ensureCommercialSchema();
   const items = await listInscricoesByIds([inscricaoId]);
@@ -142,14 +195,18 @@ async function ensureCommercialLeadRow(inscricaoId: number): Promise<void> {
     throw new Error("Lead nao encontrado.");
   }
 
+  const defaultFunnel = await getDefaultFunnel();
+  const entryStage = requireStageByKind(defaultFunnel, "entry");
+
   await getPool().query(
     `
       INSERT INTO ${SCHEMA}.commercial_leads (
-        inscricao_id, campaign_source, campaign_name, campaign_medium, campaign_term, landing_page, position
+        inscricao_id, campaign_source, campaign_name, campaign_medium, campaign_term, landing_page,
+        funnel_id, commercial_stage, commercial_stage_kind, position
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6,
-        (SELECT COALESCE(MAX(position), 0) + 1000 FROM ${SCHEMA}.commercial_leads WHERE commercial_stage = 'novo')
+        $1, $2, $3, $4, $5, $6, $7, $8, $9,
+        (SELECT COALESCE(MAX(position), 0) + 1000 FROM ${SCHEMA}.commercial_leads WHERE commercial_stage = $8)
       )
       ON CONFLICT (inscricao_id)
       DO UPDATE SET
@@ -167,6 +224,9 @@ async function ensureCommercialLeadRow(inscricaoId: number): Promise<void> {
       item.commercial?.campaignMedium ?? null,
       item.commercial?.campaignTerm ?? null,
       item.commercial?.landingPage ?? null,
+      defaultFunnel.id,
+      entryStage.key,
+      entryStage.kind,
     ]
   );
 }
@@ -193,11 +253,13 @@ export async function getCommercialWorkspace(
 ): Promise<CommercialWorkspace> {
   await ensureCommercialSchema();
   const sellers = await listCommercialSellers();
+  const funnels = await listFunnelsForUser(user);
 
   return {
     isSupervisor: isProductivityManager(user),
     sellers,
     stages: COMMERCIAL_STAGES,
+    funnels,
   };
 }
 
@@ -208,7 +270,8 @@ export async function setCommercialStage(
   positionInput?: unknown
 ): Promise<void> {
   await ensureCommercialLeadRow(inscricaoId);
-  const stage = normalizeStage(stageInput);
+  const funnel = await getLeadFunnel(inscricaoId);
+  const stage = normalizeStage(funnel, stageInput);
   const position =
     typeof positionInput === "number" && Number.isFinite(positionInput) ? positionInput : null;
   const actor = productivityActorFromUser(user);
@@ -227,13 +290,34 @@ export async function setCommercialStage(
     `
       UPDATE ${SCHEMA}.commercial_leads
       SET commercial_stage = $2,
-          position = COALESCE($3, position),
+          commercial_stage_kind = $3,
+          position = COALESCE($4, position),
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
-    [inscricaoId, stage, position]
+    [inscricaoId, stage.key, stage.kind, position]
   );
-  await insertEvent(inscricaoId, "stage_changed", user, { actor }, fromStage, stage);
+  await insertEvent(inscricaoId, "stage_changed", user, { actor }, fromStage, stage.key);
+}
+
+/**
+ * Contador de tentativas de contato (0-10), editavel direto no card do
+ * Kanban via +/-. Sem log de evento na timeline — e um ajuste rapido e
+ * frequente demais pra virar historico (ao contrario de troca de etapa).
+ */
+export async function adjustContactAttempts(inscricaoId: number, delta: number): Promise<number> {
+  await ensureCommercialLeadRow(inscricaoId);
+  const result = await getPool().query<{ contact_attempts: number }>(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET contact_attempts = LEAST(10, GREATEST(0, contact_attempts + $2)),
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+      RETURNING contact_attempts
+    `,
+    [inscricaoId, delta]
+  );
+  return result.rows[0]?.contact_attempts ?? 0;
 }
 
 export interface CommercialTimelineEvent {
@@ -358,21 +442,23 @@ export async function closeCommercialLead(
     throw new Error("Informe o nome do curso fechado.");
   }
 
-  const fromStage = item?.commercial?.stage ?? "novo";
-  const toStage: CommercialStage = input.reason === "curso_fechado" ? "ganho" : "perdido";
+  const funnel = await getLeadFunnel(inscricaoId);
+  const toStage = requireStageByKind(funnel, input.reason === "curso_fechado" ? "won" : "lost");
+  const fromStage = item?.commercial?.stage ?? null;
 
   await getPool().query(
     `
       UPDATE ${SCHEMA}.commercial_leads
       SET commercial_stage = $2,
-          closed_reason = $3,
-          closed_course = $4,
-          closed_value = $5,
+          commercial_stage_kind = $3,
+          closed_reason = $4,
+          closed_course = $5,
+          closed_value = $6,
           closed_at = NOW(),
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
-    [inscricaoId, toStage, input.reason, courseName, value]
+    [inscricaoId, toStage.key, toStage.kind, input.reason, courseName, value]
   );
 
   await insertEvent(
@@ -381,7 +467,7 @@ export async function closeCommercialLead(
     user,
     { reason: input.reason, courseName, value },
     fromStage,
-    toStage
+    toStage.key
   );
 }
 
@@ -423,14 +509,16 @@ export async function applyCommercialLeadAssignment(
   const actor = productivityActorFromUser(user);
   const items = await listInscricoesByIds([inscricaoId]);
   const item = items[0];
+  const funnel = await getLeadFunnel(inscricaoId);
+  const entryStage = requireStageByKind(funnel, "entry");
 
-  // Lead distribuido/redistribuido chega como "novo" no Kanban do vendedor.
-  // Lead fechado (ganho/perdido) que for redistribuido reabre como "novo",
-  // mantendo todo o historico de eventos.
-  const previousStage = item?.commercial?.stage ?? "novo";
+  // Lead distribuido/redistribuido chega na etapa de entrada do funil atual
+  // dele. Lead fechado (ganho/perdido) que for redistribuido reabre nessa
+  // etapa, mantendo todo o historico de eventos.
+  const previousStage = item?.commercial?.stage ?? entryStage.key;
   const previousSellerId = item?.commercial?.assignedSellerId ?? null;
-  const wasClosed = previousStage === "ganho" || previousStage === "perdido";
-  const resetToNovo = wasClosed || previousSellerId !== seller.chatwootUserId;
+  const wasClosed = item?.commercial?.stageKind === "won" || item?.commercial?.stageKind === "lost";
+  const resetToEntry = wasClosed || previousSellerId !== seller.chatwootUserId;
 
   await getPool().query(
     `
@@ -442,7 +530,8 @@ export async function applyCommercialLeadAssignment(
           assigned_by_email = $6,
           assigned_by_name = $7,
           assigned_at = NOW(),
-          commercial_stage = CASE WHEN $8 THEN 'novo' ELSE commercial_stage END,
+          commercial_stage = CASE WHEN $8 THEN $10 ELSE commercial_stage END,
+          commercial_stage_kind = CASE WHEN $8 THEN 'entry' ELSE commercial_stage_kind END,
           position = CASE WHEN $8 THEN NULL ELSE position END,
           closed_reason = CASE WHEN $9 THEN NULL ELSE closed_reason END,
           closed_course = CASE WHEN $9 THEN NULL ELSE closed_course END,
@@ -459,8 +548,9 @@ export async function applyCommercialLeadAssignment(
       actor.id,
       actor.email,
       actor.name,
-      resetToNovo,
+      resetToEntry,
       wasClosed,
+      entryStage.key,
     ]
   );
   if (wasClosed) {
@@ -468,7 +558,7 @@ export async function applyCommercialLeadAssignment(
       sellerId: seller.chatwootUserId,
       sellerEmail: seller.email,
       sellerName: seller.name,
-    }, previousStage, "novo");
+    }, previousStage, entryStage.key);
   }
   await insertEvent(inscricaoId, "assigned", user, {
     sellerId: seller.chatwootUserId,
@@ -540,4 +630,45 @@ export async function unassignCommercialLead(
   });
 
   await removeProductivityLeadAssignment(inscricaoId);
+}
+
+/**
+ * Move um lead para outro funil — a etapa atual dele quase certamente nao
+ * existe no funil de destino, entao ele sempre entra na etapa de entrada
+ * do novo funil (mesma regra usada na atribuicao/reabertura).
+ */
+export async function moveLeadToFunnel(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  funnelId: number
+): Promise<void> {
+  assertSupervisor(user);
+  await ensureCommercialLeadRow(inscricaoId);
+
+  const funnel = await getFunnelById(funnelId);
+  if (!funnel) {
+    throw new Error("Funil nao encontrado.");
+  }
+  const entryStage = requireStageByKind(funnel, "entry");
+
+  const current = await getPool().query<{ commercial_stage: string | null }>(
+    `SELECT commercial_stage FROM ${SCHEMA}.commercial_leads WHERE inscricao_id = $1`,
+    [inscricaoId]
+  );
+  const fromStage = current.rows[0]?.commercial_stage ?? null;
+
+  await getPool().query(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET funnel_id = $2,
+          commercial_stage = $3,
+          commercial_stage_kind = 'entry',
+          position = NULL,
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+    `,
+    [inscricaoId, funnel.id, entryStage.key]
+  );
+
+  await insertEvent(inscricaoId, "funnel_changed", user, { funnelId: funnel.id, funnelName: funnel.name }, fromStage, entryStage.key);
 }

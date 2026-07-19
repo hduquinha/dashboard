@@ -4,12 +4,16 @@ import { useEffect, useState, type FormEvent } from "react";
 import {
   ArrowRightLeft,
   BadgeCheck,
+  Flag,
   History,
+  Link2,
   Mail,
   MessageCircle,
+  Pencil,
   PhoneCall,
   RefreshCw,
   RotateCcw,
+  Star,
   StickyNote,
   UserRoundCheck,
   UserRoundX,
@@ -40,6 +44,34 @@ const ACTIVITY_OPTIONS = [
   { value: "email", label: "E-mail" },
   { value: "anotacao", label: "Anotação" },
 ] as const;
+
+/** Atalhos de 1 clique para os contatos mais comuns do dia a dia do vendedor. */
+const QUICK_LOG_ACTIONS: Array<{
+  kind: (typeof ACTIVITY_OPTIONS)[number]["value"];
+  label: string;
+  description: string;
+}> = [
+  { kind: "whatsapp", label: "💬 Mandei mensagem", description: "Mensagem enviada no WhatsApp" },
+  { kind: "whatsapp", label: "✅ Cliente respondeu", description: "Cliente respondeu no WhatsApp" },
+  { kind: "ligacao", label: "📞 Liguei", description: "Ligação feita" },
+  { kind: "ligacao", label: "🔇 Não atendeu", description: "Ligação não atendida" },
+];
+
+const STATUS_LABELS: Record<string, string> = {
+  aguardando: "Aguardando",
+  aprovado: "Qualificado",
+  rejeitado: "Descartado",
+};
+
+function statusLabel(value: unknown): string {
+  const key = String(value ?? "");
+  return STATUS_LABELS[key] ?? (key || "—");
+}
+
+function formatChangeValue(value: unknown): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text ? `"${text}"` : "(vazio)";
+}
 
 function stageLabel(stage: string | null): string {
   return stage ? STAGE_LABELS[stage] ?? stage : "—";
@@ -105,6 +137,65 @@ function describeEvent(event: CommercialTimelineEvent): {
         detail: null,
       };
     }
+    case "lead_edited": {
+      const changes = Array.isArray(payload.changes)
+        ? (payload.changes as Array<{ label?: string; field?: string; from?: unknown; to?: unknown }>)
+        : [];
+      const lines = changes.map(
+        (c) => `${c.label ?? c.field ?? "Campo"}: ${formatChangeValue(c.from)} → ${formatChangeValue(c.to)}`
+      );
+      return {
+        icon: Pencil,
+        iconClass: "bg-indigo-100 text-indigo-700",
+        title: `Dados do lead editados (${changes.length} ${changes.length === 1 ? "campo" : "campos"})`,
+        detail: lines.join("\n") || null,
+      };
+    }
+    case "lead_status_changed":
+      return {
+        icon: Flag,
+        iconClass: "bg-amber-100 text-amber-700",
+        title: `Status: ${statusLabel(payload.from)} → ${statusLabel(payload.to)}`,
+        detail: payload.whatsappContacted === true ? "Já havia contato pelo WhatsApp." : null,
+      };
+    case "lead_stars_changed": {
+      const from = typeof payload.from === "number" ? payload.from : 0;
+      const to = typeof payload.to === "number" ? payload.to : 0;
+      return {
+        icon: Star,
+        iconClass: "bg-amber-100 text-amber-600",
+        title: `Temperatura: ${from}★ → ${to}★`,
+        detail: null,
+      };
+    }
+    case "lead_note_added":
+      return {
+        icon: StickyNote,
+        iconClass: "bg-neutral-100 text-neutral-600",
+        title: payload.viaWhatsapp === true ? "Observação interna (via WhatsApp)" : "Observação interna",
+        detail: typeof payload.content === "string" ? payload.content : null,
+      };
+    case "lead_vinculo_added":
+      return {
+        icon: Link2,
+        iconClass: "bg-sky-100 text-sky-700",
+        title: `Vínculo adicionado: ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
+        detail: null,
+      };
+    case "lead_vinculo_replaced":
+      return {
+        icon: Link2,
+        iconClass: "bg-sky-100 text-sky-700",
+        title: `Vínculo trocado: ${String(payload.fromPasta ?? "—")} · ${String(payload.fromBloco ?? "—")} → ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
+        detail: null,
+      };
+    case "lead_vinculo_removed":
+      return {
+        icon: Link2,
+        iconClass: "bg-rose-100 text-rose-600",
+        title: `Vínculo removido: ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
+        detail: null,
+      };
     case "activity": {
       const kind = String(payload.kind ?? "anotacao");
       const config: Record<string, { icon: typeof History; iconClass: string; title: string }> = {
@@ -170,15 +261,14 @@ export function LeadTimeline({ leadId, canLog = true }: LeadTimelineProps) {
     };
   }, [leadId]);
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
+  async function logActivity(activityKind: string, activityDescription: string) {
     setSaving(true);
     setError(null);
     try {
       const response = await fetch(`/api/commercial/leads/${leadId}/timeline`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, description: description.trim() }),
+        body: JSON.stringify({ kind: activityKind, description: activityDescription }),
       });
       const data = (await response.json()) as { events?: CommercialTimelineEvent[]; error?: string };
       if (!response.ok || !data.events) {
@@ -193,10 +283,32 @@ export function LeadTimeline({ leadId, canLog = true }: LeadTimelineProps) {
     }
   }
 
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    await logActivity(kind, description.trim());
+  }
+
   return (
     <div className="space-y-3">
       {canLog && (
         <form onSubmit={handleSubmit} className="rounded-xl bg-neutral-50 p-3 ring-1 ring-neutral-100">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+            Entrou em contato? Registre aqui
+          </p>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {QUICK_LOG_ACTIONS.map((action) => (
+              <button
+                key={action.label}
+                type="button"
+                disabled={saving}
+                onClick={() => logActivity(action.kind, action.description)}
+                title={action.description}
+                className="h-8 rounded-full border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 transition hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40"
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={kind}
