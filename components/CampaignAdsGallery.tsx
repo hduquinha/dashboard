@@ -1,11 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Eye, ImageOff, MousePointerClick, RotateCcw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Eye, ImageOff, Layers, MousePointerClick, RotateCcw } from "lucide-react";
 import AdDetailModal from "@/components/AdDetailModal";
 import { AdDestination } from "@/components/AdDestination";
 import CampaignScopeSelect from "@/components/CampaignScopeSelect";
 import { attentionPriority, hasMovement, hasRegistration, needsAttention } from "@/lib/campaignDiagnostics";
+import { groupAdsByCreative, type CreativeGroup } from "@/lib/creativeGroups";
 import { isAdvantagePlusAdset, readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
 import type { AdRow, CampaignGroup, FunnelStageDef, MetaAdsFilters } from "@/types/metaAds";
 
@@ -143,7 +144,15 @@ function Metric({ label, value, title }: { label: string; value: string; title?:
   );
 }
 
-function AdCard({ ad, onOpen }: { ad: AdRow; onOpen: () => void }) {
+/**
+ * Card de um CRIATIVO. Quando o mesmo criativo roda em mais de um conjunto,
+ * mostramos a distribuição ("Roda em N conjuntos") em vez de uma dupla
+ * campanha/conjunto que seria arbitrária — os números do card já são a soma
+ * de todos os `ad_id`, que é o nível onde "Meta marcou" e "Cadastros" batem.
+ */
+function CreativeCard({ creative, onOpen }: { creative: CreativeGroup; onOpen: () => void }) {
+  const ad = creative.card;
+  const grouped = creative.adsetCount > 1 || creative.campaignCount > 1;
   const campaignLabel = readableCampaignName(ad.campaignName);
   const adsetLabel = readableAdsetName(ad.adsetName);
 
@@ -159,26 +168,36 @@ function AdCard({ ad, onOpen }: { ad: AdRow; onOpen: () => void }) {
           </div>
 
           <div className="min-w-0">
-            <dl className="space-y-1.5 text-[11px] text-[rgb(var(--slate-9))]">
-              <div title={ad.campaignName}>
-                <dt className="font-semibold uppercase tracking-wide text-[rgb(var(--slate-8))]">Campanha</dt>
-                <dd className="break-words font-medium leading-snug text-[rgb(var(--slate-11))]">{campaignLabel}</dd>
+            {grouped ? (
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[rgb(var(--slate-9))]">
+                <Layers className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="uppercase tracking-wide">
+                  Roda em {creative.adsetCount} conjunto{creative.adsetCount === 1 ? "" : "s"}
+                  {creative.campaignCount > 1 ? ` · ${creative.campaignCount} campanhas` : ""}
+                </span>
               </div>
-              <div title={ad.adsetName}>
-                <dt className="font-semibold uppercase tracking-wide text-[rgb(var(--slate-8))]">Conjunto</dt>
-                <dd className="break-words font-medium leading-snug text-[rgb(var(--slate-11))]">
-                  {adsetLabel}
-                  {isAdvantagePlusAdset(ad.adsetName) ? (
-                    <span
-                      title="Público Advantage+"
-                      className="ml-1.5 inline-flex rounded-full bg-[rgb(var(--blue-3))] px-1.5 py-0.5 align-middle text-[9px] font-bold uppercase tracking-wide text-[rgb(var(--blue-11))]"
-                    >
-                      ADV+
-                    </span>
-                  ) : null}
-                </dd>
-              </div>
-            </dl>
+            ) : (
+              <dl className="space-y-1.5 text-[11px] text-[rgb(var(--slate-9))]">
+                <div title={ad.campaignName}>
+                  <dt className="font-semibold uppercase tracking-wide text-[rgb(var(--slate-8))]">Campanha</dt>
+                  <dd className="break-words font-medium leading-snug text-[rgb(var(--slate-11))]">{campaignLabel}</dd>
+                </div>
+                <div title={ad.adsetName}>
+                  <dt className="font-semibold uppercase tracking-wide text-[rgb(var(--slate-8))]">Conjunto</dt>
+                  <dd className="break-words font-medium leading-snug text-[rgb(var(--slate-11))]">
+                    {adsetLabel}
+                    {isAdvantagePlusAdset(ad.adsetName) ? (
+                      <span
+                        title="Público Advantage+"
+                        className="ml-1.5 inline-flex rounded-full bg-[rgb(var(--blue-3))] px-1.5 py-0.5 align-middle text-[9px] font-bold uppercase tracking-wide text-[rgb(var(--blue-11))]"
+                      >
+                        ADV+
+                      </span>
+                    ) : null}
+                  </dd>
+                </div>
+              </dl>
+            )}
             <h3 className="mt-1 break-words text-base font-semibold leading-snug text-[rgb(var(--slate-12))]">{ad.adName}</h3>
           </div>
 
@@ -192,7 +211,15 @@ function AdCard({ ad, onOpen }: { ad: AdRow; onOpen: () => void }) {
               value={formatPercent(ad.ctr)}
               title="Percentual das exibições que gerou algum clique no anúncio. Não é quantidade de leads."
             />
-            <Metric label="Meta marcou" value={formatNumber(ad.leadsMeta)} title="Eventos Lead atribuídos pela Meta." />
+            <Metric
+              label="Meta marcou"
+              value={formatNumber(ad.leadsMeta)}
+              title={
+                grouped
+                  ? "Eventos Lead atribuídos pela Meta, somados em todos os conjuntos deste criativo."
+                  : "Eventos Lead atribuídos pela Meta."
+              }
+            />
             <Metric label="Cadastros" value={formatNumber(ad.cadastrosCrm)} title="Envios salvos pelo formulário, incluindo contatos que já existiam." />
             <Metric label="Contatos novos" value={formatNumber(ad.leadsCrm)} title="Pessoas novas criadas no CRM; não inclui cadastros repetidos." />
           </div>
@@ -219,7 +246,7 @@ export default function CampaignAdsGallery({
   onCampaignChange,
   onAdsetChange,
 }: CampaignAdsGalleryProps) {
-  const [selectedAd, setSelectedAd] = useState<AdRow | null>(null);
+  const [selectedCreative, setSelectedCreative] = useState<CreativeGroup | null>(null);
   const [filter, setFilter] = useState<GalleryFilter>("moving");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
@@ -245,31 +272,37 @@ export default function CampaignAdsGallery({
     return campaign.adsets.find((adset) => adset.adsetId === effectiveAdsetId)?.ads ?? [];
   }, [allAds, effectiveAdsetId, effectiveCampaignId, hierarchy]);
 
+  // Um card por CRIATIVO (soma dos `ad_id` de mesmo nome). Só assim "Meta
+  // marcou" e "Cadastros" ficam comparáveis: o mesmo criativo roda em vários
+  // conjuntos, a Meta distribui o crédito dos Leads de um jeito e o CRM atribui
+  // cada cadastro ao conjunto clicado — por conjunto não bate, no criativo sim.
+  const scopedCreatives = useMemo(() => groupAdsByCreative(scopedAds), [scopedAds]);
+
   const counts = useMemo(
     () => ({
-      moving: scopedAds.filter(hasMovement).length,
-      attention: scopedAds.filter(needsAttention).length,
-      registrations: scopedAds.filter(hasRegistration).length,
-      all: scopedAds.length,
+      moving: scopedCreatives.filter((creative) => hasMovement(creative.card)).length,
+      attention: scopedCreatives.filter((creative) => needsAttention(creative.card)).length,
+      registrations: scopedCreatives.filter((creative) => hasRegistration(creative.card)).length,
+      all: scopedCreatives.length,
     }),
-    [scopedAds]
+    [scopedCreatives]
   );
 
-  const filteredAds = useMemo(() => {
-    const selected = scopedAds.filter((ad) => {
-      if (filter === "moving") return hasMovement(ad);
-      if (filter === "attention") return needsAttention(ad);
-      if (filter === "registrations") return hasRegistration(ad);
+  const filteredCreatives = useMemo(() => {
+    const selected = scopedCreatives.filter((creative) => {
+      if (filter === "moving") return hasMovement(creative.card);
+      if (filter === "attention") return needsAttention(creative.card);
+      if (filter === "registrations") return hasRegistration(creative.card);
       return true;
     });
 
     return selected.sort((a, b) => {
-      const priority = attentionPriority(a) - attentionPriority(b);
+      const priority = attentionPriority(a.card) - attentionPriority(b.card);
       if (priority !== 0) return priority;
-      if (b.spend !== a.spend) return b.spend - a.spend;
-      return a.adName.localeCompare(b.adName, "pt-BR");
+      if (b.card.spend !== a.card.spend) return b.card.spend - a.card.spend;
+      return a.card.adName.localeCompare(b.card.adName, "pt-BR");
     });
-  }, [filter, scopedAds]);
+  }, [filter, scopedCreatives]);
 
   function handleCampaignChange(campaignId: string | null) {
     onCampaignChange(campaignId);
@@ -296,7 +329,7 @@ export default function CampaignAdsGallery({
     { key: "registrations", label: "Com cadastro", count: counts.registrations },
     { key: "all", label: "Todos", count: counts.all },
   ];
-  const visibleAds = filteredAds.slice(0, visibleCount);
+  const visibleCreatives = filteredCreatives.slice(0, visibleCount);
 
   return (
     <section aria-labelledby="campaign-ads-heading" className="space-y-4">
@@ -306,11 +339,12 @@ export default function CampaignAdsGallery({
             Anúncios
           </h2>
           <p className="text-sm text-[rgb(var(--slate-10))]">
-            Criativo, destino e resultado de cada anúncio, um card por vez.
+            Um card por criativo. Quando o mesmo criativo roda em vários conjuntos, os números são somados — é o nível em que
+            &ldquo;Meta marcou&rdquo; e &ldquo;Cadastros&rdquo; se comparam.
           </p>
         </div>
         <p className="text-xs text-[rgb(var(--slate-9))]">
-          Mostrando {formatNumber(Math.min(visibleAds.length, filteredAds.length))} de {formatNumber(filteredAds.length)}
+          Mostrando {formatNumber(Math.min(visibleCreatives.length, filteredCreatives.length))} de {formatNumber(filteredCreatives.length)}
         </p>
       </div>
 
@@ -343,10 +377,10 @@ export default function CampaignAdsGallery({
         ))}
       </div>
 
-      {visibleAds.length > 0 ? (
+      {visibleCreatives.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {visibleAds.map((ad) => (
-            <AdCard key={ad.adId} ad={ad} onOpen={() => setSelectedAd(ad)} />
+          {visibleCreatives.map((creative) => (
+            <CreativeCard key={creative.key} creative={creative} onOpen={() => setSelectedCreative(creative)} />
           ))}
         </div>
       ) : (
@@ -355,7 +389,7 @@ export default function CampaignAdsGallery({
         </div>
       )}
 
-      {visibleAds.length < filteredAds.length ? (
+      {visibleCreatives.length < filteredCreatives.length ? (
         <div className="flex justify-center">
           <button
             type="button"
@@ -367,8 +401,14 @@ export default function CampaignAdsGallery({
         </div>
       ) : null}
 
-      {selectedAd ? (
-        <AdDetailModal ad={selectedAd} filters={filters} stageDefs={stageDefs} onClose={() => setSelectedAd(null)} />
+      {selectedCreative ? (
+        <AdDetailModal
+          ad={selectedCreative.card}
+          members={selectedCreative.members}
+          filters={filters}
+          stageDefs={stageDefs}
+          onClose={() => setSelectedCreative(null)}
+        />
       ) : null}
     </section>
   );

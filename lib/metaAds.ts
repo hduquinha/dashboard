@@ -1203,14 +1203,18 @@ export async function getFunnelBreakdown(
   });
 }
 
-/** Lista os leads reais (nome, telefone, etapa) de um anúncio específico —
- * usado no detalhe do card, onde "Leads (CRM): 12" sozinho não diz quem são
- * essas 12 pessoas. */
-export async function getLeadsForAd(
-  adId: string,
+/** Lista os leads reais (nome, telefone, etapa) de um ou mais anúncios —
+ * usado no detalhe do card, onde "Cadastros: 12" sozinho não diz quem são
+ * essas 12 pessoas. Aceita vários `ad_id` porque um card representa um
+ * criativo, e o mesmo criativo roda em vários conjuntos (ver
+ * `groupAdsByCreative`); cada cadastro casa com exatamente um `ad_id`, então a
+ * união não duplica. */
+export async function getLeadsForAds(
+  adIds: string[],
   filters: Pick<MetaAdsFilters, "from" | "to">
 ): Promise<AdLeadSummary[]> {
   await ensureMetaAdsSchema();
+  if (adIds.length === 0) return [];
   const pool = getPool();
   const { rows } = await pool.query<{
     id: number;
@@ -1235,10 +1239,10 @@ export async function getLeadsForAd(
      LEFT JOIN dashboard.funnel_stages fs ON fs.funnel_id = cl.funnel_id AND fs.key = cl.commercial_stage
      WHERE ${LEAD_HAS_AD_SIGNAL}
        AND ${LEAD_NOT_EXCLUDED}
-       AND ${LEAD_AD_ID} = $1
+       AND ${LEAD_AD_ID} = ANY($1::text[])
        AND ${leadCreatedInPeriod("$2", "$3")}
      ORDER BY i.criado_em DESC`,
-    [adId, filters.from, filters.to]
+    [adIds, filters.from, filters.to]
   );
 
   return rows.map((row) => ({
@@ -1251,6 +1255,14 @@ export async function getLeadsForAd(
     stageKind: (row.stage_kind as FunnelStageKind | null) ?? null,
     isReturning: row.is_returning,
   }));
+}
+
+/** Conveniência para um único anúncio (delega em `getLeadsForAds`). */
+export async function getLeadsForAd(
+  adId: string,
+  filters: Pick<MetaAdsFilters, "from" | "to">
+): Promise<AdLeadSummary[]> {
+  return getLeadsForAds([adId], filters);
 }
 
 function emptyMetrics(): AggregatedMetrics {

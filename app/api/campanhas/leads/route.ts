@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireCampaignsAccess } from "../utils";
-import { getLeadsForAd } from "@/lib/metaAds";
+import { getLeadsForAds } from "@/lib/metaAds";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +9,8 @@ export async function GET(request: NextRequest) {
   if (denied) return denied;
 
   const { searchParams } = new URL(request.url);
+  // `adId` pode trazer vários ids separados por vírgula: um card é um criativo,
+  // e o mesmo criativo roda em vários conjuntos (cada um com seu ad_id).
   const adId = searchParams.get("adId");
   const from = searchParams.get("from");
   const to = searchParams.get("to");
@@ -16,8 +18,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Parametros invalidos." }, { status: 400 });
   }
 
+  const adIds = adId.split(",").map((id) => id.trim()).filter(Boolean);
+  if (adIds.length === 0) {
+    return NextResponse.json({ error: "Parametros invalidos." }, { status: 400 });
+  }
+
   try {
-    const leads = await getLeadsForAd(adId, { from, to });
+    const leads = await getLeadsForAds(adIds, { from, to });
     return NextResponse.json({ leads });
   } catch (error) {
     return NextResponse.json(

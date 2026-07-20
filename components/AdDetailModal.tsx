@@ -1,13 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ImageOff, Mail, MessageCircle, RotateCcw, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ImageOff, Layers, Mail, MessageCircle, RotateCcw, X } from "lucide-react";
 import { AdDestination } from "@/components/AdDestination";
+import { readableAdsetName } from "@/lib/metaAdsLabels";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import type { AdLeadSummary, AdRow, FunnelStageDef, MetaAdsFilters } from "@/types/metaAds";
 
 interface AdDetailModalProps {
+  /** Criativo agregado (soma dos `ad_id` de mesmo nome). */
   ad: AdRow;
+  /** Anúncios reais que compõem o criativo — quando há mais de um, o mesmo
+   * criativo roda em vários conjuntos e mostramos a distribuição. Ausente/1 =
+   * anúncio único (visão granular por conjunto). */
+  members?: AdRow[];
   filters: Pick<MetaAdsFilters, "from" | "to">;
   stageDefs: FunnelStageDef[];
   onClose: () => void;
@@ -66,14 +72,27 @@ function stageBadge(label: string | null, kind: string | null) {
   );
 }
 
-export default function AdDetailModal({ ad, filters, stageDefs, onClose }: AdDetailModalProps) {
+export default function AdDetailModal({ ad, members, filters, stageDefs, onClose }: AdDetailModalProps) {
   const [leads, setLeads] = useState<AdLeadSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
+  // Um card é um criativo; busca os cadastros de TODOS os `ad_id` que ele roda.
+  const adIdsKey = useMemo(
+    () => (members && members.length > 0 ? members : [ad]).map((m) => m.adId).join(","),
+    [members, ad]
+  );
+  const breakdown = useMemo(
+    () =>
+      members && members.length > 1
+        ? [...members].sort((a, b) => b.leadsMeta - a.leadsMeta || b.cadastrosCrm - a.cadastrosCrm)
+        : null,
+    [members]
+  );
+
   useEffect(() => {
     let cancelled = false;
-    const params = new URLSearchParams({ adId: ad.adId, from: filters.from, to: filters.to });
+    const params = new URLSearchParams({ adId: adIdsKey, from: filters.from, to: filters.to });
     fetch(`/api/campanhas/leads?${params.toString()}`)
       .then((res) => res.json())
       .then((data) => {
@@ -88,7 +107,7 @@ export default function AdDetailModal({ ad, filters, stageDefs, onClose }: AdDet
     return () => {
       cancelled = true;
     };
-  }, [ad.adId, filters.from, filters.to]);
+  }, [adIdsKey, filters.from, filters.to]);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -135,7 +154,14 @@ export default function AdDetailModal({ ad, filters, stageDefs, onClose }: AdDet
             <div>
               <h3 id="ad-detail-title" className="text-base font-semibold text-[rgb(var(--slate-12))]">{ad.adName}</h3>
               <p className="text-xs text-[rgb(var(--slate-9))]">
-                {ad.campaignName} → {ad.adsetName}
+                {breakdown ? (
+                  <span className="inline-flex items-center gap-1">
+                    <Layers className="h-3 w-3" />
+                    Roda em {breakdown.length} conjuntos
+                  </span>
+                ) : (
+                  `${ad.campaignName} → ${ad.adsetName}`
+                )}
               </p>
               <div className="mt-1">{statusBadge(ad.effectiveStatus ?? ad.status)}</div>
             </div>
@@ -196,9 +222,55 @@ export default function AdDetailModal({ ad, filters, stageDefs, onClose }: AdDet
             ))}
           </div>
 
+          {/* Distribuição por conjunto — só quando o criativo roda em vários.
+              Torna visível por que "Meta marcou" e "Cadastros" não batem por
+              conjunto (atribuições diferentes) mas fecham no total do criativo. */}
+          {breakdown && (
+            <div className="mb-4">
+              <h4 className="mb-1 text-sm font-semibold text-[rgb(var(--slate-12))]">Distribuição por conjunto</h4>
+              <p className="mb-2 text-xs leading-relaxed text-[rgb(var(--slate-9))]">
+                A Meta divide os Leads entre os conjuntos com a atribuição dela; o CRM credita cada cadastro ao conjunto que a
+                pessoa realmente clicou. Por isso um conjunto pode ter &ldquo;Meta&rdquo; sem &ldquo;Cadastro&rdquo; e o vizinho o
+                contrário — no total do criativo acima os números se encontram.
+              </p>
+              <div className="overflow-x-auto rounded-lg border border-[rgb(var(--border-weak))]">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-[rgb(var(--slate-2))] text-[rgb(var(--slate-9))]">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">Conjunto</th>
+                      <th className="px-3 py-2 text-right font-semibold">Meta marcou</th>
+                      <th className="px-3 py-2 text-right font-semibold">Cadastros</th>
+                      <th className="px-3 py-2 text-right font-semibold">Contatos novos</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[rgb(var(--border-weak))]">
+                    {breakdown.map((member) => (
+                      <tr key={member.adId}>
+                        <td className="max-w-[16rem] truncate px-3 py-2 text-[rgb(var(--slate-11))]" title={member.adsetName}>
+                          {readableAdsetName(member.adsetName)}
+                        </td>
+                        <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.leadsMeta}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.cadastrosCrm}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.leadsCrm}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="border-t-2 border-[rgb(var(--border-weak))] bg-[rgb(var(--slate-2))] font-semibold text-[rgb(var(--slate-12))]">
+                    <tr>
+                      <td className="px-3 py-2">Total do criativo</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{ad.leadsMeta}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{ad.cadastrosCrm}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{ad.leadsCrm}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Lista de leads */}
           <h4 className="mb-2 text-sm font-semibold text-[rgb(var(--slate-12))]">
-            Cadastros recebidos por este anúncio {leads ? `(${leads.length})` : ""}
+            Cadastros recebidos por este {breakdown ? "criativo" : "anúncio"} {leads ? `(${leads.length})` : ""}
           </h4>
           {error && <p className="text-sm text-[rgb(var(--ruby-11))]">{error}</p>}
           {!error && leads === null && (
