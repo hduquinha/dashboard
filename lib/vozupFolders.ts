@@ -250,6 +250,18 @@ export const VOZUP_FOLDERS: VozupFolderDef[] = [
     blockKind: "origem",
   },
   {
+    key: "inauguracao",
+    label: "Inauguração VozUP",
+    emoji: "🎉",
+    // Cadastro presencial feito por quem já está na inauguração (formulário
+    // aula-experimental/23-07, /26-07). origem "Inauguração VozUP - DD/MM/AAAA"
+    // — distinta por data, então cada dia vira um bloco próprio (blockKind
+    // origem). Ver docs/cartilha-formularios-produtos.md.
+    description: "Cadastros presenciais feitos durante a inauguração da VozUP (um bloco por data).",
+    condition: `(${ORIGEM_NORM} LIKE 'inaugura%')`,
+    blockKind: "origem",
+  },
+  {
     key: "outros",
     label: "Outros cadastros",
     emoji: "🗂️",
