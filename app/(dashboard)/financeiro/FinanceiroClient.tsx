@@ -42,6 +42,7 @@ import {
   ReceiptText,
   Search,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   UnlockKeyhole,
@@ -71,6 +72,7 @@ import type {
   FinanceVariableExpense,
   RevenueStatus,
 } from "@/types/finance";
+import FinanceAuditPanel from "@/components/FinanceAuditPanel";
 import RevenuePaymentsPanel from "./RevenuePaymentsPanel";
 
 type TabKey =
@@ -82,7 +84,8 @@ type TabKey =
   | "matriculas"
   | "comissoes"
   | "trimestral"
-  | "configuracoes";
+  | "configuracoes"
+  | "auditoria";
 
 type ModalState =
   | { type: "revenue"; mode: "create" | "edit"; record?: FinanceRevenue }
@@ -114,6 +117,8 @@ interface FinanceiroClientProps {
   allTimeTotals: FinanceMonthTotals | null;
   allMonthlyTotals: FinanceMonthTotals[] | null;
   commissionsOverview: CommissionsOverview;
+  /** Pode remover eventos do Registro de Auditoria (permissão admin.audit). */
+  canDeleteAuditEvents: boolean;
 }
 
 type VisaoKey = "gastosVisao" | "receitasVisao" | "fluxoVisao" | "matriculasVisao" | "comissoesVisao";
@@ -146,6 +151,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof LineChartIcon }> = 
   { key: "comissoes", label: "Comissões", icon: Banknote },
   { key: "trimestral", label: "Consolidação Trimestral", icon: FileDown },
   { key: "configuracoes", label: "Configurações Financeiras", icon: Settings2 },
+  { key: "auditoria", label: "Registro de Auditoria", icon: ShieldCheck },
 ];
 
 const COLORS = ["#06a8d8", "#12a594", "#f59e0b", "#e54666", "#6366f1", "#14b8a6", "#8b5cf6", "#0f766e"];
@@ -1112,6 +1118,7 @@ export default function FinanceiroClient({
   allTimeTotals,
   allMonthlyTotals,
   commissionsOverview,
+  canDeleteAuditEvents,
 }: FinanceiroClientProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
@@ -1612,6 +1619,8 @@ export default function FinanceiroClient({
         {activeTab === "configuracoes" ? (
           <ConfiguracoesTab catalog={catalog} onSaved={() => refresh("Configuração salva.")} apiJson={apiJson} />
         ) : null}
+
+        {activeTab === "auditoria" ? <FinanceAuditPanel canDelete={canDeleteAuditEvents} /> : null}
       </div>
 
       {modal ? (

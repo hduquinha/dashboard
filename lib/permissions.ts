@@ -35,6 +35,7 @@ export const PERMISSION_GROUPS = [
       { key: "view.anamnese", label: "Anamnese", description: "Respostas e vinculacoes." },
       { key: "view.reports", label: "Relatorios", description: "Rankings, graficos e exportacoes." },
       { key: "view.encontro", label: "Encontro Online", description: "Presenca da aula gravada." },
+      { key: "view.tasks", label: "Tarefas", description: "Gerenciador de tarefas (setores, quadros kanban e cards)." },
     ],
   },
   {
@@ -44,6 +45,7 @@ export const PERMISSION_GROUPS = [
     permissions: [
       { key: "crm.view_all_leads", label: "Ver todos os vendedores", description: "Visao master do CRM." },
       { key: "crm.create_leads", label: "Criar leads", description: "Cadastro manual de leads." },
+      { key: "distribution.add_lead", label: "Adicionar lead na Chegada", description: "Cadastrar lead direto na Chegada de Leads (pode deixar sem dono), sem acesso a distribuir." },
       { key: "crm.edit_leads", label: "Editar leads", description: "Alterar ficha e payload do lead." },
       { key: "crm.delete_leads", label: "Excluir leads", description: "Remover lead da pipeline." },
       { key: "crm.update_stage", label: "Mover etapas", description: "Alterar etapa do funil." },
@@ -95,6 +97,8 @@ export const PERMISSION_GROUPS = [
     permissions: [
       { key: "admin.users", label: "Administrar usuarios", description: "Criar e editar usuarios." },
       { key: "admin.permissions", label: "Permissoes", description: "Alterar poderes, prioridade e perfis." },
+      { key: "admin.audit", label: "Registro de auditoria", description: "Ver o historico completo de mudancas em qualquer lead." },
+      { key: "tasks.admin", label: "Administrar tarefas", description: "Criar e editar setores, equipes e quadros do gerenciador de tarefas." },
       { key: "admin.distribution", label: "Distribuicao master", description: "Ordem e regras de distribuicao." },
       { key: "admin.productivity", label: "Produtividade master", description: "Validar e ver produtividade geral." },
       { key: "admin.reports", label: "Relatorios master", description: "Ver relatorios consolidados." },
@@ -118,8 +122,10 @@ export type PermissionKey =
   | "view.anamnese"
   | "view.reports"
   | "view.encontro"
+  | "view.tasks"
   | "crm.view_all_leads"
   | "crm.create_leads"
+  | "distribution.add_lead"
   | "crm.edit_leads"
   | "crm.delete_leads"
   | "crm.update_stage"
@@ -150,6 +156,8 @@ export type PermissionKey =
   | "field.edit.extra"
   | "admin.users"
   | "admin.permissions"
+  | "admin.audit"
+  | "tasks.admin"
   | "admin.distribution"
   | "admin.productivity"
   | "admin.reports"
@@ -183,6 +191,7 @@ const MEMBER_PERMISSIONS: PermissionKey[] = [
   "view.dashboard",
   "view.crm",
   "view.vozup",
+  "view.tasks",
   "crm.create_leads",
   "crm.edit_leads",
   "crm.update_stage",
@@ -329,9 +338,11 @@ export const NAV_PERMISSION_BY_KEY: Record<string, PermissionKey | undefined> = 
   anamnese: "view.anamnese",
   relatorios: "view.reports",
   "encontro-online": "view.encontro",
+  tarefas: "view.tasks",
   rede: "view.network",
   "vozup-leads": "view.vozup",
   "vozup-rotas": "view.vozup_rotas",
+  "vozup-auditoria": "admin.audit",
   "vozup-financeiro": "view.finance",
   campanhas: "view.campaigns",
   usuarios: "admin.users",
@@ -352,6 +363,7 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; permission: PermissionKey }
   { prefix: "/relatorios", permission: "view.reports" },
   { prefix: "/ranking", permission: "view.reports" },
   { prefix: "/encontro-online", permission: "view.encontro" },
+  { prefix: "/tarefas", permission: "view.tasks" },
   { prefix: "/usuarios", permission: "admin.users" },
   { prefix: "/funis", permission: "crm.manage_funnels" },
 ];
@@ -378,6 +390,13 @@ export function canAccessDashboardPath(
 
   if (pathname === "/vozup/rotas" || pathname.startsWith("/vozup/rotas/")) {
     return hasPermission(user, "view.vozup_rotas") || hasPermission(user, "view.vozup");
+  }
+
+  // Registro de auditoria é ferramenta de master — gated em admin.audit, não no
+  // view.vozup geral (senão qualquer vendedor com acesso à VozUP veria as ações
+  // de todo mundo). Precede a regra genérica de prefixo /vozup abaixo.
+  if (pathname === "/vozup/auditoria" || pathname.startsWith("/vozup/auditoria/")) {
+    return hasPermission(user, "admin.audit");
   }
 
   const rule = PATH_PERMISSION_RULES.find((candidate) =>

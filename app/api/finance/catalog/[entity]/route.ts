@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createCatalogEntity, getFinanceCatalog } from "@/lib/finance";
+import { auditFinance, catalogAuditEntity } from "@/lib/financeAudit";
 import { financeError, readJsonBody, requireFinanceAccess } from "../../utils";
 
 interface RouteContext {
@@ -22,7 +23,11 @@ export async function POST(request: NextRequest, context: RouteContext) {
 
   try {
     const [{ entity }, body] = await Promise.all([context.params, readJsonBody(request)]);
-    const id = await createCatalogEntity(entity, body);
+    const id = await auditFinance(
+      request,
+      { entity: catalogAuditEntity(entity), action: "create" },
+      () => createCatalogEntity(entity, body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar configuracao.");

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
+  Bell,
   CalendarDays,
   ChevronDown,
   Columns3,
@@ -43,11 +44,28 @@ const ICON_MAP: Record<string, typeof LayoutDashboard> = {
   "vozup-leads": Users,
   "vozup-financeiro": PiggyBank,
   usuarios: ShieldCheck,
+  notificacoes: Bell,
+};
+
+/**
+ * Entrada fixa do menu, fora de NAV_LINKS: notificação não pertence a
+ * Instituto UP nem VozUP (é do usuário) e todo mundo que loga tem a sua.
+ */
+const NOTIFICATIONS_LINK: NavLink = {
+  key: "notificacoes",
+  href: "/notificacoes",
+  label: "Notificações",
+  description: "Avisos de leads novos, atribuições e leads parados",
+  icon: "🔔",
+  group: "primary",
+  brand: "instituto-up",
 };
 
 interface ModernSidebarProps {
   currentUser?: DashboardUser | null;
   duplicateCount?: number;
+  /** Notificações do site ainda não lidas — badge do item "Notificações". */
+  unreadNotifications?: number;
   isCollapsed: boolean;
   toggleSidebar: () => void;
   isMobileOpen?: boolean;
@@ -67,6 +85,7 @@ function getInitials(user?: DashboardUser | null) {
 export default function ModernSidebar({
   currentUser,
   duplicateCount = 0,
+  unreadNotifications = 0,
   isCollapsed,
   toggleSidebar,
   isMobileOpen = false,
@@ -87,7 +106,9 @@ export default function ModernSidebar({
   function renderNavLink(link: NavLink, options?: { secondary?: boolean; vozup?: boolean }) {
     const Icon = ICON_MAP[link.key] || LayoutDashboard;
     const isActive = isActivePath(link.href);
-    const showBadge = link.key === "home" && duplicateCount > 0;
+    const badgeCount =
+      link.key === "home" ? duplicateCount : link.key === "notificacoes" ? unreadNotifications : 0;
+    const showBadge = badgeCount > 0;
     const label = options?.vozup && link.key === "vozup-leads" ? "Leads" : link.label;
 
     return (
@@ -122,7 +143,7 @@ export default function ModernSidebar({
               <span className="truncate">{label}</span>
               {showBadge ? (
                 <span className="flex h-5 min-w-5 items-center justify-center rounded-md bg-cyan-400 px-1.5 text-[11px] font-black text-slate-950">
-                  {duplicateCount > 99 ? "99+" : duplicateCount}
+                  {badgeCount > 99 ? "99+" : badgeCount}
                 </span>
               ) : null}
             </span>
@@ -197,6 +218,15 @@ export default function ModernSidebar({
         </div>
 
         <nav className={cn("min-w-0 flex-1 overflow-y-auto px-4 py-3", showFullContent ? "" : "px-2")}>
+          <ul
+            className={cn(
+              "m-0 mb-4 flex list-none flex-col gap-2 border-b border-white/10 pb-4",
+              !showFullContent ? "items-center" : ""
+            )}
+          >
+            {renderNavLink(NOTIFICATIONS_LINK)}
+          </ul>
+
           {showFullContent ? (
             <p className="mb-4 px-2 text-[11px] font-black uppercase tracking-[0.18em] text-slate-200/70">
               Instituto UP

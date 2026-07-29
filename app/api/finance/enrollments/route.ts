@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createEnrollment, listEnrollments, type EnrollmentInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseFinanceFilters, readJsonBody, requireFinanceAccess } from "../utils";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,10 @@ export async function POST(request: NextRequest) {
   if (auth) return auth;
 
   try {
-    const id = await createEnrollment((await readJsonBody(request)) as unknown as EnrollmentInput);
+    const body = (await readJsonBody(request)) as unknown as EnrollmentInput;
+    const id = await auditFinance(request, { entity: "enrollment", action: "create" }, () =>
+      createEnrollment(body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar matricula parcelada.");

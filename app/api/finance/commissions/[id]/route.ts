@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { deleteCommission } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, requireFinanceAccess } from "../../utils";
 
 interface RouteContext {
@@ -12,7 +13,10 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
   try {
     const { id } = await context.params;
-    await deleteCommission(parseId(id));
+    const entityId = parseId(id);
+    await auditFinance(request, { entity: "commission", action: "delete", entityId }, () =>
+      deleteCommission(entityId)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao excluir comissao.");

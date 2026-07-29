@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { deleteEnrollment, updateEnrollment, type EnrollmentInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, readJsonBody, requireFinanceAccess } from "../../utils";
 
 interface RouteContext {
@@ -11,8 +12,11 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (auth) return auth;
 
   try {
-    const { id } = await context.params;
-    await updateEnrollment(parseId(id), (await readJsonBody(request)) as unknown as EnrollmentInput);
+    const [{ id }, body] = await Promise.all([context.params, readJsonBody(request)]);
+    const entityId = parseId(id);
+    await auditFinance(request, { entity: "enrollment", action: "update", entityId }, () =>
+      updateEnrollment(entityId, body as unknown as EnrollmentInput)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao atualizar matricula.");
@@ -25,7 +29,10 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
   try {
     const { id } = await context.params;
-    await deleteEnrollment(parseId(id));
+    const entityId = parseId(id);
+    await auditFinance(request, { entity: "enrollment", action: "delete", entityId }, () =>
+      deleteEnrollment(entityId)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao excluir matricula.");

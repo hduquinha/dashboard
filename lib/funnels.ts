@@ -45,6 +45,9 @@ const DEFAULT_FUNNEL_STAGES: Array<{ key: string; label: string; kind: Commercia
   { key: "perdido", label: "Perdido", kind: "lost", color: "rose" },
 ];
 
+const VOZUP_FUNNEL_NAME = "Funil VozUP";
+const EXCLUSIVE_CLASS_FUNNEL_NAME = "Funil Aula Exclusiva";
+
 let schemaReady = false;
 
 function normalizeKind(value: unknown): CommercialStageKind {
@@ -117,7 +120,8 @@ async function ensureFunnelSchema(): Promise<void> {
 
   if (!defaultFunnelId) {
     const inserted = await pool.query<{ id: number }>(
-      `INSERT INTO ${SCHEMA}.funnels (name, is_default) VALUES ('Funil Padrão', true) RETURNING id`
+      `INSERT INTO ${SCHEMA}.funnels (name, is_default) VALUES ($1, true) RETURNING id`,
+      [VOZUP_FUNNEL_NAME]
     );
     defaultFunnelId = inserted.rows[0].id;
 
@@ -128,6 +132,49 @@ async function ensureFunnelSchema(): Promise<void> {
         [defaultFunnelId, stage.key, stage.label, stage.kind, stage.color, index]
       );
     }
+  }
+
+  // O funil que já existia passa a representar exclusivamente a VozUP. A
+  // renomeação é limitada ao nome legado para não sobrescrever uma escolha
+  // feita manualmente pela operação.
+  await pool.query(
+    `UPDATE ${SCHEMA}.funnels SET name = $1, updated_at = NOW()
+     WHERE id = $2 AND name = 'Funil Padrão'`,
+    [VOZUP_FUNNEL_NAME, defaultFunnelId]
+  );
+
+  // Mantém um funil independente para vendas da Aula Exclusiva. Ele inicia
+  // com as mesmas etapas operacionais, mas tem id próprio: ganhos dele nunca
+  // entram na atribuição ou no CAC das campanhas da VozUP.
+  const exclusiveClass = await pool.query<{ id: number }>(
+    `SELECT id FROM ${SCHEMA}.funnels WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+    [EXCLUSIVE_CLASS_FUNNEL_NAME]
+  );
+  if (!exclusiveClass.rows[0]) {
+    const inserted = await pool.query<{ id: number }>(
+      `INSERT INTO ${SCHEMA}.funnels (name) VALUES ($1) RETURNING id`,
+      [EXCLUSIVE_CLASS_FUNNEL_NAME]
+    );
+    const exclusiveClassFunnelId = inserted.rows[0].id;
+    for (const [index, stage] of DEFAULT_FUNNEL_STAGES.entries()) {
+      await pool.query(
+        `INSERT INTO ${SCHEMA}.funnel_stages (funnel_id, key, label, kind, color, position)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [exclusiveClassFunnelId, stage.key, stage.label, stage.kind, stage.color, index]
+      );
+    }
+
+    // Corrige somente os fechamentos históricos explicitamente identificados
+    // como Aula Exclusiva. Como as duas estruturas começam com as mesmas
+    // etapas, o status de ganho e o histórico comercial são preservados.
+    await pool.query(
+      `UPDATE ${SCHEMA}.commercial_leads
+       SET funnel_id = $1, updated_at = NOW()
+       WHERE funnel_id = $2
+         AND commercial_stage_kind = 'won'
+         AND closed_course ILIKE '%aula exclusiva%'`,
+      [exclusiveClassFunnelId, defaultFunnelId]
+    );
   }
 
   // commercial_leads.funnel_id/commercial_stage_kind podem ainda não existir

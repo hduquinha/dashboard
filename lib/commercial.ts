@@ -8,11 +8,13 @@ import {
   upsertProductivityLeadAssignment,
 } from "@/lib/productivity";
 import { hasPermission } from "@/lib/permissions";
+import { notifySellerLeadAssigned } from "@/lib/pushNotifications";
 import {
   findStageByKey,
   findStageByKind,
   getDefaultFunnel,
   getFunnelById,
+  listFunnels,
   listFunnelsForUser,
   type Funnel,
   type FunnelStage,
@@ -21,6 +23,7 @@ import type { CommercialStage } from "@/types/inscricao";
 import type { CommercialSeller, CommercialWorkspace } from "@/types/commercial";
 
 const SCHEMA = "dashboard";
+const EXCLUSIVE_CLASS_FUNNEL_NAME = "Funil Aula Exclusiva";
 
 /** Etapas do Funil Padrão, mantidas aqui só como referência estática para
  * relatórios (lib/commercialReports.ts, CommercialCommandCenter) que ainda
@@ -442,30 +445,40 @@ export async function closeCommercialLead(
     throw new Error("Informe o nome do curso fechado.");
   }
 
-  const funnel = await getLeadFunnel(inscricaoId);
+  let funnel = await getLeadFunnel(inscricaoId);
+  // O nome do curso é a confirmação operacional de que esta venda pertence
+  // à Aula Exclusiva. Assim o vendedor não precisa lembrar de mover o card
+  // antes de fechar e esse ganho nunca contamina as métricas da VozUP.
+  if (input.reason === "curso_fechado" && courseName?.toLocaleLowerCase("pt-BR").includes("aula exclusiva")) {
+    const exclusiveClassFunnel = (await listFunnels()).find(
+      (candidate) => candidate.name.toLocaleLowerCase("pt-BR") === EXCLUSIVE_CLASS_FUNNEL_NAME.toLocaleLowerCase("pt-BR")
+    );
+    if (exclusiveClassFunnel) funnel = exclusiveClassFunnel;
+  }
   const toStage = requireStageByKind(funnel, input.reason === "curso_fechado" ? "won" : "lost");
   const fromStage = item?.commercial?.stage ?? null;
 
   await getPool().query(
     `
       UPDATE ${SCHEMA}.commercial_leads
-      SET commercial_stage = $2,
-          commercial_stage_kind = $3,
-          closed_reason = $4,
-          closed_course = $5,
-          closed_value = $6,
+      SET funnel_id = $2,
+          commercial_stage = $3,
+          commercial_stage_kind = $4,
+          closed_reason = $5,
+          closed_course = $6,
+          closed_value = $7,
           closed_at = NOW(),
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
-    [inscricaoId, toStage.key, toStage.kind, input.reason, courseName, value]
+    [inscricaoId, funnel.id, toStage.key, toStage.kind, input.reason, courseName, value]
   );
 
   await insertEvent(
     inscricaoId,
     "closed",
     user,
-    { reason: input.reason, courseName, value },
+    { reason: input.reason, courseName, value, funnelId: funnel.id, funnelName: funnel.name },
     fromStage,
     toStage.key
   );
@@ -579,6 +592,12 @@ export async function applyCommercialLeadAssignment(
     assigneeName: seller.name,
     actor,
   });
+
+  try {
+    await notifySellerLeadAssigned(seller.email, { id: inscricaoId, nome: item?.nome ?? null });
+  } catch (error) {
+    console.error("[commercial] falha ao notificar vendedor da atribuicao:", error);
+  }
 
   return { seller };
 }

@@ -9,6 +9,7 @@ import {
   Search,
   ShieldCheck,
   Square,
+  Trash2,
   UserCog,
   X,
 } from "lucide-react";
@@ -46,6 +47,77 @@ type DialogMode = "create" | "edit";
 interface DialogState {
   mode: DialogMode;
   member?: AdminTeamMember;
+}
+
+function DeleteUserDialog({
+  member,
+  onClose,
+  onDeleted,
+}: {
+  member: AdminTeamMember;
+  onClose: () => void;
+  onDeleted: (memberId: number) => void;
+}) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  async function removeMember() {
+    setDeleting(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/team/${member.id}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Falha ao excluir usuario.");
+      onDeleted(member.id);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="delete-user-title"
+        className="w-full max-w-md rounded-lg bg-white p-6 shadow-2xl ring-1 ring-slate-200"
+      >
+        <div className="flex size-11 items-center justify-center rounded-full bg-rose-50 text-rose-600">
+          <Trash2 size={20} />
+        </div>
+        <h2 id="delete-user-title" className="mt-4 text-lg font-black text-slate-950">
+          Excluir usuario?
+        </h2>
+        <p className="mt-2 text-sm font-medium leading-6 text-slate-600">
+          O acesso de <strong className="font-black text-slate-900">{member.name}</strong> sera removido
+          permanentemente. Esta acao nao pode ser desfeita.
+        </p>
+        {error ? <p className="mt-3 text-sm font-semibold text-rose-600">{error}</p> : null}
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={deleting}
+            onClick={onClose}
+            className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            Cancelar
+          </button>
+          <button
+            type="button"
+            disabled={deleting}
+            onClick={removeMember}
+            className="inline-flex h-10 items-center gap-2 rounded-lg bg-rose-600 px-4 text-sm font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            <Trash2 size={16} />
+            {deleting ? "Excluindo..." : "Excluir usuario"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function roleTone(role: TeamRole): string {
@@ -416,6 +488,7 @@ export default function UserAdminClient({
   const [members, setMembers] = useState(initialMembers);
   const [query, setQuery] = useState("");
   const [dialog, setDialog] = useState<DialogState | null>(null);
+  const [memberToDelete, setMemberToDelete] = useState<AdminTeamMember | null>(null);
 
   const filteredMembers = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -436,6 +509,10 @@ export default function UserAdminClient({
         : [...current, member];
       return next.sort((a, b) => b.priorityLevel - a.priorityLevel || a.name.localeCompare(b.name));
     });
+  }
+
+  function removeMember(memberId: number) {
+    setMembers((current) => current.filter((member) => member.id !== memberId));
   }
 
   return (
@@ -530,14 +607,26 @@ export default function UserAdminClient({
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => setDialog({ mode: "edit", member })}
-                        className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-white"
-                      >
-                        <UserCog size={15} />
-                        Editar
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDialog({ mode: "edit", member })}
+                          className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-white"
+                        >
+                          <UserCog size={15} />
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          disabled={member.id === currentUserId}
+                          onClick={() => setMemberToDelete(member)}
+                          className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 px-3 text-xs font-bold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={member.id === currentUserId ? "Voce nao pode excluir seu proprio usuario" : "Excluir usuario"}
+                        >
+                          <Trash2 size={15} />
+                          Excluir
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -584,6 +673,13 @@ export default function UserAdminClient({
           currentUserId={currentUserId}
           onClose={() => setDialog(null)}
           onSaved={upsertMember}
+        />
+      ) : null}
+      {memberToDelete ? (
+        <DeleteUserDialog
+          member={memberToDelete}
+          onClose={() => setMemberToDelete(null)}
+          onDeleted={removeMember}
         />
       ) : null}
     </main>

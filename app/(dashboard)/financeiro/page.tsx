@@ -142,6 +142,7 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
       allTimeTotals={allTimeTotals}
       allMonthlyTotals={allMonthlyTotals}
       commissionsOverview={commissionsOverview}
+      canDeleteAuditEvents={hasPermission(session?.user, "admin.audit")}
     />
   );
 }

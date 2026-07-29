@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getRevenuePaymentInvoice, saveRevenuePaymentInvoice } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, requireFinanceAccess } from "../../../utils";
 
 interface RouteContext {
@@ -37,11 +38,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "Arquivo obrigatorio." }, { status: 400 });
     }
-    await saveRevenuePaymentInvoice(parseId(id), {
-      buffer: Buffer.from(await file.arrayBuffer()),
-      filename: file.name || "comprovante",
-      mime: file.type || "application/octet-stream",
-    });
+    const entityId = parseId(id);
+    const filename = file.name || "comprovante";
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await auditFinance(
+      request,
+      { entity: "revenue_payment", action: "attach", entityId, note: filename },
+      () => saveRevenuePaymentInvoice(entityId, { buffer, filename, mime: file.type || "application/octet-stream" })
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao salvar comprovante.");

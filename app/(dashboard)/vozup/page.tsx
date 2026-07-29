@@ -394,13 +394,22 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
         <div className="space-y-4 p-4 sm:p-8">
           {folder.blockKind === "aula" && (
-            <div className="flex justify-end">
+            <div className="flex flex-wrap justify-end gap-2">
               <a
                 href={`/api/vozup/aulas/attendance-pdf?pasta=${encodeURIComponent(folder.key)}&bloco=${encodeURIComponent(bloco)}`}
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-4 text-sm font-bold text-cyan-700 shadow-sm transition hover:bg-cyan-100"
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-800"
+                title="PDF com coluna de assinatura, para marcar presença no papel"
               >
                 <Download size={16} />
-                Baixar lista de presença
+                Lista em branco (assinatura)
+              </a>
+              <a
+                href={`/api/vozup/aulas/attendance-pdf?pasta=${encodeURIComponent(folder.key)}&bloco=${encodeURIComponent(bloco)}&modo=presencas`}
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-cyan-50 px-4 text-sm font-bold text-cyan-700 shadow-sm transition hover:bg-cyan-100"
+                title="PDF já preenchido com as presenças e ausências marcadas no CRM"
+              >
+                <Download size={16} />
+                Lista com presenças/ausências
               </a>
             </div>
           )}
@@ -454,7 +463,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
             recruiterOptions={recruiterOptions}
             sourceLabel={bloco}
             criativo={folder.blockKind === "meta-form" ? activeCriativo : undefined}
-            responsibleName={session?.user.name || "Henrique"}
+            isAulaExclusiva={folder.blockKind === "aula"}
             sellers={sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
             currentUser={
               session

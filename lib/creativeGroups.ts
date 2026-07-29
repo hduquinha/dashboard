@@ -77,6 +77,7 @@ export function groupAdsByCreative(ads: AdRow[]): CreativeGroup[] {
       ...pickStatus(members),
       thumbnailUrl: members.find((m) => m.thumbnailUrl)?.thumbnailUrl ?? null,
       imageUrl: members.find((m) => m.imageUrl)?.imageUrl ?? null,
+      videoId: members.find((m) => m.videoId)?.videoId ?? null,
       landingUrl: members.find((m) => m.landingUrl)?.landingUrl ?? null,
       adsetId: adsetCount === 1 ? members[0].adsetId : "",
       adsetName: adsetCount === 1 ? members[0].adsetName : `${adsetCount} conjuntos`,

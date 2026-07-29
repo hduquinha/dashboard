@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { deleteRevenue, getRevenueById, updateRevenue } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, readJsonBody, requireFinanceAccess } from "../../utils";
 
 interface RouteContext {
@@ -25,8 +26,13 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   if (auth) return auth;
 
   try {
-    const { id } = await context.params;
-    await updateRevenue(parseId(id), await readJsonBody(request));
+    const [{ id }, body] = await Promise.all([context.params, readJsonBody(request)]);
+    const revenueId = parseId(id);
+    await auditFinance(
+      request,
+      { entity: "revenue", action: "update", entityId: revenueId },
+      () => updateRevenue(revenueId, body)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao atualizar receita.");
@@ -39,7 +45,12 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
   try {
     const { id } = await context.params;
-    await deleteRevenue(parseId(id));
+    const revenueId = parseId(id);
+    await auditFinance(
+      request,
+      { entity: "revenue", action: "delete", entityId: revenueId },
+      () => deleteRevenue(revenueId)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao excluir receita.");

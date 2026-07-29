@@ -300,10 +300,12 @@ export function KanbanSection({
           assignedSellerEmail={assignedSellerEmail}
           isSupervisor={isManager}
           stages={visibleStages}
+          funnelId={activeFunnel?.id ?? null}
           assignedOnly
           filterId={activeFilterId}
           refreshToken={refreshToken}
           allowCloseLead
+          sellers={commercial.sellers}
         />
       </section>
 

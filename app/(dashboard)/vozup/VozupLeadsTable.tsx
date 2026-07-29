@@ -50,7 +50,7 @@ interface Props {
   recruiterOptions: RecruiterOption[];
   sourceLabel?: string;
   criativo?: string;
-  responsibleName?: string;
+  isAulaExclusiva?: boolean;
   sellers: CreateLeadSellerOption[];
   currentUser?: ({ email: string; isSupervisor: boolean } & PermissionUser) | null;
   createContext: CreateLeadContext;
@@ -186,7 +186,7 @@ export default function VozupLeadsTable({
   recruiterOptions,
   sourceLabel = "Todos",
   criativo,
-  responsibleName = "Henrique",
+  isAulaExclusiva = false,
   sellers,
   currentUser,
   createContext,
@@ -195,6 +195,8 @@ export default function VozupLeadsTable({
   const [, startTransition] = useTransition();
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [attendanceByLeadId, setAttendanceByLeadId] = useState<Record<number, VozupLead["aulaPresenca"]>>({});
+  const [updatingAttendanceId, setUpdatingAttendanceId] = useState<number | null>(null);
   const scopedParams = { criativo, subpasta };
   const prevUrl = page > 1 ? buildUrl(pasta, bloco, { q: search, page: String(page - 1), sort, dir }, scopedParams) : null;
   const nextUrl = page < totalPages ? buildUrl(pasta, bloco, { q: search, page: String(page + 1), sort, dir }, scopedParams) : null;
@@ -203,6 +205,69 @@ export default function VozupLeadsTable({
 
   function refresh() {
     startTransition(() => router.refresh());
+  }
+
+  function attendanceOf(lead: VozupLead) {
+    return attendanceByLeadId[lead.id] ?? lead.aulaPresenca;
+  }
+
+  async function setAttendance(lead: VozupLead, value: "presente" | "ausente") {
+    if (updatingAttendanceId !== null || !currentUser || !hasPermission(currentUser, "crm.edit_leads")) return;
+
+    setUpdatingAttendanceId(lead.id);
+    try {
+      const response = await fetch(`/api/inscricoes/${lead.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          payloadUpdates: {
+            aula_presenca: value,
+            aula_presenca_marcada_em: new Date().toISOString(),
+          },
+        }),
+      });
+      if (!response.ok) throw new Error("Falha ao registrar presença");
+      setAttendanceByLeadId((current) => ({ ...current, [lead.id]: value }));
+    } catch (error) {
+      console.error(error);
+      window.alert("Não foi possível registrar a presença. Tente novamente.");
+    } finally {
+      setUpdatingAttendanceId(null);
+    }
+  }
+
+  function AttendanceActions({ lead }: { lead: VozupLead }) {
+    const attendance = attendanceOf(lead);
+    const isUpdating = updatingAttendanceId === lead.id;
+    const canEdit = Boolean(currentUser && hasPermission(currentUser, "crm.edit_leads"));
+
+    return (
+      <div className="flex flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
+        <span className={`mr-1 text-xs font-bold ${attendance === "presente" ? "text-emerald-700" : attendance === "ausente" ? "text-rose-700" : "text-slate-400"}`}>
+          {attendance === "presente" ? "Presente" : attendance === "ausente" ? "Não compareceu" : "Não marcado"}
+        </span>
+        {canEdit ? (
+          <>
+            <button
+              type="button"
+              disabled={isUpdating}
+              onClick={() => setAttendance(lead, "presente")}
+              className={`inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-bold transition disabled:cursor-wait disabled:opacity-60 ${attendance === "presente" ? "bg-emerald-600 text-white" : "border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}
+            >
+              <Check size={14} /> Presente
+            </button>
+            <button
+              type="button"
+              disabled={isUpdating}
+              onClick={() => setAttendance(lead, "ausente")}
+              className={`inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-bold transition disabled:cursor-wait disabled:opacity-60 ${attendance === "ausente" ? "bg-rose-600 text-white" : "border border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100"}`}
+            >
+              <span aria-hidden="true">×</span> Ausente
+            </button>
+          </>
+        ) : null}
+      </div>
+    );
   }
 
   return (
@@ -352,10 +417,15 @@ export default function VozupLeadsTable({
                       </MobileInfoItem>
                       <MobileInfoItem label="E-mail" value={lead.email || "-"} />
                       <MobileInfoItem label="Cidade" value={lead.cidade || "-"} />
-                      <MobileInfoItem label="Responsável" value={responsibleName} />
+                      <MobileInfoItem label="Responsável" value={lead.responsavel || "Sem responsável"} />
                       <MobileInfoItem label="Origem" value={origem} className="sm:col-span-2" />
                       <MobileInfoItem label="Objetivo" value={lead.objetivo || "-"} className="sm:col-span-2" />
                       <MobileInfoItem label="Data de cadastro" value={dateTimeLabel(lead.criado_em)} className="sm:col-span-2" />
+                      {isAulaExclusiva ? (
+                        <MobileInfoItem label="Presença na aula" className="sm:col-span-2">
+                          <div className="mt-1"><AttendanceActions lead={lead} /></div>
+                        </MobileInfoItem>
+                      ) : null}
                     </div>
 
                     <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -403,6 +473,7 @@ export default function VozupLeadsTable({
                     <span className="block size-5 rounded border border-slate-300 bg-white" />
                   </th>
                   <th className="px-4 py-4 text-left">Lead</th>
+                  {isAulaExclusiva ? <th className="px-4 py-4 text-left">Presença na aula</th> : null}
                   <th className="px-4 py-4 text-left">Origem</th>
                   <th className="px-4 py-4 text-left">Status</th>
                   <th className="px-4 py-4 text-left">Data de cadastro</th>
@@ -413,7 +484,7 @@ export default function VozupLeadsTable({
               <tbody className="divide-y divide-slate-200/80">
                 {leads.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-16 text-center">
+                    <td colSpan={isAulaExclusiva ? 8 : 7} className="px-6 py-16 text-center">
                       <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-cyan-50 text-cyan-700">
                         <Search size={24} />
                       </div>
@@ -460,6 +531,9 @@ export default function VozupLeadsTable({
                             </div>
                           </div>
                         </td>
+                        {isAulaExclusiva ? (
+                          <td className="px-4 py-4"><AttendanceActions lead={lead} /></td>
+                        ) : null}
                         <td className="max-w-[220px] px-4 py-4">
                           <p className="truncate font-semibold text-slate-700">{lead.origem || sourceLabel}</p>
                           {lead.objetivo ? <p className="mt-1 truncate text-xs text-slate-400">{lead.objetivo}</p> : null}
@@ -471,7 +545,13 @@ export default function VozupLeadsTable({
                           <p className="font-semibold text-slate-700">{dateTimeLabel(lead.criado_em)}</p>
                           <p className="mt-1 text-xs text-slate-400">{dateLabel(lead.criado_em)}</p>
                         </td>
-                        <td className="px-4 py-4 font-semibold text-slate-700">{responsibleName}</td>
+                        <td className="px-4 py-4">
+                          {lead.responsavel ? (
+                            <span className="font-semibold text-slate-700">{lead.responsavel}</span>
+                          ) : (
+                            <span className="text-slate-400">Sem responsável</span>
+                          )}
+                        </td>
                         <td className="px-4 py-4 text-right">
                           <button
                             type="button"

@@ -1026,6 +1026,8 @@ export default function CrmClient({
             assignedSellerEmail={filters.assignedSellerEmail || undefined}
             isSupervisor={commercial.isSupervisor}
             stages={activeFunnel?.stages ?? []}
+            funnelId={activeFunnel?.id ?? null}
+            sellers={commercial.sellers}
           />
         )}
 

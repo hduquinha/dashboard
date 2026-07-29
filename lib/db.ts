@@ -498,6 +498,8 @@ interface ListInscricoesOptions {
     campaignName?: string;
     campaignTerm?: string;
     commercialStage?: CommercialStage;
+    /** Restringe o resultado ao funil comercial selecionado. */
+    funnelId?: number;
     assignedSellerEmail?: string;
     assignedSellerId?: number;
     unassignedOnly?: boolean;
@@ -1356,6 +1358,11 @@ export async function listInscricoes(
   if (filters.commercialStage && COMMERCIAL_STAGE_VALUES.includes(filters.commercialStage)) {
     filtersValues.push(filters.commercialStage);
     conditions.push(`COALESCE(cl.commercial_stage, 'novo') = $${filtersValues.length}`);
+  }
+
+  if (filters.funnelId && Number.isFinite(filters.funnelId) && filters.funnelId > 0) {
+    filtersValues.push(Math.trunc(filters.funnelId));
+    conditions.push(`cl.funnel_id = $${filtersValues.length}`);
   }
 
   if (filters.assignedSellerEmail && filters.assignedSellerEmail.trim().length > 0) {

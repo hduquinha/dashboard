@@ -296,3 +296,20 @@ export async function updateTeamMember(id: number, input: UpdateTeamMemberInput)
 
   return mapRow(rows[0]);
 }
+
+/**
+ * Removes a team account permanently. Authorization and safety checks belong
+ * to the route handler; this function only performs the database operation.
+ */
+export async function deleteTeamMember(id: number): Promise<void> {
+  await ensureTeamSchema();
+
+  const result = await getPool().query(
+    `DELETE FROM ${SCHEMA}.team_members WHERE id = $1`,
+    [id]
+  );
+
+  if (result.rowCount === 0) {
+    throw new Error("Integrante da equipe nao encontrado.");
+  }
+}

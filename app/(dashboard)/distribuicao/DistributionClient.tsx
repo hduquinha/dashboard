@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import { CreateLeadModal } from "@/components/CreateLeadModal";
+import { LeadProfileModal } from "@/components/LeadProfileModal";
 import type {
   ManualDistributionCandidate,
   ManualDistributionFilters,
@@ -25,8 +26,14 @@ import type {
   ManualDistributionResult,
   ManualDistributionStrategy,
 } from "@/lib/manualDistribution";
+import type { PermissionUser } from "@/lib/permissions";
 import type { CommercialSeller } from "@/types/commercial";
 import type { TrainingOption } from "@/types/training";
+
+interface RecruiterOption {
+  code: string;
+  name: string;
+}
 
 interface DistributionClientProps {
   candidates: ManualDistributionCandidate[];
@@ -36,9 +43,23 @@ interface DistributionClientProps {
   folderOptions: ManualDistributionFolderOption[];
   sellers: CommercialSeller[];
   trainingOptions: TrainingOption[];
+  recruiterOptions: RecruiterOption[];
   isSupervisor: boolean;
+  /** Não-master com esta permissão vê só o "Adicionar lead na Chegada" (sem dono). */
+  canAddArrival: boolean;
   currentUser: { email: string; isSupervisor: boolean } | null;
+  /** Usuário completo (permissões) para a ficha de leitura do lead. */
+  profileUser: PermissionUser | null;
 }
+
+/** Contexto do modal de criar lead na Chegada — sempre pode ficar sem dono, e a
+ * origem "Chegada Manual" faz o lead entrar na fila pro SDR distribuir. */
+const ARRIVAL_LEAD_CONTEXT = {
+  produto: "vozup" as const,
+  origem: "Chegada Manual",
+  label: "Adicionar lead na Chegada — deixe sem dono para um SDR distribuir",
+  allowUnassigned: true,
+};
 
 interface LeadGroup {
   key: string;
@@ -170,10 +191,16 @@ export default function DistributionClient({
   filters,
   folderOptions,
   sellers,
+  trainingOptions,
+  recruiterOptions,
   isSupervisor,
+  canAddArrival,
   currentUser,
+  profileUser,
 }: DistributionClientProps) {
   const [rows, setRows] = useState(candidates);
+  const [profileLeadId, setProfileLeadId] = useState<number | null>(null);
+  const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [activeGroupKey, setActiveGroupKey] = useState(ALL_GROUPS_KEY);
   const [clientSearch, setClientSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
@@ -302,6 +329,52 @@ export default function DistributionClient({
   }, [activeFolder?.key, activeFolderBlock?.bloco, overwriteAssigned, showFolderModal]);
 
   if (!isSupervisor) {
+    // Modo enxuto: quem só pode adicionar (ex.: intake) cadastra o lead sem dono,
+    // que cai na Chegada pro SDR distribuir. Sem ver nem mexer na fila.
+    if (canAddArrival) {
+      return (
+        <main className="flex min-h-[60vh] items-center justify-center p-4">
+          <section className="w-full max-w-lg rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-6 text-center shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
+            <MessageCirclePlus className="mx-auto h-9 w-9 text-[rgb(var(--blue-9))]" />
+            <h1 className="mt-3 text-lg font-semibold text-[rgb(var(--slate-12))]">Adicionar lead na Chegada</h1>
+            <p className="mx-auto mt-1 max-w-sm text-sm text-[rgb(var(--slate-10))]">
+              Cadastre um lead que chegou. Deixe <strong>sem dono</strong> que ele entra na fila e um SDR distribui depois.
+            </p>
+            {message && (
+              <p className="mx-auto mt-3 max-w-sm rounded-lg bg-[rgb(var(--green-3,var(--slate-2)))] px-3 py-2 text-sm text-[rgb(var(--green-11,var(--slate-11)))]">
+                {message}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setMessage(null);
+                setShowArrivalModal(true);
+              }}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700"
+            >
+              <MessageCirclePlus className="h-4 w-4" /> Adicionar lead
+            </button>
+          </section>
+
+          {showArrivalModal && (
+            <CreateLeadModal
+              sellers={sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
+              currentUser={currentUser}
+              context={ARRIVAL_LEAD_CONTEXT}
+              onCreated={({ inscricao }) => {
+                setShowArrivalModal(false);
+                setMessage(
+                  `Lead ${inscricao.nome ?? `#${inscricao.id}`} adicionado na Chegada, sem dono. Um SDR vai distribuir.`
+                );
+              }}
+              onClose={() => setShowArrivalModal(false)}
+            />
+          )}
+        </main>
+      );
+    }
+
     return (
       <main className="flex min-h-[60vh] items-center justify-center">
         <section className="w-full max-w-lg rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-6 text-center shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
@@ -971,7 +1044,17 @@ export default function DistributionClient({
                         />
                       </td>
                       <td className="max-w-56 px-4 py-3">
-                        <p className="truncate font-semibold text-[rgb(var(--slate-12))]">{row.name ?? `Lead #${row.id}`}</p>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setProfileLeadId(row.id);
+                          }}
+                          title="Ver informações do lead"
+                          className="block max-w-full truncate text-left font-semibold text-[rgb(var(--blue-11))] hover:underline"
+                        >
+                          {row.name ?? `Lead #${row.id}`}
+                        </button>
                         <p className="mt-0.5 flex items-center gap-1.5">
                           <span className="truncate text-[13px] font-semibold text-[rgb(var(--slate-11))]">
                             {row.phone ?? "Sem telefone"}
@@ -1205,9 +1288,18 @@ export default function DistributionClient({
                                 className="mt-1 h-4 w-4 rounded border-neutral-300"
                               />
                               <span className="min-w-0">
-                                <span className="block truncate text-sm font-bold text-neutral-900">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setProfileLeadId(row.id);
+                                  }}
+                                  title="Ver informações do lead"
+                                  className="block max-w-full truncate text-left text-sm font-bold text-cyan-700 hover:underline"
+                                >
                                   {row.name || `Lead #${row.id}`}
-                                </span>
+                                </button>
                                 <span className="mt-0.5 block truncate text-xs font-semibold text-neutral-500">
                                   {row.phone || "Sem telefone"} · {row.city || "Sem cidade"}
                                 </span>
@@ -1279,6 +1371,15 @@ export default function DistributionClient({
           onClose={() => setShowOrganicModal(false)}
         />
       )}
+
+      {/* ── Ficha do lead (leitura) — abrir infos antes de repassar ─── */}
+      <LeadProfileModal
+        leadId={profileLeadId}
+        onClose={() => setProfileLeadId(null)}
+        trainingOptions={trainingOptions}
+        recruiterOptions={recruiterOptions}
+        currentUser={profileUser}
+      />
 
     </main>
   );

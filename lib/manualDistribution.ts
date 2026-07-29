@@ -599,11 +599,17 @@ function isProductFormLead(item: InscricaoItem): boolean {
 
 function isArrivalLead(item: InscricaoItem, candidate: ManualDistributionCandidate): boolean {
   if (isProductFormLead(item)) return false;
+  const aguardaDistribuicao = payloadText(item, ["aguarda_distribuicao", "aguardaDistribuicao"]);
+  if (aguardaDistribuicao?.toLowerCase() === "true") return true;
   if (ARRIVAL_CHANNELS.has(candidate.entryChannel)) return true;
+
+  const origem = payloadText(item, ["origem", "lead_origem", "origem_formulario"]);
+  // Leads adicionados manualmente na Chegada (sem dono) — a origem "Chegada
+  // Manual" os coloca na fila pro SDR distribuir, mesmo sem canal Meta/Google.
+  if (origem && textIncludes(origem, ["chegada manual"])) return true;
 
   // Landing pages sem UTM identificavel: a origem gravada no payload ainda
   // denuncia a landing page.
-  const origem = payloadText(item, ["origem", "lead_origem", "origem_formulario"]);
   return Boolean(origem && textIncludes(origem, ["landing"]));
 }
 

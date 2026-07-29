@@ -22,6 +22,7 @@ export const config = {
     "/ranking/:path*",
     "/encontro-online/:path*",
     "/usuarios/:path*",
+    "/tarefas/:path*",
   ],
 };
 

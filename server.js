@@ -93,6 +93,29 @@ if (cluster.isPrimary && process.env.PUSH_DISPATCH_ENABLED !== "false") {
   setTimeout(triggerPushDispatch, 15_000);
 }
 
+// Alerta o master quando (a) um lead atribuido fica parado sem nenhuma
+// atualizacao (etapa/nota/tentativa de contato), ou (b) um lead chega na
+// Chegada de Leads e passa do prazo sem ser distribuido a ninguem. Mesmo
+// padrão de loopback do merge sweep e do push dispatch acima.
+if (cluster.isPrimary && process.env.STALE_LEAD_ALERT_ENABLED !== "false") {
+  const staleIntervalMs = Number.parseInt(process.env.STALE_LEAD_ALERT_INTERVAL_MS || "300000", 10);
+  const staleToken = process.env.DASHBOARD_TOKEN || "";
+  const staleUrl = `http://127.0.0.1:${port}/api/internal/stale-lead-alert`;
+
+  const triggerStaleLeadAlert = () => {
+    if (!staleToken) return;
+    fetch(staleUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${staleToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] stale lead alert trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerStaleLeadAlert, staleIntervalMs);
+  setTimeout(triggerStaleLeadAlert, 20_000);
+}
+
 // Fallback para Lead Ads da Meta: webhooks podem falhar ou ficar desinscritos
 // sem derrubar o app. A sincronização puxa leads recentes e ignora IDs já salvos.
 if (cluster.isPrimary && process.env.FACEBOOK_LEAD_SYNC_ENABLED !== "false") {
@@ -135,4 +158,34 @@ if (cluster.isPrimary && process.env.META_ADS_SYNC_ENABLED !== "false") {
 
   setInterval(triggerMetaAdsSync, metaAdsSyncIntervalMs);
   setTimeout(triggerMetaAdsSync, 30_000);
+}
+
+// Metricas de campanha (Google Ads): mesmo loopback do Meta, mas só dispara
+// quando todas as credenciais mínimas estão presentes.
+if (cluster.isPrimary && process.env.GOOGLE_ADS_SYNC_ENABLED !== "false") {
+  const googleAdsSyncIntervalMs = Number.parseInt(process.env.GOOGLE_ADS_SYNC_INTERVAL_MS || "900000", 10);
+  const googleAdsSyncToken = process.env.DASHBOARD_TOKEN || "";
+  const googleAdsSyncUrl = `http://127.0.0.1:${port}/api/internal/google-ads-sync`;
+
+  const triggerGoogleAdsSync = () => {
+    if (
+      !googleAdsSyncToken ||
+      !process.env.GOOGLE_ADS_DEVELOPER_TOKEN ||
+      !process.env.GOOGLE_ADS_CLIENT_ID ||
+      !process.env.GOOGLE_ADS_CLIENT_SECRET ||
+      !process.env.GOOGLE_ADS_REFRESH_TOKEN ||
+      !process.env.GOOGLE_ADS_CUSTOMER_ID
+    ) {
+      return;
+    }
+    fetch(googleAdsSyncUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${googleAdsSyncToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] google ads sync trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerGoogleAdsSync, googleAdsSyncIntervalMs);
+  setTimeout(triggerGoogleAdsSync, 45_000);
 }

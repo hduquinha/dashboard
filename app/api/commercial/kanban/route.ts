@@ -4,6 +4,7 @@ import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { listInscricoes } from "@/lib/db";
 import { canUseKanbanFilter, getKanbanFilter, type KanbanFilterCriteria } from "@/lib/kanbanFilters";
 import { isProductivityManager } from "@/lib/productivity";
+import { getFunnelById, listFunnelsForUser } from "@/lib/funnels";
 import type { CommercialStage } from "@/types/inscricao";
 
 export const dynamic = "force-dynamic";
@@ -46,6 +47,19 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const produto = searchParams.get("produto") as "vozup" | "instituto" | null;
   const stages = parseStages(searchParams.get("stages"));
+  const funnelId = Number.parseInt(searchParams.get("funnelId") ?? "", 10);
+  if (!Number.isFinite(funnelId) || funnelId < 1) {
+    return NextResponse.json({ error: "Informe um funil válido." }, { status: 400 });
+  }
+  const availableFunnels = await listFunnelsForUser(session.user);
+  const funnel = availableFunnels.find((item) => item.id === funnelId);
+  if (!funnel || !(await getFunnelById(funnelId))) {
+    return NextResponse.json({ error: "Sem acesso a este funil." }, { status: 403 });
+  }
+  const allowedStages = new Set(funnel.stages.map((stage) => stage.key));
+  if (stages.some((stage) => !allowedStages.has(stage))) {
+    return NextResponse.json({ error: "Etapas inválidas para este funil." }, { status: 400 });
+  }
   // Kanban da equipe: so leads com responsavel — os sem responsavel vivem
   // na Chegada de Leads, mesmo estando na etapa "novo".
   const assignedOnly = searchParams.get("assignedOnly") === "1";
@@ -78,6 +92,7 @@ export async function GET(request: NextRequest) {
         orderDirection: "asc",
         filters: {
           commercialStage: stage,
+          funnelId,
           produto: filterCriteria.produto ?? produto ?? undefined,
           assignedSellerEmail: assignedSellerEmail || undefined,
           assignedOnly: assignedOnly || undefined,

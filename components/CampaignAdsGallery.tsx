@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Eye, ImageOff, Layers, MousePointerClick, RotateCcw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Eye, ImageOff, Layers, Maximize2, MousePointerClick, Play, RotateCcw } from "lucide-react";
 import AdDetailModal from "@/components/AdDetailModal";
+import CreativeLightbox from "@/components/CreativeLightbox";
 import { AdDestination } from "@/components/AdDestination";
 import CampaignScopeSelect from "@/components/CampaignScopeSelect";
 import { attentionPriority, hasMovement, hasRegistration, needsAttention } from "@/lib/campaignDiagnostics";
@@ -114,24 +115,53 @@ function DiagnosticBadge({ ad }: { ad: AdRow }) {
   );
 }
 
-function AdCreative({ ad }: { ad: AdRow }) {
-  const src = ad.imageUrl ?? ad.thumbnailUrl;
-  if (!src) {
-    return (
-      <div className="flex aspect-[4/5] w-full items-center justify-center bg-[rgb(var(--slate-3))]">
-        <ImageOff className="h-10 w-10 text-[rgb(var(--slate-8))]" />
-      </div>
-    );
-  }
+/** Miniatura compacta e clicável: abre o criativo inteiro (imagem plena ou
+ * vídeo) no lightbox. Altura limitada de propósito — o card não pode dominar a
+ * tela com uma imagem gigante. */
+function AdCreative({ ad, onOpen }: { ad: AdRow; onOpen: () => void }) {
+  const src = ad.thumbnailUrl ?? ad.imageUrl;
+  const isVideo = Boolean(ad.videoId);
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element -- URL dinâmica do CDN do Meta
-    <img
-      src={src}
-      alt={`Criativo do anúncio ${ad.adName}`}
-      loading="lazy"
-      className="aspect-[4/5] w-full bg-[rgb(var(--slate-2))] object-contain"
-    />
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`Ver criativo do anúncio ${ad.adName} em tela cheia`}
+      className="group relative block h-40 w-full overflow-hidden bg-[rgb(var(--slate-2))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--blue-8))] sm:h-full sm:min-h-[13rem]"
+    >
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element -- URL dinâmica do CDN do Meta
+        <img
+          src={src}
+          alt={`Criativo do anúncio ${ad.adName}`}
+          loading="lazy"
+          className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+        />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center bg-[rgb(var(--slate-3))]">
+          <ImageOff className="h-10 w-10 text-[rgb(var(--slate-8))]" />
+        </span>
+      )}
+
+      <span className="pointer-events-none absolute inset-0 bg-black/0 transition group-hover:bg-black/20" />
+
+      {isVideo ? (
+        <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white shadow-lg">
+            <Play className="h-5 w-5 translate-x-0.5" fill="currentColor" />
+          </span>
+        </span>
+      ) : (
+        <span className="pointer-events-none absolute bottom-2 right-2 flex items-center gap-1 rounded-full bg-black/55 px-2 py-1 text-[10px] font-semibold text-white opacity-0 transition group-hover:opacity-100">
+          <Maximize2 className="h-3 w-3" /> Ampliar
+        </span>
+      )}
+      {isVideo ? (
+        <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-white">
+          Vídeo
+        </span>
+      ) : null}
+    </button>
   );
 }
 
@@ -150,7 +180,15 @@ function Metric({ label, value, title }: { label: string; value: string; title?:
  * campanha/conjunto que seria arbitrária — os números do card já são a soma
  * de todos os `ad_id`, que é o nível onde "Meta marcou" e "Cadastros" batem.
  */
-function CreativeCard({ creative, onOpen }: { creative: CreativeGroup; onOpen: () => void }) {
+function CreativeCard({
+  creative,
+  onOpenDetail,
+  onOpenCreative,
+}: {
+  creative: CreativeGroup;
+  onOpenDetail: () => void;
+  onOpenCreative: () => void;
+}) {
   const ad = creative.card;
   const grouped = creative.adsetCount > 1 || creative.campaignCount > 1;
   const campaignLabel = readableCampaignName(ad.campaignName);
@@ -159,7 +197,7 @@ function CreativeCard({ creative, onOpen }: { creative: CreativeGroup; onOpen: (
   return (
     <article className="overflow-hidden rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] shadow-[0_1px_2px_rgba(28,32,36,0.05)]">
       <div className="grid min-h-full grid-cols-1 sm:grid-cols-[minmax(150px,0.72fr)_minmax(0,1.28fr)]">
-        <AdCreative ad={ad} />
+        <AdCreative ad={ad} onOpen={onOpenCreative} />
 
         <div className="flex min-w-0 flex-col gap-3 p-4">
           <div className="flex flex-wrap items-center gap-2">
@@ -226,7 +264,7 @@ function CreativeCard({ creative, onOpen }: { creative: CreativeGroup; onOpen: (
 
           <button
             type="button"
-            onClick={onOpen}
+            onClick={onOpenDetail}
             className="mt-auto inline-flex min-h-10 items-center justify-center rounded-md border border-[rgb(var(--border-weak))] px-3 py-2 text-sm font-semibold text-[rgb(var(--slate-12))] hover:bg-[rgb(var(--slate-2))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--blue-8))]"
           >
             Ver detalhes e cadastros
@@ -247,6 +285,7 @@ export default function CampaignAdsGallery({
   onAdsetChange,
 }: CampaignAdsGalleryProps) {
   const [selectedCreative, setSelectedCreative] = useState<CreativeGroup | null>(null);
+  const [lightboxAd, setLightboxAd] = useState<AdRow | null>(null);
   const [filter, setFilter] = useState<GalleryFilter>("moving");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
@@ -380,7 +419,12 @@ export default function CampaignAdsGallery({
       {visibleCreatives.length > 0 ? (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           {visibleCreatives.map((creative) => (
-            <CreativeCard key={creative.key} creative={creative} onOpen={() => setSelectedCreative(creative)} />
+            <CreativeCard
+              key={creative.key}
+              creative={creative}
+              onOpenDetail={() => setSelectedCreative(creative)}
+              onOpenCreative={() => setLightboxAd(creative.card)}
+            />
           ))}
         </div>
       ) : (
@@ -407,9 +451,12 @@ export default function CampaignAdsGallery({
           members={selectedCreative.members}
           filters={filters}
           stageDefs={stageDefs}
+          onOpenCreative={() => setLightboxAd(selectedCreative.card)}
           onClose={() => setSelectedCreative(null)}
         />
       ) : null}
+
+      {lightboxAd ? <CreativeLightbox key={lightboxAd.adId} ad={lightboxAd} onClose={() => setLightboxAd(null)} /> : null}
     </section>
   );
 }

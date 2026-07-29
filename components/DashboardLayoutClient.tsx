@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu } from "lucide-react";
+import { Bell, Menu } from "lucide-react";
 import LeadNotifications from "@/components/LeadNotifications";
 import ModernSidebar from "@/components/ModernSidebar";
+import NotificationToasts from "@/components/NotificationToasts";
+import { useAppNotifications } from "@/components/useAppNotifications";
 import type { DashboardUser } from "@/lib/auth";
 
 interface DashboardLayoutClientProps {
@@ -23,6 +26,7 @@ export default function DashboardLayoutClient({
   const pathname = usePathname();
   const isMobileOpen = mobileOpenPathname === pathname;
   const isVozupWorkspace = pathname.startsWith("/vozup") || pathname.startsWith("/financeiro");
+  const notifications = useAppNotifications();
 
   return (
     <div className="flex h-dvh w-full overflow-hidden bg-[#f5f8fb] text-slate-950">
@@ -42,11 +46,29 @@ export default function DashboardLayoutClient({
             </span>
           </div>
         </div>
+
+        <Link
+          href="/notificacoes"
+          className="relative flex size-9 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+          aria-label={
+            notifications.unread > 0
+              ? `Notificações (${notifications.unread} não lidas)`
+              : "Notificações"
+          }
+        >
+          <Bell size={19} />
+          {notifications.unread > 0 ? (
+            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-cyan-400 px-1 text-[10px] font-black text-slate-950">
+              {notifications.unread > 99 ? "99+" : notifications.unread}
+            </span>
+          ) : null}
+        </Link>
       </div>
 
       <ModernSidebar
         currentUser={currentUser}
         duplicateCount={duplicateCount}
+        unreadNotifications={notifications.unread}
         isCollapsed={isCollapsed}
         toggleSidebar={() => setIsCollapsed(!isCollapsed)}
         isMobileOpen={isMobileOpen}
@@ -58,6 +80,15 @@ export default function DashboardLayoutClient({
           {children}
         </div>
       </main>
+
+      <NotificationToasts
+        toasts={notifications.toasts}
+        onDismiss={notifications.dismissToast}
+        onOpen={(notification) => {
+          notifications.dismissToast(notification.id);
+          void notifications.markRead([notification.id]);
+        }}
+      />
     </div>
   );
 }

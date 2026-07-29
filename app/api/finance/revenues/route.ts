@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createRevenue, listRevenues, type RevenueInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseFinanceFilters, readJsonBody, requireFinanceAccess } from "../utils";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,10 @@ export async function POST(request: NextRequest) {
   if (auth) return auth;
 
   try {
-    const id = await createRevenue((await readJsonBody(request)) as unknown as RevenueInput);
+    const body = (await readJsonBody(request)) as unknown as RevenueInput;
+    const id = await auditFinance(request, { entity: "revenue", action: "create" }, () =>
+      createRevenue(body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar receita.");

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createFixedExpense, currentMonth, listFixedExpenses, type FixedExpenseInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, readJsonBody, requireFinanceAccess } from "../utils";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +20,10 @@ export async function POST(request: NextRequest) {
   if (auth) return auth;
 
   try {
-    const id = await createFixedExpense((await readJsonBody(request)) as unknown as FixedExpenseInput);
+    const body = (await readJsonBody(request)) as unknown as FixedExpenseInput;
+    const id = await auditFinance(request, { entity: "fixed_expense", action: "create" }, () =>
+      createFixedExpense(body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar despesa fixa.");

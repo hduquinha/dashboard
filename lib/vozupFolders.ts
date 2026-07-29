@@ -208,6 +208,14 @@ export interface VozupFolderDef {
 
 export const VOZUP_FOLDERS: VozupFolderDef[] = [
   {
+    key: "panfletos",
+    label: "Panfletos",
+    emoji: "📄",
+    description: "Leads captados pelos panfletos físicos, separados por versão.",
+    condition: `(${ORIGEM_NORM} IN ('panfleto a', 'panfleto b', 'panfleto_a', 'panfleto_b'))`,
+    blockKind: "origem",
+  },
+  {
     key: "aula-experimental",
     label: "Aula Experimental",
     emoji: "🧪",
@@ -404,6 +412,10 @@ export interface VozupLead {
   origem: string;
   cidade: string;
   criado_em: string;
+  /** Vendedor atribuído (commercial_leads.assigned_seller_name); null = sem responsável. */
+  responsavel: string | null;
+  /** Presença marcada manualmente para a Aula Exclusiva. */
+  aulaPresenca: "presente" | "ausente" | null;
 }
 
 const SORT_COLUMNS: Record<string, string> = {
@@ -476,7 +488,7 @@ export async function listVozupLeadsByBlock(
     searchClause = `AND (LOWER(COALESCE(i.payload->>'nome', '')) LIKE $${params.length} OR LOWER(COALESCE(i.payload->>'telefone', '')) LIKE $${params.length})`;
   }
 
-  const result = await pool.query<VozupLead & { total: string }>(
+  const result = await pool.query<Omit<VozupLead, "aulaPresenca"> & { total: string; aula_presenca: string | null }>(
     `WITH ${PRIMARY_EVENT_LINKS_CTE},
     matching_leads AS (
       SELECT DISTINCT i.id
@@ -494,8 +506,15 @@ export async function listVozupLeadsByBlock(
       COALESCE(NULLIF(TRIM(i.payload->>'origem'), ''), '') AS origem,
       COALESCE(NULLIF(TRIM(i.payload->>'cidade'), ''), '') AS cidade,
       COALESCE(i.payload->>'timestamp', i.criado_em::text) AS criado_em,
+      NULLIF(TRIM(cl.assigned_seller_name), '') AS responsavel,
+      CASE LOWER(TRIM(COALESCE(i.payload->>'aula_presenca', '')))
+        WHEN 'presente' THEN 'presente'
+        WHEN 'ausente' THEN 'ausente'
+        ELSE NULL
+      END AS aula_presenca,
       COUNT(*) OVER () AS total
     FROM inscricoes.inscricoes AS i
+    LEFT JOIN dashboard.commercial_leads AS cl ON cl.inscricao_id = i.id
     WHERE ${BASE_FLAGS}
       AND (
         EXISTS (SELECT 1 FROM matching_leads AS m WHERE m.id = i.id)
@@ -517,6 +536,10 @@ export async function listVozupLeadsByBlock(
       origem: row.origem,
       cidade: row.cidade,
       criado_em: row.criado_em,
+      responsavel: row.responsavel ?? null,
+      aulaPresenca: row.aula_presenca === "presente" || row.aula_presenca === "ausente"
+        ? row.aula_presenca
+        : null,
     })),
     total: result.rows[0] ? Number(result.rows[0].total) : 0,
   };
@@ -593,7 +616,7 @@ export async function listVozupLeadIdsByBlock(
 export async function listAllVozupLeadsByBlock(
   folderKey: string,
   bloco: string
-): Promise<Pick<VozupLead, "nome" | "telefone">[]> {
+): Promise<Pick<VozupLead, "nome" | "telefone" | "aulaPresenca">[]> {
   const folder = getVozupFolder(folderKey);
   if (!folder || !bloco) return [];
 
@@ -605,7 +628,7 @@ export async function listAllVozupLeadsByBlock(
       ? `${asEvent(AULA_BLOCK_EXPRESSION)} = $1`
       : `${asEvent(ORIGEM_RAW)} = $1`;
 
-  const result = await pool.query<{ nome: string; telefone: string }>(
+  const result = await pool.query<{ nome: string; telefone: string; aula_presenca: string | null }>(
     `WITH ${PRIMARY_EVENT_LINKS_CTE},
     matching_leads AS (
       SELECT DISTINCT i.id
@@ -615,7 +638,12 @@ export async function listAllVozupLeadsByBlock(
     )
     SELECT
       COALESCE(NULLIF(TRIM(i.payload->>'nome'), ''), NULLIF(TRIM(i.payload->>'name'), ''), 'Sem nome') AS nome,
-      COALESCE(NULLIF(TRIM(i.payload->>'telefone'), ''), NULLIF(TRIM(i.payload->>'whatsapp'), ''), '') AS telefone
+      COALESCE(NULLIF(TRIM(i.payload->>'telefone'), ''), NULLIF(TRIM(i.payload->>'whatsapp'), ''), '') AS telefone,
+      CASE LOWER(TRIM(COALESCE(i.payload->>'aula_presenca', '')))
+        WHEN 'presente' THEN 'presente'
+        WHEN 'ausente' THEN 'ausente'
+        ELSE NULL
+      END AS aula_presenca
     FROM inscricoes.inscricoes AS i
     WHERE ${BASE_FLAGS}
       AND EXISTS (SELECT 1 FROM matching_leads AS m WHERE m.id = i.id)
@@ -623,7 +651,12 @@ export async function listAllVozupLeadsByBlock(
     [bloco]
   );
 
-  return result.rows.map((row) => ({ nome: row.nome, telefone: row.telefone }));
+  return result.rows.map((row) => ({
+    nome: row.nome,
+    telefone: row.telefone,
+    aulaPresenca:
+      row.aula_presenca === "presente" || row.aula_presenca === "ausente" ? row.aula_presenca : null,
+  }));
 }
 
 /**

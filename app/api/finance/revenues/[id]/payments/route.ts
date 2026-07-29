@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getRequestDashboardSession } from "@/lib/auth";
 import { createRevenuePayment, listRevenuePayments, type RevenuePaymentInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, readJsonBody, requireFinanceAccess } from "../../../utils";
 
 interface RouteContext {
@@ -30,7 +31,17 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const input = body as unknown as RevenuePaymentInput;
     input.createdByUserId = session?.user.id ?? null;
     input.createdByName = session?.user.name ?? null;
-    const result = await createRevenuePayment(parseId(id), input);
+    const revenueId = parseId(id);
+    const result = await auditFinance(
+      request,
+      {
+        entity: "revenue_payment",
+        action: "create",
+        note: `Receita #${revenueId}`,
+        resolveId: (value) => (value as { id?: number })?.id ?? null,
+      },
+      () => createRevenuePayment(revenueId, input)
+    );
     return NextResponse.json(result);
   } catch (error) {
     return financeError(error, "Falha ao lançar pagamento.");

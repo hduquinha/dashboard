@@ -1,24 +1,8 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import {
-  ArrowRightLeft,
-  BadgeCheck,
-  Flag,
-  History,
-  Link2,
-  Mail,
-  MessageCircle,
-  Pencil,
-  PhoneCall,
-  RefreshCw,
-  RotateCcw,
-  Star,
-  StickyNote,
-  UserRoundCheck,
-  UserRoundX,
-  XCircle,
-} from "lucide-react";
+import { RefreshCw } from "lucide-react";
+import { describeCommercialEvent } from "@/lib/commercialEventDisplay";
 import type { CommercialTimelineEvent } from "@/lib/commercial";
 
 interface LeadTimelineProps {
@@ -26,17 +10,6 @@ interface LeadTimelineProps {
   /** Permite registrar atividade manual (WhatsApp, ligacao...). */
   canLog?: boolean;
 }
-
-const STAGE_LABELS: Record<string, string> = {
-  novo: "Novo",
-  primeiro_contato: "1º Contato",
-  em_atendimento: "Em Atendimento",
-  agendado: "Agendado",
-  fechamento: "Fechamento",
-  no_show: "No-show",
-  ganho: "Ganho",
-  perdido: "Perdido",
-};
 
 const ACTIVITY_OPTIONS = [
   { value: "whatsapp", label: "WhatsApp" },
@@ -56,167 +29,6 @@ const QUICK_LOG_ACTIONS: Array<{
   { kind: "ligacao", label: "📞 Liguei", description: "Ligação feita" },
   { kind: "ligacao", label: "🔇 Não atendeu", description: "Ligação não atendida" },
 ];
-
-const STATUS_LABELS: Record<string, string> = {
-  aguardando: "Aguardando",
-  aprovado: "Qualificado",
-  rejeitado: "Descartado",
-};
-
-function statusLabel(value: unknown): string {
-  const key = String(value ?? "");
-  return STATUS_LABELS[key] ?? (key || "—");
-}
-
-function formatChangeValue(value: unknown): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  return text ? `"${text}"` : "(vazio)";
-}
-
-function stageLabel(stage: string | null): string {
-  return stage ? STAGE_LABELS[stage] ?? stage : "—";
-}
-
-function formatValue(value: unknown): string | null {
-  const parsed = typeof value === "number" ? value : Number.parseFloat(String(value ?? ""));
-  if (!Number.isFinite(parsed)) return null;
-  return parsed.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
-
-function describeEvent(event: CommercialTimelineEvent): {
-  icon: typeof History;
-  iconClass: string;
-  title: string;
-  detail: string | null;
-} {
-  const payload = event.payload as Record<string, unknown>;
-
-  switch (event.type) {
-    case "assigned":
-      return {
-        icon: UserRoundCheck,
-        iconClass: "bg-cyan-100 text-cyan-700",
-        title: `Lead atribuído a ${String(payload.sellerName ?? payload.sellerEmail ?? "vendedor")}`,
-        detail: null,
-      };
-    case "unassigned":
-      return {
-        icon: UserRoundX,
-        iconClass: "bg-amber-100 text-amber-700",
-        title: `Atribuição removida${payload.sellerName ? ` — estava com ${String(payload.sellerName)}` : ""}`,
-        detail: "Lead voltou a ficar sem vendedor responsável.",
-      };
-    case "reopened":
-      return {
-        icon: RotateCcw,
-        iconClass: "bg-violet-100 text-violet-700",
-        title: "Lead reaberto (redistribuído) — voltou ao Kanban como Novo",
-        detail: null,
-      };
-    case "stage_changed":
-      return {
-        icon: ArrowRightLeft,
-        iconClass: "bg-blue-100 text-blue-700",
-        title: `Etapa: ${stageLabel(event.fromStage)} → ${stageLabel(event.toStage)}`,
-        detail: null,
-      };
-    case "closed": {
-      if (payload.reason === "curso_fechado") {
-        const value = formatValue(payload.value);
-        return {
-          icon: BadgeCheck,
-          iconClass: "bg-emerald-100 text-emerald-700",
-          title: `Fechou curso: ${String(payload.courseName ?? "—")}`,
-          detail: value ? `Valor pago: ${value}` : null,
-        };
-      }
-      return {
-        icon: XCircle,
-        iconClass: "bg-rose-100 text-rose-600",
-        title: "Lead fechado — não quis dar continuidade",
-        detail: null,
-      };
-    }
-    case "lead_edited": {
-      const changes = Array.isArray(payload.changes)
-        ? (payload.changes as Array<{ label?: string; field?: string; from?: unknown; to?: unknown }>)
-        : [];
-      const lines = changes.map(
-        (c) => `${c.label ?? c.field ?? "Campo"}: ${formatChangeValue(c.from)} → ${formatChangeValue(c.to)}`
-      );
-      return {
-        icon: Pencil,
-        iconClass: "bg-indigo-100 text-indigo-700",
-        title: `Dados do lead editados (${changes.length} ${changes.length === 1 ? "campo" : "campos"})`,
-        detail: lines.join("\n") || null,
-      };
-    }
-    case "lead_status_changed":
-      return {
-        icon: Flag,
-        iconClass: "bg-amber-100 text-amber-700",
-        title: `Status: ${statusLabel(payload.from)} → ${statusLabel(payload.to)}`,
-        detail: payload.whatsappContacted === true ? "Já havia contato pelo WhatsApp." : null,
-      };
-    case "lead_stars_changed": {
-      const from = typeof payload.from === "number" ? payload.from : 0;
-      const to = typeof payload.to === "number" ? payload.to : 0;
-      return {
-        icon: Star,
-        iconClass: "bg-amber-100 text-amber-600",
-        title: `Temperatura: ${from}★ → ${to}★`,
-        detail: null,
-      };
-    }
-    case "lead_note_added":
-      return {
-        icon: StickyNote,
-        iconClass: "bg-neutral-100 text-neutral-600",
-        title: payload.viaWhatsapp === true ? "Observação interna (via WhatsApp)" : "Observação interna",
-        detail: typeof payload.content === "string" ? payload.content : null,
-      };
-    case "lead_vinculo_added":
-      return {
-        icon: Link2,
-        iconClass: "bg-sky-100 text-sky-700",
-        title: `Vínculo adicionado: ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
-        detail: null,
-      };
-    case "lead_vinculo_replaced":
-      return {
-        icon: Link2,
-        iconClass: "bg-sky-100 text-sky-700",
-        title: `Vínculo trocado: ${String(payload.fromPasta ?? "—")} · ${String(payload.fromBloco ?? "—")} → ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
-        detail: null,
-      };
-    case "lead_vinculo_removed":
-      return {
-        icon: Link2,
-        iconClass: "bg-rose-100 text-rose-600",
-        title: `Vínculo removido: ${String(payload.pasta ?? "—")} · ${String(payload.bloco ?? "—")}`,
-        detail: null,
-      };
-    case "activity": {
-      const kind = String(payload.kind ?? "anotacao");
-      const config: Record<string, { icon: typeof History; iconClass: string; title: string }> = {
-        whatsapp: { icon: MessageCircle, iconClass: "bg-emerald-100 text-emerald-700", title: "Contato via WhatsApp" },
-        ligacao: { icon: PhoneCall, iconClass: "bg-amber-100 text-amber-700", title: "Ligação" },
-        email: { icon: Mail, iconClass: "bg-sky-100 text-sky-700", title: "E-mail" },
-        anotacao: { icon: StickyNote, iconClass: "bg-neutral-100 text-neutral-600", title: "Anotação" },
-      };
-      const entry = config[kind] ?? config.anotacao;
-      const description = typeof payload.description === "string" ? payload.description : "";
-      return { ...entry, detail: description || null };
-    }
-    default:
-      return {
-        icon: History,
-        iconClass: "bg-neutral-100 text-neutral-500",
-        title: event.type,
-        detail: null,
-      };
-  }
-}
 
 function formatDateTime(value: string): string {
   const date = new Date(value);
@@ -357,7 +169,7 @@ export function LeadTimeline({ leadId, canLog = true }: LeadTimelineProps) {
       {events && events.length > 0 && (
         <ol className="relative space-y-0">
           {events.map((event, index) => {
-            const info = describeEvent(event);
+            const info = describeCommercialEvent(event);
             const Icon = info.icon;
             const isLast = index === events.length - 1;
             return (

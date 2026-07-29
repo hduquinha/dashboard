@@ -8,8 +8,9 @@ import {
   listManualDistributionCandidates,
   normalizeManualDistributionFilters,
 } from "@/lib/manualDistribution";
-import { listTrainingFilterOptions } from "@/lib/db";
+import { listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import { listVozupBlockStats, VOZUP_FOLDERS } from "@/lib/vozupFolders";
+import { hasPermission } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -70,10 +71,11 @@ function buildFolderOptions(
 }
 
 export default async function DistributionPage(props: DistributionPageProps) {
-  const [cookieStore, rawSearchParams, trainingOptions] = await Promise.all([
+  const [cookieStore, rawSearchParams, trainingOptions, recruiterOptions] = await Promise.all([
     cookies(),
     props.searchParams,
     listTrainingFilterOptions(),
+    listRecruitersWithDbNames(),
   ]);
   const session = getDashboardSession(cookieStore.get(DASHBOARD_COOKIE_NAME)?.value);
   const commercial = await getCommercialWorkspace(session?.user ?? null);
@@ -99,10 +101,13 @@ export default async function DistributionPage(props: DistributionPageProps) {
       folderOptions={folderOptions}
       sellers={sellers}
       trainingOptions={trainingOptions}
+      recruiterOptions={recruiterOptions}
       isSupervisor={commercial.isSupervisor}
+      canAddArrival={Boolean(session && hasPermission(session.user, "distribution.add_lead"))}
       currentUser={
         session ? { email: session.user.email, isSupervisor: commercial.isSupervisor } : null
       }
+      profileUser={session?.user ?? null}
     />
   );
 }

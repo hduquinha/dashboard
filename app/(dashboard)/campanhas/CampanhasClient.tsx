@@ -2,10 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { LayoutGrid, RefreshCw, Sparkles, Table2 } from "lucide-react";
+import { Inbox, LayoutGrid, ListTree, RefreshCw, Sparkles, Users } from "lucide-react";
 import CampaignAdsGallery from "@/components/CampaignAdsGallery";
 import CampaignOverviewTab from "@/components/CampaignOverviewTab";
 import CampaignTableTab from "@/components/CampaignTableTab";
+import RecentLeadsTab from "@/components/RecentLeadsTab";
+import SellerPerformanceTab from "@/components/SellerPerformanceTab";
 import type {
   CampaignGroup,
   CampanhasTab,
@@ -15,6 +17,8 @@ import type {
   KpiTotals,
   MetaAdsFilters,
   MetaAdsStatusFilter,
+  RecentAdLead,
+  SellerAdPerformance,
   SyncRunSummary,
 } from "@/types/metaAds";
 
@@ -30,6 +34,8 @@ interface CampanhasClientProps {
   syncRuns: SyncRunSummary[];
   stageDefs: FunnelStageDef[];
   initialFunnel: FunnelStagePoint[];
+  recentLeads: RecentAdLead[];
+  sellerPerformance: SellerAdPerformance[];
 }
 
 function timeAgo(iso: string | null): string {
@@ -57,9 +63,11 @@ const STATUS_OPTIONS: Array<{ key: MetaAdsStatusFilter; label: string }> = [
 ];
 
 const TAB_OPTIONS: Array<{ key: CampanhasTab; label: string; description: string; icon: typeof Sparkles }> = [
-  { key: "geral", label: "Visão Geral", description: "Filtro interativo + KPIs, funil e gráficos", icon: Sparkles },
-  { key: "tabela", label: "Tabela", description: "Números frios, ordenáveis, por linha", icon: Table2 },
-  { key: "anuncios", label: "Anúncios", description: "Criativo e resultado, um card por vez", icon: LayoutGrid },
+  { key: "geral", label: "Visão Geral", description: "KPIs, funil e gráficos do período", icon: Sparkles },
+  { key: "tabela", label: "Campanhas", description: "Abre campanha → conjunto → anúncio", icon: ListTree },
+  { key: "anuncios", label: "Anúncios", description: "Criativo, vídeo e resultado por card", icon: LayoutGrid },
+  { key: "leads", label: "Últimos Leads", description: "Quem chegou, de qual anúncio e etapa", icon: Inbox },
+  { key: "vendedores", label: "Vendedores", description: "Leads e conversão por vendedor", icon: Users },
 ];
 
 export default function CampanhasClient({
@@ -74,6 +82,8 @@ export default function CampanhasClient({
   syncRuns,
   stageDefs,
   initialFunnel,
+  recentLeads,
+  sellerPerformance,
 }: CampanhasClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -129,6 +139,8 @@ export default function CampanhasClient({
   }
 
   const lastSync = syncRuns[0] ?? null;
+  const lastMetaSync = syncRuns.find((run) => !run.syncType.startsWith("google_")) ?? null;
+  const lastGoogleSync = syncRuns.find((run) => run.syncType.startsWith("google_")) ?? null;
 
   return (
     <div className="space-y-6">
@@ -136,7 +148,8 @@ export default function CampanhasClient({
         <div>
           <h1 className="text-xl font-semibold text-[rgb(var(--slate-12))]">Métricas de Campanha</h1>
           <p className="text-sm text-[rgb(var(--slate-10))]">
-            Gasto, leads e qualificação real por anúncio do Meta Ads. Última sincronização: {timeAgo(lastSync?.finishedAt ?? null)}
+            Gasto, leads e qualificação real por anúncio. Meta: {timeAgo(lastMetaSync?.finishedAt ?? null)} · Google:{" "}
+            {timeAgo(lastGoogleSync?.finishedAt ?? null)}. Última sincronização: {timeAgo(lastSync?.finishedAt ?? null)}
             {lastSync?.status === "error" ? " (última tentativa falhou)" : ""}.
           </p>
         </div>
@@ -279,15 +292,7 @@ export default function CampanhasClient({
         />
       )}
 
-      {tab === "tabela" && (
-        <CampaignTableTab
-          hierarchy={hierarchy}
-          selectedCampaignId={selectedCampaignId}
-          selectedAdsetId={selectedAdsetId}
-          onCampaignChange={handleCampaignChange}
-          onAdsetChange={handleAdsetChange}
-        />
-      )}
+      {tab === "tabela" && <CampaignTableTab hierarchy={hierarchy} />}
 
       {tab === "anuncios" && (
         <CampaignAdsGallery
@@ -299,6 +304,14 @@ export default function CampanhasClient({
           onCampaignChange={handleCampaignChange}
           onAdsetChange={handleAdsetChange}
         />
+      )}
+
+      {tab === "leads" && (
+        <RecentLeadsTab leads={recentLeads} scoped={Boolean(selectedCampaignId || selectedAdsetId)} />
+      )}
+
+      {tab === "vendedores" && (
+        <SellerPerformanceTab sellers={sellerPerformance} scoped={Boolean(selectedCampaignId || selectedAdsetId)} />
       )}
     </div>
   );

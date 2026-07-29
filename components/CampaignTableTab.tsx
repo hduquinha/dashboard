@@ -1,340 +1,277 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
-import CampaignScopeSelect from "@/components/CampaignScopeSelect";
-import { readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
-import type { AggregatedMetrics, CampaignGroup } from "@/types/metaAds";
-
-type Level = "campanha" | "conjunto" | "anuncio";
-
-interface TableRow {
-  id: string;
-  name: string;
-  status: string;
-  spend: number;
-  impressions: number;
-  clicks: number;
-  ctr: number | null;
-  cpc: number | null;
-  cpm: number | null;
-  leadsMeta: number;
-  cadastrosCrm: number;
-  leadsCrm: number;
-  cplReal: number | null;
-  leadsQualificados: number;
-  leadsFechados: number;
-  valorFechado: number;
-}
+import { AlertTriangle, ChevronRight, Megaphone, Layers, Image as ImageIcon } from "lucide-react";
+import { isAdvantagePlusAdset, readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
+import type { AdRow, AdsetGroup, AggregatedMetrics, CampaignGroup } from "@/types/metaAds";
 
 interface CampaignTableTabProps {
   hierarchy: CampaignGroup[];
-  selectedCampaignId: string | null;
-  selectedAdsetId: string | null;
-  onCampaignChange: (campaignId: string | null) => void;
-  onAdsetChange: (adsetId: string | null) => void;
 }
+
+type SortKey = "spend" | "cadastrosCrm" | "leadsCrm";
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: "spend", label: "Investimento" },
+  { key: "cadastrosCrm", label: "Cadastros" },
+  { key: "leadsCrm", label: "Contatos novos" },
+];
 
 function formatCurrency(value: number): string {
   return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 });
-}
-
-function formatNullableCurrency(value: number | null): string {
-  return value === null ? "—" : formatCurrency(value);
 }
 
 function formatNumber(value: number): string {
   return value.toLocaleString("pt-BR");
 }
 
-function formatPercent(value: number | null): string {
-  return value === null ? "—" : `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
+function formatNullableCurrency(value: number | null): string {
+  return value === null ? "—" : formatCurrency(value);
 }
 
-/** Campanha/conjunto só têm totais agregados (AggregatedMetrics), não as
- * taxas derivadas (ctr/cpc/cpm/cplReal) que o anúncio individual já traz
- * prontas do banco — calcula aqui pra não duplicar a fórmula em cada nível. */
-function deriveRates(totals: AggregatedMetrics): { ctr: number | null; cpc: number | null; cpm: number | null; cplReal: number | null } {
-  return {
-    ctr: totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : null,
-    cpc: totals.clicks > 0 ? totals.spend / totals.clicks : null,
-    cpm: totals.impressions > 0 ? (totals.spend / totals.impressions) * 1000 : null,
-    cplReal: totals.leadsCrm > 0 ? totals.spend / totals.leadsCrm : null,
-  };
+function costPerContact(totals: Pick<AggregatedMetrics, "spend" | "leadsCrm">): number | null {
+  return totals.leadsCrm > 0 ? totals.spend / totals.leadsCrm : null;
 }
 
 function statusLabel(status: string): string {
   if (status === "ACTIVE") return "Ativa";
   if (status === "PAUSED") return "Pausada";
+  if (status === "ADSET_PAUSED") return "Conjunto pausado";
+  if (status === "CAMPAIGN_PAUSED") return "Campanha pausada";
   if (status === "ARCHIVED") return "Arquivada";
   return status.replaceAll("_", " ").toLocaleLowerCase("pt-BR");
 }
 
-type ColumnKey =
-  | "name"
-  | "status"
-  | "spend"
-  | "impressions"
-  | "clicks"
-  | "ctr"
-  | "cpc"
-  | "cpm"
-  | "leadsMeta"
-  | "cadastrosCrm"
-  | "leadsCrm"
-  | "cplReal"
-  | "leadsQualificados"
-  | "leadsFechados"
-  | "valorFechado";
-
-interface Column {
-  key: ColumnKey;
-  label: string;
-  align?: "left" | "right";
-  format: (row: TableRow) => string;
-  sortValue: (row: TableRow) => number | string;
-}
-
-const COLUMNS: Column[] = [
-  { key: "status", label: "Status", format: (r) => statusLabel(r.status), sortValue: (r) => r.status },
-  { key: "spend", label: "Investido", align: "right", format: (r) => formatCurrency(r.spend), sortValue: (r) => r.spend },
-  { key: "impressions", label: "Impressões", align: "right", format: (r) => formatNumber(r.impressions), sortValue: (r) => r.impressions },
-  { key: "clicks", label: "Cliques", align: "right", format: (r) => formatNumber(r.clicks), sortValue: (r) => r.clicks },
-  { key: "ctr", label: "CTR", align: "right", format: (r) => formatPercent(r.ctr), sortValue: (r) => r.ctr ?? -1 },
-  { key: "cpc", label: "CPC", align: "right", format: (r) => formatNullableCurrency(r.cpc), sortValue: (r) => r.cpc ?? -1 },
-  { key: "cpm", label: "CPM", align: "right", format: (r) => formatNullableCurrency(r.cpm), sortValue: (r) => r.cpm ?? -1 },
-  { key: "leadsMeta", label: "Meta marcou", align: "right", format: (r) => formatNumber(r.leadsMeta), sortValue: (r) => r.leadsMeta },
-  { key: "cadastrosCrm", label: "Cadastros", align: "right", format: (r) => formatNumber(r.cadastrosCrm), sortValue: (r) => r.cadastrosCrm },
-  { key: "leadsCrm", label: "Contatos novos", align: "right", format: (r) => formatNumber(r.leadsCrm), sortValue: (r) => r.leadsCrm },
-  { key: "cplReal", label: "Custo/contato novo", align: "right", format: (r) => formatNullableCurrency(r.cplReal), sortValue: (r) => r.cplReal ?? -1 },
-  { key: "leadsQualificados", label: "Qualificados", align: "right", format: (r) => formatNumber(r.leadsQualificados), sortValue: (r) => r.leadsQualificados },
-  { key: "leadsFechados", label: "Fechados", align: "right", format: (r) => formatNumber(r.leadsFechados), sortValue: (r) => r.leadsFechados },
-  { key: "valorFechado", label: "Valor fechado", align: "right", format: (r) => formatCurrency(r.valorFechado), sortValue: (r) => r.valorFechado },
-];
-
-function SortIcon({ column, sortKey, sortDir }: { column: ColumnKey; sortKey: ColumnKey; sortDir: "asc" | "desc" }) {
-  if (column !== sortKey) return <ArrowUpDown className="h-3 w-3 text-[rgb(var(--slate-7))]" />;
-  return sortDir === "asc" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />;
-}
-
-const LEVEL_OPTIONS: Array<{ key: Level; label: string }> = [
-  { key: "campanha", label: "Por campanha" },
-  { key: "conjunto", label: "Por conjunto" },
-  { key: "anuncio", label: "Por anúncio" },
-];
-
-export default function CampaignTableTab({
-  hierarchy,
-  selectedCampaignId,
-  selectedAdsetId,
-  onCampaignChange,
-  onAdsetChange,
-}: CampaignTableTabProps) {
-  const [level, setLevel] = useState<Level>("anuncio");
-  const [sortKey, setSortKey] = useState<ColumnKey>("spend");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
-  const scopedCampaigns = useMemo(
-    () => hierarchy.filter((campaign) => !selectedCampaignId || campaign.campaignId === selectedCampaignId),
-    [hierarchy, selectedCampaignId]
+function StatusDot({ status }: { status: string }) {
+  const active = status === "ACTIVE";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+        active ? "bg-[rgb(224_248_243)] text-[rgb(var(--teal-9))]" : "bg-[rgb(var(--slate-3))] text-[rgb(var(--slate-10))]"
+      }`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[rgb(var(--teal-9))]" : "bg-[rgb(var(--slate-8))]"}`} />
+      {statusLabel(status)}
+    </span>
   );
+}
 
-  const rows: TableRow[] = useMemo(() => {
-    if (level === "campanha") {
-      return scopedCampaigns.map((campaign) => ({
-        id: campaign.campaignId,
-        name: readableCampaignName(campaign.campaignName),
-        status: campaign.status,
-        spend: campaign.totals.spend,
-        impressions: campaign.totals.impressions,
-        clicks: campaign.totals.clicks,
-        leadsMeta: campaign.totals.leadsMeta,
-        cadastrosCrm: campaign.totals.cadastrosCrm,
-        leadsCrm: campaign.totals.leadsCrm,
-        leadsQualificados: campaign.totals.leadsQualificados,
-        leadsFechados: campaign.totals.leadsFechados,
-        valorFechado: campaign.totals.valorFechado,
-        ...deriveRates(campaign.totals),
-      }));
-    }
+/** Faixa de números que acompanha cada linha, alinhada em colunas fixas para
+ * que campanha, conjunto e anúncio fiquem lendo na mesma vertical. */
+function MetricStrip({
+  spend,
+  leadsMeta,
+  cadastros,
+  contatos,
+}: {
+  spend: number;
+  leadsMeta: number;
+  cadastros: number;
+  contatos: number;
+}) {
+  const gap = leadsMeta > cadastros;
+  const cpc = costPerContact({ spend, leadsCrm: contatos });
+  const cell = "flex flex-col items-end";
+  return (
+    <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-right sm:grid-cols-5">
+      <div className={cell}>
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Investido</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatCurrency(spend)}</span>
+      </div>
+      <div className={`${cell} hidden sm:flex`} title="Eventos de Lead atribuídos pela Meta.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Meta marcou</span>
+        <span
+          className={`inline-flex items-center gap-1 text-sm font-semibold tabular-nums ${
+            gap ? "text-[rgb(139_94_0)]" : "text-[rgb(var(--slate-12))]"
+          }`}
+        >
+          {gap ? <AlertTriangle className="h-3 w-3" /> : null}
+          {formatNumber(leadsMeta)}
+        </span>
+      </div>
+      <div className={cell} title="Envios salvos pelo formulário, incluindo contatos que já existiam.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Cadastros</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNumber(cadastros)}</span>
+      </div>
+      <div className={cell} title="Pessoas novas criadas no CRM.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Contatos novos</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--teal-9))]">{formatNumber(contatos)}</span>
+      </div>
+      <div className={`${cell} hidden sm:flex`} title="Investimento ÷ contatos novos.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/contato</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNullableCurrency(cpc)}</span>
+      </div>
+    </div>
+  );
+}
 
-    if (level === "conjunto") {
-      return scopedCampaigns.flatMap((campaign) =>
-        campaign.adsets
-          .filter((adset) => !selectedAdsetId || adset.adsetId === selectedAdsetId)
-          .map((adset) => ({
-            id: adset.adsetId,
-            name: readableAdsetName(adset.adsetName),
-            status: adset.status,
-            spend: adset.totals.spend,
-            impressions: adset.totals.impressions,
-            clicks: adset.totals.clicks,
-            leadsMeta: adset.totals.leadsMeta,
-            cadastrosCrm: adset.totals.cadastrosCrm,
-            leadsCrm: adset.totals.leadsCrm,
-            leadsQualificados: adset.totals.leadsQualificados,
-            leadsFechados: adset.totals.leadsFechados,
-            valorFechado: adset.totals.valorFechado,
-            ...deriveRates(adset.totals),
-          }))
-      );
-    }
+function AdRowLine({ ad }: { ad: AdRow }) {
+  const src = ad.thumbnailUrl ?? ad.imageUrl;
+  return (
+    <div className="flex flex-col gap-2 py-2.5 pl-14 pr-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="flex min-w-0 items-center gap-2.5">
+        {src ? (
+          // eslint-disable-next-line @next/next/no-img-element -- miniatura do CDN do Meta
+          <img src={src} alt="" className="h-9 w-9 flex-shrink-0 rounded object-cover" loading="lazy" />
+        ) : (
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded bg-[rgb(var(--slate-3))]">
+            <ImageIcon className="h-4 w-4 text-[rgb(var(--slate-8))]" />
+          </span>
+        )}
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-[rgb(var(--slate-12))]" title={ad.adName}>
+            {ad.adName}
+          </p>
+          <StatusDot status={ad.effectiveStatus ?? ad.status} />
+        </div>
+      </div>
+      <MetricStrip spend={ad.spend} leadsMeta={ad.leadsMeta} cadastros={ad.cadastrosCrm} contatos={ad.leadsCrm} />
+    </div>
+  );
+}
 
-    return scopedCampaigns.flatMap((campaign) =>
-      campaign.adsets
-        .filter((adset) => !selectedAdsetId || adset.adsetId === selectedAdsetId)
-        .flatMap((adset) =>
-          adset.ads.map((ad) => ({
-            id: ad.adId,
-            name: ad.adName,
-            status: ad.effectiveStatus ?? ad.status,
-            spend: ad.spend,
-            impressions: ad.impressions,
-            clicks: ad.clicks,
-            ctr: ad.ctr,
-            cpc: ad.cpc,
-            cpm: ad.cpm,
-            leadsMeta: ad.leadsMeta,
-            cadastrosCrm: ad.cadastrosCrm,
-            leadsCrm: ad.leadsCrm,
-            cplReal: ad.cplReal,
-            leadsQualificados: ad.leadsQualificados,
-            leadsFechados: ad.leadsFechados,
-            valorFechado: ad.valorFechado,
-          }))
-        )
-    );
-  }, [level, scopedCampaigns, selectedAdsetId]);
+function AdsetRow({ adset, sortKey }: { adset: AdsetGroup; sortKey: SortKey }) {
+  const [open, setOpen] = useState(false);
+  const ads = useMemo(
+    () => [...adset.ads].sort((a, b) => b[sortKey] - a[sortKey]),
+    [adset.ads, sortKey]
+  );
+  return (
+    <div className="border-t border-[rgb(var(--border-weak))] first:border-t-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 py-2.5 pl-8 pr-3 text-left transition hover:bg-[rgb(var(--slate-2))]"
+        aria-expanded={open}
+      >
+        <ChevronRight className={`h-4 w-4 flex-shrink-0 text-[rgb(var(--slate-9))] transition-transform ${open ? "rotate-90" : ""}`} />
+        <Layers className="h-4 w-4 flex-shrink-0 text-[rgb(var(--slate-9))]" />
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-medium text-[rgb(var(--slate-12))]" title={adset.adsetName}>
+              {readableAdsetName(adset.adsetName)}
+            </span>
+            {isAdvantagePlusAdset(adset.adsetName) ? (
+              <span className="inline-flex flex-shrink-0 rounded-full bg-[rgb(var(--blue-3))] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-[rgb(var(--blue-11))]">
+                ADV+
+              </span>
+            ) : null}
+            <span className="flex-shrink-0 text-[11px] text-[rgb(var(--slate-9))]">
+              {adset.ads.length} anúncio{adset.ads.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <MetricStrip
+            spend={adset.totals.spend}
+            leadsMeta={adset.totals.leadsMeta}
+            cadastros={adset.totals.cadastrosCrm}
+            contatos={adset.totals.leadsCrm}
+          />
+        </div>
+      </button>
+      {open ? (
+        <div className="bg-[rgb(var(--slate-1))]">
+          {ads.map((ad) => (
+            <AdRowLine key={ad.adId} ad={ad} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
-  const sortedRows = useMemo(() => {
-    const column = COLUMNS.find((c) => c.key === sortKey);
-    const copy = [...rows];
-    copy.sort((a, b) => {
-      const va = column ? column.sortValue(a) : a.name;
-      const vb = column ? column.sortValue(b) : b.name;
-      let cmp: number;
-      if (typeof va === "number" && typeof vb === "number") cmp = va - vb;
-      else cmp = String(va).localeCompare(String(vb), "pt-BR");
-      return sortDir === "asc" ? cmp : -cmp;
-    });
-    return copy;
-  }, [rows, sortDir, sortKey]);
+function CampaignRow({ campaign, sortKey }: { campaign: CampaignGroup; sortKey: SortKey }) {
+  const [open, setOpen] = useState(false);
+  const adsets = useMemo(
+    () => [...campaign.adsets].sort((a, b) => b.totals[sortKey] - a.totals[sortKey]),
+    [campaign.adsets, sortKey]
+  );
+  return (
+    <div className="overflow-hidden rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2.5 px-3 py-3 text-left transition hover:bg-[rgb(var(--slate-2))]"
+        aria-expanded={open}
+      >
+        <ChevronRight className={`h-5 w-5 flex-shrink-0 text-[rgb(var(--slate-10))] transition-transform ${open ? "rotate-90" : ""}`} />
+        <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-[rgb(var(--blue-3))]">
+          <Megaphone className="h-4 w-4 text-[rgb(var(--blue-11))]" />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]" title={campaign.campaignName}>
+              {readableCampaignName(campaign.campaignName)}
+            </span>
+            <StatusDot status={campaign.status} />
+            <span className="flex-shrink-0 text-[11px] text-[rgb(var(--slate-9))]">
+              {campaign.adsets.length} conjunto{campaign.adsets.length === 1 ? "" : "s"}
+            </span>
+          </div>
+          <MetricStrip
+            spend={campaign.totals.spend}
+            leadsMeta={campaign.totals.leadsMeta}
+            cadastros={campaign.totals.cadastrosCrm}
+            contatos={campaign.totals.leadsCrm}
+          />
+        </div>
+      </button>
+      {open ? <div className="border-t border-[rgb(var(--border-weak))]">{adsets.map((adset) => <AdsetRow key={adset.adsetId} adset={adset} sortKey={sortKey} />)}</div> : null}
+    </div>
+  );
+}
 
-  function handleSort(key: ColumnKey) {
-    if (key === sortKey) {
-      setSortDir((current) => (current === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
-  }
+export default function CampaignTableTab({ hierarchy }: CampaignTableTabProps) {
+  const [sortKey, setSortKey] = useState<SortKey>("spend");
+
+  const campaigns = useMemo(
+    () => [...hierarchy].sort((a, b) => b.totals[sortKey] - a.totals[sortKey]),
+    [hierarchy, sortKey]
+  );
 
   return (
     <section aria-labelledby="campaign-table-heading" className="space-y-4">
-      <div>
-        <h2 id="campaign-table-heading" className="text-lg font-semibold text-[rgb(var(--slate-12))]">
-          Tabela
-        </h2>
-        <p className="text-sm text-[rgb(var(--slate-10))]">
-          Números frios pra comparar: clique num cabeçalho de coluna pra ordenar.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 id="campaign-table-heading" className="text-lg font-semibold text-[rgb(var(--slate-12))]">
+            Campanhas em camadas
+          </h2>
+          <p className="text-sm text-[rgb(var(--slate-10))]">
+            Clique numa campanha para abrir os conjuntos; clique num conjunto para abrir os anúncios.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-[rgb(var(--slate-9))]">Ordenar por</span>
+          <div className="flex gap-1 rounded-md bg-[rgb(var(--slate-3))] p-1">
+            {SORT_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                aria-pressed={sortKey === option.key}
+                onClick={() => setSortKey(option.key)}
+                className={`rounded px-2.5 py-1 text-xs font-medium transition ${
+                  sortKey === option.key
+                    ? "bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-12))] shadow-sm"
+                    : "text-[rgb(var(--slate-10))] hover:text-[rgb(var(--slate-12))]"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex gap-1 rounded-md bg-[rgb(var(--slate-3))] p-1" aria-label="Nível de agregação da tabela">
-          {LEVEL_OPTIONS.map((option) => (
-            <button
-              key={option.key}
-              type="button"
-              aria-pressed={level === option.key}
-              onClick={() => setLevel(option.key)}
-              className={`rounded px-2.5 py-1.5 text-xs font-medium transition ${
-                level === option.key
-                  ? "bg-[rgb(var(--surface-1))] text-[rgb(var(--slate-12))] shadow-sm"
-                  : "text-[rgb(var(--slate-10))] hover:text-[rgb(var(--slate-12))]"
-              }`}
-            >
-              {option.label}
-            </button>
+      {campaigns.length > 0 ? (
+        <div className="space-y-2.5">
+          {campaigns.map((campaign) => (
+            <CampaignRow key={campaign.campaignId} campaign={campaign} sortKey={sortKey} />
           ))}
         </div>
-
-        <CampaignScopeSelect
-          hierarchy={hierarchy}
-          selectedCampaignId={selectedCampaignId}
-          selectedAdsetId={selectedAdsetId}
-          onCampaignChange={onCampaignChange}
-          onAdsetChange={onAdsetChange}
-        />
-      </div>
-
-      <div className="overflow-x-auto rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))]">
-        <table className="w-full min-w-[1200px] border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-[rgb(var(--border-weak))] bg-[rgb(var(--slate-2))]">
-              <th className="sticky left-0 z-10 bg-[rgb(var(--slate-2))] px-3 py-2.5 text-left">
-                <button
-                  type="button"
-                  onClick={() => handleSort("name")}
-                  className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[rgb(var(--slate-10))] hover:text-[rgb(var(--slate-12))]"
-                >
-                  Nome <SortIcon column="name" sortKey={sortKey} sortDir={sortDir} />
-                </button>
-              </th>
-              {COLUMNS.map((column) => (
-                <th key={column.key} className={`px-3 py-2.5 ${column.align === "right" ? "text-right" : "text-left"}`}>
-                  <button
-                    type="button"
-                    onClick={() => handleSort(column.key)}
-                    className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-[rgb(var(--slate-10))] hover:text-[rgb(var(--slate-12))] ${
-                      column.align === "right" ? "ml-auto flex-row-reverse" : ""
-                    }`}
-                  >
-                    {column.label} <SortIcon column={column.key} sortKey={sortKey} sortDir={sortDir} />
-                  </button>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedRows.map((row) => {
-              const gap = row.leadsMeta > row.cadastrosCrm;
-              return (
-                <tr key={row.id} className="border-b border-[rgb(var(--border-weak))] last:border-0 hover:bg-[rgb(var(--slate-2))]">
-                  <td className="sticky left-0 z-10 max-w-[280px] truncate bg-[rgb(var(--surface-1))] px-3 py-2 font-medium text-[rgb(var(--slate-12))]" title={row.name}>
-                    {row.name}
-                  </td>
-                  <td className="px-3 py-2 text-[rgb(var(--slate-11))]">{statusLabel(row.status)}</td>
-                  {COLUMNS.slice(1).map((column) => (
-                    <td
-                      key={column.key}
-                      className={`px-3 py-2 tabular-nums ${column.align === "right" ? "text-right" : ""} ${
-                        column.key === "leadsMeta" && gap ? "font-semibold text-[rgb(139_94_0)]" : "text-[rgb(var(--slate-12))]"
-                      }`}
-                    >
-                      {column.key === "leadsMeta" && gap ? (
-                        <span className="inline-flex items-center justify-end gap-1" title="Meta marcou mais do que o CRM confirmou">
-                          <AlertTriangle className="h-3 w-3" />
-                          {column.format(row)}
-                        </span>
-                      ) : (
-                        column.format(row)
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-            {sortedRows.length === 0 ? (
-              <tr>
-                <td colSpan={COLUMNS.length + 1} className="px-3 py-10 text-center text-sm text-[rgb(var(--slate-10))]">
-                  Nenhuma linha pra esse recorte no período selecionado.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-10 text-center text-sm text-[rgb(var(--slate-10))]">
+          Nenhuma campanha para esse recorte no período selecionado.
+        </div>
+      )}
     </section>
   );
 }

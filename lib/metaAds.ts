@@ -5,14 +5,18 @@ import type {
   AdRow,
   AggregatedMetrics,
   CampaignGroup,
+  CreativeVideoSource,
   DailySeriesPoint,
   FunnelStageDef,
   FunnelStageKind,
   FunnelStagePoint,
   KpiTotals,
   MetaAdsFilters,
+  RecentAdLead,
+  SellerAdPerformance,
   SyncRunSummary,
 } from "@/types/metaAds";
+import { getDefaultFunnel } from "@/lib/funnels";
 
 const GRAPH_API_VERSION = "v21.0";
 const SCHEMA = "meta_ads";
@@ -913,6 +917,7 @@ interface AdRowQueryResult {
   effective_status: string | null;
   thumbnail_url: string | null;
   image_url: string | null;
+  video_id: string | null;
   landing_url: string | null;
   adset_id: string;
   adset_name: string;
@@ -957,6 +962,7 @@ function mapAdRow(row: AdRowQueryResult, stageKindByKey: Map<string, FunnelStage
     effectiveStatus: row.effective_status,
     thumbnailUrl: row.thumbnail_url,
     imageUrl: row.image_url,
+    videoId: row.video_id,
     landingUrl: row.landing_url,
     adsetId: row.adset_id,
     adsetName: row.adset_name,
@@ -1038,13 +1044,19 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
   await ensureMetaAdsSchema();
   const pool = getPool();
   const scope = buildScopeParams(filters);
-  const stageDefs = await getDefaultFunnelStages();
+  const vozupFunnel = await getDefaultFunnel();
+  const stageDefs = vozupFunnel.stages.map((stage) => ({
+    position: stage.position,
+    key: stage.key,
+    label: stage.label,
+    kind: stage.kind,
+  }));
   const stageKindByKey = new Map(stageDefs.map((s) => [s.key, s.kind]));
 
   const { rows } = await pool.query<AdRowQueryResult>(
     `
     WITH scoped_ads AS (
-      SELECT a.ad_id, a.name AS ad_name, a.status, a.effective_status, a.thumbnail_url, a.image_url, a.landing_url,
+      SELECT a.ad_id, a.name AS ad_name, a.status, a.effective_status, a.thumbnail_url, a.image_url, a.video_id, a.landing_url,
              a.adset_id, s.name AS adset_name, s.status AS adset_status,
              a.campaign_id, c.name AS campaign_name, c.status AS campaign_status
       FROM ${SCHEMA}.ads a
@@ -1067,6 +1079,7 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
     crm_registration_events AS (
       SELECT ${LEAD_AD_ID} AS ad_id
       FROM inscricoes.inscricoes i
+      JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id AND cl.funnel_id = $5
       WHERE ${LEAD_HAS_AD_SIGNAL}
         AND ${LEAD_NOT_EXCLUDED}
         AND ${leadCreatedInPeriod("$3", "$4")}
@@ -1084,6 +1097,7 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
       JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id
       WHERE ${LEAD_HAS_AD_SIGNAL}
         AND ${LEAD_VISIBLE}
+        AND cl.funnel_id = $5
         AND ${leadCreatedInPeriod("$3", "$4")}
     ),
     crm_stage_counts AS (
@@ -1114,7 +1128,7 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
     LEFT JOIN crm_value cv ON cv.ad_id = sa.ad_id
     ORDER BY sa.campaign_name, sa.adset_name, am.spend DESC NULLS LAST
     `,
-    [...scope.values, filters.from, filters.to]
+    [...scope.values, filters.from, filters.to, vozupFunnel.id]
   );
 
   return rows.map((row) => mapAdRow(row, stageKindByKey));
@@ -1136,6 +1150,7 @@ export async function getFunnelBreakdown(
   filters: Pick<MetaAdsFilters, "from" | "to">
 ): Promise<FunnelStagePoint[]> {
   const stageDefs = await getDefaultFunnelStages();
+  const vozupFunnel = await getDefaultFunnel();
   if (adIds.length === 0) {
     return stageDefs.map((stage) => ({ ...stage, count: 0 }));
   }
@@ -1147,12 +1162,12 @@ export async function getFunnelBreakdown(
   }>(
     `SELECT i.id AS inscricao_id, cl.commercial_stage_kind
      FROM inscricoes.inscricoes i
-     LEFT JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id
+     JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id AND cl.funnel_id = $4
      WHERE ${LEAD_HAS_AD_SIGNAL}
        AND ${LEAD_VISIBLE}
        AND ${LEAD_AD_ID} = ANY($1)
        AND ${leadCreatedInPeriod("$2", "$3")}`,
-    [adIds, filters.from, filters.to]
+    [adIds, filters.from, filters.to, vozupFunnel.id]
   );
 
   if (leadRows.length === 0) {
@@ -1216,6 +1231,7 @@ export async function getLeadsForAds(
   await ensureMetaAdsSchema();
   if (adIds.length === 0) return [];
   const pool = getPool();
+  const vozupFunnel = await getDefaultFunnel();
   const { rows } = await pool.query<{
     id: number;
     nome: string | null;
@@ -1241,8 +1257,9 @@ export async function getLeadsForAds(
        AND ${LEAD_NOT_EXCLUDED}
        AND ${LEAD_AD_ID} = ANY($1::text[])
        AND ${leadCreatedInPeriod("$2", "$3")}
+       AND cl.funnel_id = $4
      ORDER BY i.criado_em DESC`,
-    [adIds, filters.from, filters.to]
+    [adIds, filters.from, filters.to, vozupFunnel.id]
   );
 
   return rows.map((row) => ({
@@ -1263,6 +1280,196 @@ export async function getLeadsForAd(
   filters: Pick<MetaAdsFilters, "from" | "to">
 ): Promise<AdLeadSummary[]> {
   return getLeadsForAds([adId], filters);
+}
+
+// Casa o lead com o registro comercial certo: se ele é um satélite de
+// mesclagem, a etapa/vendedor moram no contato primário (dashboard_merged_into).
+const LEAD_COMMERCIAL_JOIN_ID = `CASE
+    WHEN i.payload->>'dashboard_merged_into' ~ '^\\d+$'
+      THEN (i.payload->>'dashboard_merged_into')::int
+    ELSE i.id
+  END`;
+
+/**
+ * Últimos cadastros vindos de anúncios (Meta) no período — alimenta a aba
+ * "Últimos Leads". Cada linha traz de qual campanha/conjunto/anúncio a pessoa
+ * veio, a etapa atual no funil e o vendedor responsável, para o gestor ver de
+ * relance quem chegou e como está. O JOIN em `meta_ads.ads` garante que só
+ * entram leads que casam com um anúncio real (nome de campanha sempre presente).
+ * Quando `scopedAdIds` é informado, restringe ao recorte de campanha/conjunto
+ * escolhido nas outras abas; senão, mostra todos os anúncios da conta.
+ */
+export async function getRecentAdLeads(
+  filters: Pick<MetaAdsFilters, "from" | "to">,
+  options: { scopedAdIds?: string[]; limit?: number } = {}
+): Promise<RecentAdLead[]> {
+  await ensureMetaAdsSchema();
+  const pool = getPool();
+  const vozupFunnel = await getDefaultFunnel();
+  const limit = Math.min(Math.max(options.limit ?? 60, 1), 200);
+  const values: unknown[] = [filters.from, filters.to, vozupFunnel.id];
+  let scopeClause = "";
+  if (options.scopedAdIds && options.scopedAdIds.length > 0) {
+    values.push(options.scopedAdIds);
+    scopeClause = `AND la.ad_id = ANY($${values.length}::text[])`;
+  }
+  values.push(limit);
+  const limitPlaceholder = `$${values.length}`;
+
+  const { rows } = await pool.query<{
+    id: number;
+    nome: string | null;
+    telefone: string | null;
+    email: string | null;
+    criado_em: string;
+    stage_label: string | null;
+    stage_kind: string | null;
+    is_returning: boolean;
+    campaign_name: string;
+    adset_name: string;
+    ad_name: string;
+    seller_name: string | null;
+  }>(
+    `WITH lead_ad AS (
+       SELECT i.id, i.criado_em,
+              i.payload->>'nome' AS nome,
+              i.payload->>'telefone' AS telefone,
+              i.payload->>'email' AS email,
+              COALESCE(i.payload->>'dashboard_merged_into', '') <> '' AS is_returning,
+              ${LEAD_COMMERCIAL_JOIN_ID} AS commercial_id,
+              ${LEAD_AD_ID} AS ad_id
+       FROM inscricoes.inscricoes i
+       WHERE ${LEAD_HAS_AD_SIGNAL}
+         AND ${LEAD_NOT_EXCLUDED}
+         AND ${leadCreatedInPeriod("$1", "$2")}
+     )
+     SELECT la.id, la.nome, la.telefone, la.email, la.criado_em, la.is_returning,
+            c.name AS campaign_name, s.name AS adset_name, a.name AS ad_name,
+            fs.label AS stage_label, cl.commercial_stage_kind AS stage_kind,
+            cl.assigned_seller_name AS seller_name
+     FROM lead_ad la
+     JOIN ${SCHEMA}.ads a ON a.ad_id = la.ad_id
+     JOIN ${SCHEMA}.adsets s ON s.adset_id = a.adset_id
+     JOIN ${SCHEMA}.campaigns c ON c.campaign_id = a.campaign_id
+     JOIN dashboard.commercial_leads cl ON cl.inscricao_id = la.commercial_id AND cl.funnel_id = $3
+     LEFT JOIN dashboard.funnel_stages fs ON fs.funnel_id = cl.funnel_id AND fs.key = cl.commercial_stage
+     WHERE la.ad_id IS NOT NULL ${scopeClause}
+     ORDER BY la.criado_em DESC
+     LIMIT ${limitPlaceholder}`,
+    values
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    nome: row.nome,
+    telefone: row.telefone,
+    email: row.email,
+    criadoEm: row.criado_em,
+    stageLabel: row.stage_label,
+    stageKind: (row.stage_kind as FunnelStageKind | null) ?? null,
+    isReturning: row.is_returning,
+    campaignName: row.campaign_name,
+    adsetName: row.adset_name,
+    adName: row.ad_name,
+    sellerName: row.seller_name,
+  }));
+}
+
+/**
+ * Desempenho por vendedor considerando SÓ leads vindos de anúncios (Meta) no
+ * período — base da aba "Vendedores". Conta cada pessoa uma vez (LEAD_VISIBLE
+ * exclui satélites de mesclagem) e agrega por vendedor responsável no CRM. A
+ * linha "não distribuído" (sem vendedor) vem com sellerName null, para o gestor
+ * ver quantos leads de anúncio ainda não têm dono.
+ */
+export async function getSellerAdPerformance(
+  filters: Pick<MetaAdsFilters, "from" | "to">,
+  options: { scopedAdIds?: string[] } = {}
+): Promise<SellerAdPerformance[]> {
+  await ensureMetaAdsSchema();
+  const pool = getPool();
+  const vozupFunnel = await getDefaultFunnel();
+  const values: unknown[] = [filters.from, filters.to, vozupFunnel.id];
+  let scopeClause = "";
+  if (options.scopedAdIds && options.scopedAdIds.length > 0) {
+    values.push(options.scopedAdIds);
+    scopeClause = `AND la.ad_id = ANY($${values.length}::text[])`;
+  }
+
+  const { rows } = await pool.query<{
+    seller_name: string | null;
+    seller_email: string | null;
+    total_leads: string;
+    qualificados: string;
+    ganhos: string;
+    perdidos: string;
+    valor_fechado: string | null;
+  }>(
+    `WITH lead_ad AS (
+       SELECT ${LEAD_COMMERCIAL_JOIN_ID} AS commercial_id,
+              ${LEAD_AD_ID} AS ad_id
+       FROM inscricoes.inscricoes i
+       WHERE ${LEAD_HAS_AD_SIGNAL}
+         AND ${LEAD_VISIBLE}
+         AND ${leadCreatedInPeriod("$1", "$2")}
+     ),
+     scoped AS (
+       SELECT DISTINCT la.commercial_id
+       FROM lead_ad la
+       JOIN ${SCHEMA}.ads a ON a.ad_id = la.ad_id
+       WHERE la.ad_id IS NOT NULL ${scopeClause}
+     )
+     SELECT cl.assigned_seller_name AS seller_name,
+            cl.assigned_seller_email AS seller_email,
+            COUNT(*)::text AS total_leads,
+            COUNT(*) FILTER (WHERE cl.commercial_stage_kind IN ('normal','won'))::text AS qualificados,
+            COUNT(*) FILTER (WHERE cl.commercial_stage_kind = 'won')::text AS ganhos,
+            COUNT(*) FILTER (WHERE cl.commercial_stage_kind = 'lost')::text AS perdidos,
+            COALESCE(SUM(cl.closed_value) FILTER (WHERE cl.commercial_stage_kind = 'won'), 0)::text AS valor_fechado
+     FROM scoped sc
+     JOIN dashboard.commercial_leads cl ON cl.inscricao_id = sc.commercial_id AND cl.funnel_id = $3
+     GROUP BY cl.assigned_seller_name, cl.assigned_seller_email
+     ORDER BY COUNT(*) DESC`,
+    values
+  );
+
+  return rows.map((row) => ({
+    sellerName: row.seller_name,
+    sellerEmail: row.seller_email,
+    totalLeads: toNumber(row.total_leads),
+    qualificados: toNumber(row.qualificados),
+    ganhos: toNumber(row.ganhos),
+    perdidos: toNumber(row.perdidos),
+    valorFechado: toNumber(row.valor_fechado),
+  }));
+}
+
+/**
+ * Resolve a URL tocável de um vídeo de criativo sob demanda. O `source` da
+ * Graph API é um link de CDN temporário (expira em poucas horas), então NÃO é
+ * guardado no banco — é buscado na hora em que o gestor abre o criativo. Falha
+ * graciosamente: se a Graph recusar, devolve `source: null` e o chamador cai
+ * pro `permalink_url`/thumbnail.
+ */
+export async function getCreativeVideoSource(videoId: string): Promise<CreativeVideoSource> {
+  try {
+    const data = await fetchGraphWithRetry<{ source?: string; permalink_url?: string }>(
+      `${videoId}?fields=source,permalink_url`
+    );
+    // A Graph devolve o permalink relativo (ex.: "/reel/123/"); a UI precisa da
+    // URL absoluta pra tocar no plugin do Facebook e pro link "abrir lá".
+    let permalinkUrl = data.permalink_url ?? null;
+    if (permalinkUrl && permalinkUrl.startsWith("/")) {
+      permalinkUrl = `https://www.facebook.com${permalinkUrl}`;
+    }
+    return {
+      source: data.source ?? null,
+      permalinkUrl,
+    };
+  } catch (error) {
+    console.warn("[metaAds] Não foi possível resolver a URL do vídeo do criativo:", error);
+    return { source: null, permalinkUrl: null };
+  }
 }
 
 function emptyMetrics(): AggregatedMetrics {
@@ -1354,6 +1561,7 @@ export async function getKpiTotals(filters: MetaAdsFilters): Promise<KpiTotals> 
 export async function getDailySeries(filters: MetaAdsFilters, scopedAdIds?: string[]): Promise<DailySeriesPoint[]> {
   await ensureMetaAdsSchema();
   const pool = getPool();
+  const vozupFunnel = await getDefaultFunnel();
   const adIds = scopedAdIds ?? (await getAdIdsForScope(filters));
   if (adIds.length === 0) return [];
 
@@ -1373,20 +1581,22 @@ export async function getDailySeries(filters: MetaAdsFilters, scopedAdIds?: stri
        AND ${LEAD_VISIBLE}
        AND ${LEAD_AD_ID} = ANY($1)
        AND ${leadCreatedInPeriod("$2", "$3")}
+       AND cl.funnel_id = $4
      GROUP BY 1 ORDER BY 1`,
-    [adIds, filters.from, filters.to]
+    [adIds, filters.from, filters.to, vozupFunnel.id]
   );
 
   const { rows: registrationRows } = await pool.query<{ date: string; cadastros_crm: string }>(
     `SELECT (i.criado_em AT TIME ZONE '${META_ADS_TIME_ZONE}')::date::text AS date,
             COUNT(*) AS cadastros_crm
      FROM inscricoes.inscricoes i
+     JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id AND cl.funnel_id = $4
      WHERE ${LEAD_HAS_AD_SIGNAL}
        AND ${LEAD_NOT_EXCLUDED}
        AND ${LEAD_AD_ID} = ANY($1)
        AND ${leadCreatedInPeriod("$2", "$3")}
      GROUP BY 1 ORDER BY 1`,
-    [adIds, filters.from, filters.to]
+    [adIds, filters.from, filters.to, vozupFunnel.id]
   );
 
   const byDate = new Map<string, DailySeriesPoint>();

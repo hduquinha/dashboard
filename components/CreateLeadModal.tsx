@@ -20,6 +20,8 @@ export interface CreateLeadContext {
   label: string;
   /** Campos extras pré-definidos pelo bloco (ex.: campaign_name da Meta). */
   extraFields?: Record<string, string>;
+  /** Permite criar o lead SEM dono (vai pra Chegada de Leads p/ um SDR distribuir). */
+  allowUnassigned?: boolean;
 }
 
 interface CreateLeadModalProps {
@@ -48,6 +50,8 @@ export function CreateLeadModal({ onCreated, onClose, sellers, currentUser, cont
   // Pré-seleciona o próprio usuário — na maioria das vezes quem insere o
   // lead manualmente atribui para si mesmo.
   const [sellerId, setSellerId] = useState<string>(() => {
+    // Modo Chegada (sem dono): começa vazio de propósito — o padrão é não atribuir.
+    if (context?.allowUnassigned) return "";
     const ownEmail = currentUser?.email.trim().toLowerCase();
     const own = ownEmail
       ? selectableSellers.find((s) => s.email.trim().toLowerCase() === ownEmail)
@@ -109,7 +113,7 @@ export function CreateLeadModal({ onCreated, onClose, sellers, currentUser, cont
       setError("Informe o telefone / WhatsApp do lead.");
       return;
     }
-    if (!sellerId) {
+    if (!sellerId && !context?.allowUnassigned) {
       setError("Selecione o colaborador responsável pelo lead.");
       return;
     }
@@ -143,7 +147,7 @@ export function CreateLeadModal({ onCreated, onClose, sellers, currentUser, cont
           nome: trimmedNome,
           telefone: trimmedTelefone,
           produto,
-          sellerId: Number(sellerId),
+          sellerId: sellerId ? Number(sellerId) : null,
           fields,
         }),
       });
@@ -262,21 +266,28 @@ export function CreateLeadModal({ onCreated, onClose, sellers, currentUser, cont
 
           <div>
             <label className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-neutral-400">
-              Colaborador responsável *
+              Colaborador responsável {context?.allowUnassigned ? "(opcional)" : "*"}
             </label>
             <select
               value={sellerId}
               onChange={(e) => setSellerId(e.target.value)}
               className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-2.5 py-1.5 text-sm text-neutral-900 focus:border-cyan-400 focus:outline-none focus:bg-white"
             >
-              <option value="">Selecione o colaborador…</option>
+              <option value="">
+                {context?.allowUnassigned ? "Sem dono — SDR distribui depois" : "Selecione o colaborador…"}
+              </option>
               {selectableSellers.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}
             </select>
-            {selectableSellers.length === 0 && (
+            {context?.allowUnassigned && (
+              <p className="mt-1 text-[10px] text-neutral-400">
+                Deixe &quot;Sem dono&quot; para o lead entrar na Chegada de Leads e um SDR distribuir depois.
+              </p>
+            )}
+            {!context?.allowUnassigned && selectableSellers.length === 0 && (
               <p className="mt-1 text-[10px] text-rose-500">
                 Nenhum colaborador ativo encontrado — cadastre a equipe em Equipe.
               </p>

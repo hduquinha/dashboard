@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "test": "jest",
+    "google-ads:refresh-token": "node scripts/google-ads-refresh-token.mjs",
     "seed:admin": "node scripts/seed-team-admin.js"
   },
   "dependencies": {

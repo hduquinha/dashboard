@@ -1,6 +1,6 @@
 export type MetaAdsStatusFilter = "active" | "inactive" | "all";
 
-export type CampanhasTab = "geral" | "tabela" | "anuncios";
+export type CampanhasTab = "geral" | "tabela" | "anuncios" | "leads" | "vendedores";
 
 export interface MetaAdsFilters {
   from: string; // YYYY-MM-DD
@@ -17,6 +17,10 @@ export interface AdRow {
   thumbnailUrl: string | null;
   /** Imagem em resolução maior fornecida pelo criativo; thumbnail é fallback. */
   imageUrl: string | null;
+  /** ID do vídeo do criativo (quando é anúncio de vídeo). A URL tocável é
+   * resolvida sob demanda pela Graph API (ver getCreativeVideoSource), pois o
+   * `source` da Meta expira em poucas horas — não dá pra guardar no banco. */
+  videoId: string | null;
   /** URL de destino informada pelo criativo; nula em anúncios sem landing page identificável. */
   landingUrl: string | null;
   adsetId: string;
@@ -134,4 +138,33 @@ export interface AdLeadSummary {
   stageKind: FunnelStageKind | null;
   /** true quando este cadastro reencontrou uma pessoa que já existia no CRM. */
   isReturning: boolean;
+}
+
+/** Lead recente atribuído a um anúncio — usado na aba "Últimos Leads", onde o
+ * gestor quer ver de relance quem chegou, de qual anúncio e em que etapa. */
+export interface RecentAdLead extends AdLeadSummary {
+  campaignName: string;
+  adsetName: string;
+  adName: string;
+  /** Nome do vendedor responsável no CRM, ou null se ainda não distribuído. */
+  sellerName: string | null;
+}
+
+/** Desempenho por vendedor considerando SÓ os leads vindos de anúncios (Meta)
+ * no período — base da aba "Vendedores". A linha sem vendedor (não distribuído)
+ * vem com sellerName null. */
+export interface SellerAdPerformance {
+  sellerName: string | null;
+  sellerEmail: string | null;
+  totalLeads: number;
+  qualificados: number;
+  ganhos: number;
+  perdidos: number;
+  valorFechado: number;
+}
+
+/** URL tocável de um vídeo de criativo, resolvida sob demanda pela Graph API. */
+export interface CreativeVideoSource {
+  source: string | null;
+  permalinkUrl: string | null;
 }

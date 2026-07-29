@@ -11,6 +11,7 @@ function ad(overrides: Partial<AdRow>): AdRow {
     effectiveStatus: "PAUSED",
     thumbnailUrl: null,
     imageUrl: null,
+    videoId: null,
     landingUrl: null,
     adsetId: "s1",
     adsetName: "Conjunto 1",

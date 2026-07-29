@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ImageOff, Layers, Mail, MessageCircle, RotateCcw, X } from "lucide-react";
+import { ImageOff, Layers, Mail, MessageCircle, Play, RotateCcw, X } from "lucide-react";
 import { AdDestination } from "@/components/AdDestination";
 import { readableAdsetName } from "@/lib/metaAdsLabels";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
@@ -16,6 +16,8 @@ interface AdDetailModalProps {
   members?: AdRow[];
   filters: Pick<MetaAdsFilters, "from" | "to">;
   stageDefs: FunnelStageDef[];
+  /** Abre o criativo (imagem plena / vídeo) em tela cheia. */
+  onOpenCreative: () => void;
   onClose: () => void;
 }
 
@@ -72,7 +74,7 @@ function stageBadge(label: string | null, kind: string | null) {
   );
 }
 
-export default function AdDetailModal({ ad, members, filters, stageDefs, onClose }: AdDetailModalProps) {
+export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenCreative, onClose }: AdDetailModalProps) {
   const [leads, setLeads] = useState<AdLeadSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -140,12 +142,27 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onClose
         <div className="flex items-start justify-between gap-3 border-b border-[rgb(var(--border-weak))] p-4">
           <div className="flex items-start gap-3">
             {ad.imageUrl ?? ad.thumbnailUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- imagem vem direto do CDN do Meta
-              <img
-                src={ad.imageUrl ?? ad.thumbnailUrl ?? ""}
-                alt={`Criativo do anúncio ${ad.adName}`}
-                className="h-28 w-24 flex-shrink-0 rounded-lg bg-[rgb(var(--slate-2))] object-contain sm:h-36 sm:w-44"
-              />
+              <button
+                type="button"
+                onClick={onOpenCreative}
+                aria-label={`Ver criativo do anúncio ${ad.adName} em tela cheia`}
+                className="group relative h-28 w-24 flex-shrink-0 overflow-hidden rounded-lg bg-[rgb(var(--slate-2))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(var(--blue-8))] sm:h-36 sm:w-44"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element -- imagem vem direto do CDN do Meta */}
+                <img
+                  src={ad.imageUrl ?? ad.thumbnailUrl ?? ""}
+                  alt={`Criativo do anúncio ${ad.adName}`}
+                  className="h-full w-full object-cover transition group-hover:scale-[1.03]"
+                />
+                <span className="absolute inset-0 bg-black/0 transition group-hover:bg-black/20" />
+                {ad.videoId ? (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/55 text-white">
+                      <Play className="h-4 w-4 translate-x-0.5" fill="currentColor" />
+                    </span>
+                  </span>
+                ) : null}
+              </button>
             ) : (
               <div className="flex h-20 w-20 flex-shrink-0 items-center justify-center rounded-lg bg-[rgb(var(--slate-3))]">
                 <ImageOff className="h-6 w-6 text-[rgb(var(--slate-8))]" />

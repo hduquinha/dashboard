@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createCommission, currentMonth, getCommissionPanel, listCommissions, type CommissionInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseFinanceFilters, readJsonBody, requireFinanceAccess } from "../utils";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,10 @@ export async function POST(request: NextRequest) {
   if (auth) return auth;
 
   try {
-    const id = await createCommission((await readJsonBody(request)) as unknown as CommissionInput);
+    const body = (await readJsonBody(request)) as unknown as CommissionInput;
+    const id = await auditFinance(request, { entity: "commission", action: "create" }, () =>
+      createCommission(body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar comissao.");

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { setCommissionInstallmentStatus } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, parseId, readJsonBody, requireFinanceAccess } from "../../utils";
 import type { InstallmentStatus } from "@/types/finance";
 
@@ -14,7 +15,12 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
     const [{ id }, body] = await Promise.all([context.params, readJsonBody(request)]);
     const status: InstallmentStatus = body.status === "pago" ? "pago" : "pendente";
-    await setCommissionInstallmentStatus(parseId(id), status);
+    const entityId = parseId(id);
+    await auditFinance(
+      request,
+      { entity: "commission_installment", action: "status", entityId, note: `Parcela marcada como ${status}` },
+      () => setCommissionInstallmentStatus(entityId, status)
+    );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return financeError(error, "Falha ao atualizar parcela da comissao.");

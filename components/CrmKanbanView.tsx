@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { CheckSquare, RefreshCw, Users } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -19,6 +19,7 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { CSS } from "@dnd-kit/utilities";
 import type { CommercialStage, InscricaoItem } from "@/types/inscricao";
 import type { FunnelStage } from "@/types/funnel";
+import type { CommercialSeller } from "@/types/commercial";
 import { STAGE_COLOR_CLASSES } from "@/lib/stageColors";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import { CopyPhoneButton } from "@/components/CopyPhoneButton";
@@ -57,6 +58,8 @@ interface CrmKanbanViewProps {
   onLeadMoved?: () => void;
   /** Colunas exibidas no board — etapas do funil selecionado, na ordem em que devem aparecer. */
   stages: FunnelStage[];
+  /** Id do funil selecionado; impede que etapas com o mesmo nome se misturem. */
+  funnelId: number | null;
   /** So leads com responsavel — os sem responsavel ficam na Chegada de Leads. */
   assignedOnly?: boolean;
   /** Filtro salvo (dashboard.kanban_filters) aplicado no servidor. */
@@ -65,6 +68,8 @@ interface CrmKanbanViewProps {
   refreshToken?: number;
   /** Mostra "Fechar lead" no menu do card (fechou curso / sem continuidade). */
   allowCloseLead?: boolean;
+  /** Vendedores disponíveis para o repasse em massa (supervisores). */
+  sellers?: CommercialSeller[];
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -121,8 +126,11 @@ interface KanbanCardVisualProps {
   onSelect: () => void;
   onStageChange: (stage: CommercialStage) => void;
   onAttemptsChange: (delta: 1 | -1) => void;
+  onSellerChange?: (sellerId: number) => void;
   currentStage: CommercialStage;
   isOverlay?: boolean;
+  isBulkSelected?: boolean;
+  onToggleBulkSelection?: () => void;
 }
 
 /** Corpo visual do card — sem hook de drag, reutilizado pelo card normal e pelo DragOverlay. */
@@ -135,9 +143,14 @@ function KanbanCardBody({
   isOverlay,
   stages,
   onRequestClose,
+  isBulkSelected,
+  onToggleBulkSelection,
+  onSellerChange,
+  sellers,
 }: Omit<KanbanCardVisualProps, "onSelect"> & {
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  sellers?: CommercialSeller[];
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -166,6 +179,24 @@ function KanbanCardBody({
       {/* Name row */}
       <div className="flex items-start justify-between gap-1">
         <div className="flex min-w-0 items-center gap-2">
+          {!isOverlay && onToggleBulkSelection && (
+            <button
+              type="button"
+              aria-label={isBulkSelected ? "Remover da seleção" : "Selecionar card"}
+              title={isBulkSelected ? "Remover da seleção" : "Selecionar card"}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => { event.stopPropagation(); onToggleBulkSelection(); }}
+              className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border transition ${
+                isBulkSelected
+                  ? "border-cyan-600 bg-cyan-600 text-white"
+                  : "border-neutral-300 bg-white text-transparent hover:border-cyan-500"
+              }`}
+            >
+              <svg className="h-3 w-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <path d="m3 8 3 3 7-7" />
+              </svg>
+            </button>
+          )}
           <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-neutral-100 text-[11px] font-bold text-neutral-600">
             {(humanizeName(lead.nome) ?? "?")[0].toUpperCase()}
           </div>
@@ -211,6 +242,29 @@ function KanbanCardBody({
                     </button>
                   );
                 })}
+                {onSellerChange && sellers && sellers.length > 0 && (
+                  <>
+                    <div className="my-1 border-t border-neutral-100" />
+                    <p className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-neutral-400">
+                      Repassar para
+                    </p>
+                    <div className="max-h-36 overflow-y-auto">
+                      {sellers.map((seller) => (
+                        <button
+                          key={seller.chatwootUserId}
+                          type="button"
+                          onClick={() => { onSellerChange(seller.chatwootUserId); setShowMenu(false); }}
+                          className={`flex w-full items-center gap-2.5 px-3 py-2 text-left text-[11px] font-medium hover:bg-neutral-50 ${
+                            seller.chatwootUserId === lead.commercial?.assignedSellerId ? "bg-violet-50 text-violet-700" : "text-neutral-700"
+                          }`}
+                        >
+                          <Users className="h-3 w-3" />
+                          {seller.name}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
                 {onRequestClose && (
                   <>
                     <div className="my-1 border-t border-neutral-100" />
@@ -331,9 +385,14 @@ function KanbanCard({
   currentStage,
   stages,
   onRequestClose,
+  isBulkSelected,
+  onToggleBulkSelection,
+  onSellerChange,
+  sellers,
 }: KanbanCardVisualProps & {
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  sellers?: CommercialSeller[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: lead.id,
@@ -356,6 +415,10 @@ function KanbanCard({
         currentStage={currentStage}
         stages={stages}
         onRequestClose={onRequestClose}
+        isBulkSelected={isBulkSelected}
+        onToggleBulkSelection={onToggleBulkSelection}
+        onSellerChange={onSellerChange}
+        sellers={sellers}
       />
     </div>
   );
@@ -396,6 +459,10 @@ function KanbanColumn({
   onAttemptsChange,
   stages,
   onRequestClose,
+  bulkSelectedIds,
+  onToggleBulkSelection,
+  onSellerChange,
+  sellers,
 }: {
   stage: FunnelStage;
   leads: InscricaoItem[];
@@ -406,6 +473,10 @@ function KanbanColumn({
   onAttemptsChange: (leadId: number, delta: 1 | -1) => void;
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  bulkSelectedIds: Set<number>;
+  onToggleBulkSelection: (leadId: number) => void;
+  onSellerChange?: (leadId: number, sellerId: number) => void;
+  sellers?: CommercialSeller[];
 }) {
   const cfg = stageConfig(stage);
   const { setNodeRef, isOver } = useDroppable({ id: `${COLUMN_DROPPABLE_PREFIX}${stage.key}` });
@@ -443,6 +514,10 @@ function KanbanColumn({
                 currentStage={stage.key}
                 stages={stages}
                 onRequestClose={onRequestClose}
+                isBulkSelected={bulkSelectedIds.has(lead.id)}
+                onToggleBulkSelection={() => onToggleBulkSelection(lead.id)}
+                onSellerChange={onSellerChange ? (sellerId) => onSellerChange(lead.id, sellerId) : undefined}
+                sellers={sellers}
               />
             ))
           )}
@@ -467,16 +542,22 @@ export function CrmKanbanView({
   isSupervisor,
   onLeadMoved,
   stages,
+  funnelId,
   assignedOnly,
   filterId,
   refreshToken,
   allowCloseLead,
+  sellers = [],
 }: CrmKanbanViewProps) {
   const [data, setData] = useState<KanbanBoard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [closingLead, setClosingLead] = useState<InscricaoItem | null>(null);
+  const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(() => new Set());
+  const [bulkStage, setBulkStage] = useState("");
+  const [bulkSellerId, setBulkSellerId] = useState("");
+  const [bulkSaving, setBulkSaving] = useState(false);
 
   const stageKeys = stages.map((stage) => stage.key);
   const stagesKey = stageKeys.join(",");
@@ -493,6 +574,7 @@ export function CrmKanbanView({
     setError(null);
     const params = new URLSearchParams();
     if (produto) params.set("produto", produto);
+    if (funnelId) params.set("funnelId", String(funnelId));
     if (stagesKey) params.set("stages", stagesKey);
     if (assignedOnly) params.set("assignedOnly", "1");
     if (filterId) params.set("filterId", String(filterId));
@@ -510,9 +592,46 @@ export function CrmKanbanView({
     } finally {
       setLoading(false);
     }
-  }, [produto, assignedSellerEmail, isSupervisor, stagesKey, filterId, assignedOnly]);
+  }, [produto, assignedSellerEmail, isSupervisor, stagesKey, funnelId, filterId, assignedOnly]);
 
   useEffect(() => { fetchData(); }, [fetchData, refreshToken]);
+
+  const toggleBulkSelection = useCallback((leadId: number) => {
+    setBulkSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
+    });
+  }, []);
+
+  const applyBulkChange = useCallback(async (action: "stage" | "seller") => {
+    const ids = [...bulkSelectedIds];
+    const value = action === "stage" ? bulkStage : bulkSellerId;
+    if (ids.length === 0 || !value) return;
+    setBulkSaving(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/commercial/leads/batch", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action === "stage"
+          ? { ids, stage: value }
+          : { ids, sellerId: Number(value) }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Não foi possível atualizar os leads.");
+      setBulkSelectedIds(new Set());
+      setBulkStage("");
+      setBulkSellerId("");
+      onLeadMoved?.();
+      await fetchData();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Não foi possível atualizar os leads.");
+    } finally {
+      setBulkSaving(false);
+    }
+  }, [bulkSelectedIds, bulkStage, bulkSellerId, fetchData, onLeadMoved]);
 
   const persistMove = useCallback(
     async (leadId: number, stage: CommercialStage, position: number) => {
@@ -579,6 +698,22 @@ export function CrmKanbanView({
     },
     [fetchData]
   );
+
+  const handleSellerChange = useCallback(async (leadId: number, sellerId: number) => {
+    try {
+      const res = await fetch(`/api/commercial/leads/${leadId}/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sellerId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Não foi possível trocar o vendedor.");
+      onLeadMoved?.();
+      await fetchData();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Não foi possível trocar o vendedor.");
+    }
+  }, [fetchData, onLeadMoved]);
 
   const handleAttemptsChange = useCallback(
     (leadId: number, delta: 1 | -1) => {
@@ -725,6 +860,7 @@ export function CrmKanbanView({
   if (!data) return null;
 
   const totalLeads = stageKeys.reduce((sum, key) => sum + (data[key]?.total ?? 0), 0);
+  const bulkCount = bulkSelectedIds.size;
   const activeLead = activeId !== null ? findLeadById(data, stageKeys, activeId) : null;
   const activeStage = activeId !== null ? findStageOfLead(data, stageKeys, activeId) : null;
 
@@ -748,14 +884,54 @@ export function CrmKanbanView({
           )}
           {error && <span className="text-[11px] text-amber-600">{error}</span>}
         </div>
-        <button
-          type="button"
-          onClick={fetchData}
-          className="flex items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1.5 text-[11px] font-medium text-neutral-500 hover:bg-neutral-50"
-        >
-          <RefreshCw className="h-3 w-3" />
-          Atualizar
-        </button>
+        <div className="flex items-center gap-2">
+          {bulkCount > 0 && (
+            <>
+              <span className="flex items-center gap-1 rounded-lg bg-cyan-100 px-2 py-1.5 text-[11px] font-bold text-cyan-800">
+                <CheckSquare className="h-3.5 w-3.5" /> {bulkCount} selecionado{bulkCount > 1 ? "s" : ""}
+              </span>
+              <select
+                value={bulkStage}
+                onChange={(event) => setBulkStage(event.target.value)}
+                disabled={bulkSaving}
+                className="rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-[11px] text-neutral-700"
+                aria-label="Mover selecionados de categoria"
+              >
+                <option value="">Mover de categoria…</option>
+                {stages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}
+              </select>
+              <button type="button" disabled={!bulkStage || bulkSaving} onClick={() => void applyBulkChange("stage")} className="rounded-lg bg-cyan-600 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40">
+                Mover
+              </button>
+              {isSupervisor && sellers.length > 0 && (
+                <>
+                  <select
+                    value={bulkSellerId}
+                    onChange={(event) => setBulkSellerId(event.target.value)}
+                    disabled={bulkSaving}
+                    className="rounded-lg border border-neutral-200 bg-white px-2 py-1.5 text-[11px] text-neutral-700"
+                    aria-label="Repassar selecionados para vendedor"
+                  >
+                    <option value="">Repassar para vendedor…</option>
+                    {sellers.map((seller) => <option key={seller.chatwootUserId} value={seller.chatwootUserId}>{seller.name}</option>)}
+                  </select>
+                  <button type="button" disabled={!bulkSellerId || bulkSaving} onClick={() => void applyBulkChange("seller")} className="flex items-center gap-1 rounded-lg bg-violet-600 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40">
+                    <Users className="h-3 w-3" /> Repassar
+                  </button>
+                </>
+              )}
+              <button type="button" disabled={bulkSaving} onClick={() => setBulkSelectedIds(new Set())} className="text-[11px] font-medium text-neutral-500 hover:text-neutral-800">Limpar</button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={fetchData}
+            className="flex items-center gap-1.5 rounded-lg border border-neutral-200 px-2.5 py-1.5 text-[11px] font-medium text-neutral-500 hover:bg-neutral-50"
+          >
+            <RefreshCw className="h-3 w-3" />
+            Atualizar
+          </button>
+        </div>
       </div>
 
       {/* Board */}
@@ -782,6 +958,10 @@ export function CrmKanbanView({
                 onAttemptsChange={handleAttemptsChange}
                 stages={stages}
                 onRequestClose={allowCloseLead ? setClosingLead : undefined}
+                bulkSelectedIds={bulkSelectedIds}
+                onToggleBulkSelection={toggleBulkSelection}
+                onSellerChange={isSupervisor ? handleSellerChange : undefined}
+                sellers={isSupervisor ? sellers : undefined}
               />
             );
           })}

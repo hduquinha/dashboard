@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createBranchItem, listBranchItems, type BranchItemInput } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
 import { financeError, readJsonBody, requireFinanceAccess } from "../utils";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +21,10 @@ export async function POST(request: NextRequest) {
   if (auth) return auth;
 
   try {
-    const id = await createBranchItem((await readJsonBody(request)) as unknown as BranchItemInput);
+    const body = (await readJsonBody(request)) as unknown as BranchItemInput;
+    const id = await auditFinance(request, { entity: "branch_item", action: "create" }, () =>
+      createBranchItem(body)
+    );
     return NextResponse.json({ id });
   } catch (error) {
     return financeError(error, "Falha ao criar item da filial.");
