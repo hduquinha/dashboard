@@ -1,3 +1,4 @@
+import { effectiveLeadOrigin } from "@/lib/leadOriginPriority";
 import { TRAINING_FIELD_KEYS } from "@/lib/parsePayload";
 import { UP_DAY_FIELD_KEYS } from "@/lib/inscricaoForm";
 
@@ -172,7 +173,15 @@ function firstString(payload: Record<string, unknown>, ...keys: string[]): strin
 }
 
 export interface LeadSourceInfo {
+  /** Origem que vale para a tela. Com mais de um vínculo, é a de maior
+   * prioridade (Meta > Google Ads > Landing Page > formulário de produto) —
+   * ver lib/leadOriginPriority.ts. */
   origem: string | null;
+  /** Formulário que a pessoa preencheu neste cadastro. Só difere de `origem`
+   * quando a prioridade de canal trocou a origem. */
+  origemFormulario: string | null;
+  /** A prioridade de canal trocou a origem deste lead. */
+  origemPorPrioridade: boolean;
   fonte: string | null;
   campanha: string | null;
   indicador: string | null;
@@ -196,8 +205,12 @@ export function describeLeadSource(payload: Record<string, unknown> | null | und
     ? extrasRaw.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
     : [];
 
+  const efetiva = effectiveLeadOrigin(p);
+
   return {
-    origem: firstString(p, "origem", "lead_origem"),
+    origem: efetiva.origem ?? firstString(p, "origem", "lead_origem"),
+    origemFormulario: efetiva.formOrigem ?? firstString(p, "origem", "lead_origem"),
+    origemPorPrioridade: efetiva.overridden,
     fonte: firstString(p, "campaign_source", "campaignSource", "utm_source", "utmSource"),
     campanha: firstString(p, "campaign_name", "campaignName", "utm_campaign", "utmCampaign"),
     indicador: firstString(p, "traffic_source", "indicador", "codigo_indicador"),

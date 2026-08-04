@@ -790,7 +790,22 @@ export function LeadProfileModal({
                       const source = describeLeadSource(inscricao.payload as Record<string, unknown> | undefined);
                       return (
                         <div className="grid gap-2 sm:grid-cols-2">
-                          <InfoCard label="Origem do lead" value={source.origem || "—"} sub={source.comoConheceu ?? undefined} />
+                          {/* Com mais de um vínculo, o canal de captação vence
+                              o formulário de produto (ver lib/leadOriginPriority).
+                              As duas linhas ficam à vista: a contagem usa a de
+                              cima, a inscrição em si é a de baixo. */}
+                          <InfoCard
+                            label={source.origemPorPrioridade ? "Origem do lead (canal)" : "Origem do lead"}
+                            value={source.origem || "—"}
+                            sub={source.comoConheceu ?? undefined}
+                          />
+                          {source.origemPorPrioridade ? (
+                            <InfoCard
+                              label="Formulário preenchido"
+                              value={source.origemFormulario || "—"}
+                              sub="O canal tem prioridade sobre o formulário quando o lead tem mais de um vínculo."
+                            />
+                          ) : null}
                           <InfoCard label="Nome do formulário" value={source.formName || "—"} />
                           <InfoCard label="Rota de origem" value={source.paginaOrigem || "—"} />
                           <InfoCard label="Campanha" value={source.campanha || "—"} sub={source.fonte ?? undefined} />

@@ -3,6 +3,7 @@ import { assignCommercialLead, ensureCommercialSchema, listCommercialSellers } f
 import { analyzeInscricaoQuality } from "@/lib/inscricaoQuality";
 import { pickFormString } from "@/lib/inscricaoForm";
 import { FORM_NAME_KEYS, LANDING_PAGE_KEYS } from "@/lib/leadFields";
+import { effectiveLeadOrigin, originTier } from "@/lib/leadOriginPriority";
 import { isProductivityManager } from "@/lib/productivity";
 import { listInscricoes, listInscricoesByIds } from "@/lib/db";
 import { formatTrainingDateLabel } from "@/lib/trainings";
@@ -598,6 +599,11 @@ function isProductFormLead(item: InscricaoItem): boolean {
 }
 
 function isArrivalLead(item: InscricaoItem, candidate: ManualDistributionCandidate): boolean {
+  // Canal de captação tem prioridade sobre o formulário de produto: quem tem
+  // um vínculo Meta/Google/landing page entra na fila mesmo tendo preenchido
+  // também um formulário de aula. Decisão da operação em 04/08/2026 — ver
+  // lib/leadOriginPriority.ts e a cartilha §10.
+  if (originTier(effectiveLeadOrigin(item.payload as Record<string, unknown>).origem) <= 3) return true;
   if (isProductFormLead(item)) return false;
   const aguardaDistribuicao = payloadText(item, ["aguarda_distribuicao", "aguardaDistribuicao"]);
   if (aguardaDistribuicao?.toLowerCase() === "true") return true;

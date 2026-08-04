@@ -1,5 +1,6 @@
 import { getPool, TRAINING_EXPRESSION, UPDAY_PAYLOAD_CONDITION } from "@/lib/db";
 import { AULA_SEM_DATA_SUFFIX, aulaBlockToLeadFields } from "@/lib/aulaBlocks";
+import { effectiveOriginSql } from "@/lib/leadOriginPriority";
 
 /**
  * Organização da área VozUP > Leads em três níveis:
@@ -326,11 +327,22 @@ export const LEAD_ORIGIN_GROUPS: LeadOriginGroup[] = [
   { key: "outros", label: "Outros cadastros", emoji: "🗂️", condition: OUTROS_CONDITION },
 ];
 
-/** CASE que devolve a chave do grupo de origem de um lead (alias "i"). */
-export function leadOriginGroupCase(): string {
+/** CASE que devolve a chave do grupo de origem de um lead (alias "i").
+ *
+ * Usa a origem EFETIVA (ver lib/leadOriginPriority.ts): quando a pessoa tem
+ * mais de um vínculo, o canal de captação vence o formulário de produto, para
+ * a mídia não perder o crédito de quem ela trouxe. As pastas da árvore VozUP
+ * continuam por evento — quem se inscreveu numa aula segue na lista da aula. */
+export function leadOriginGroupCase(originExpr?: string): string {
+  // O chamador pode passar a origem efetiva já calculada (um LATERAL, por
+  // exemplo): a subconsulta é a mesma para todos os ramos do CASE, e repeti-la
+  // sete vezes por linha custa caro à toa.
+  const effective = originExpr ?? effectiveOriginSql("i");
+  const asEffective = (condition: string) =>
+    condition.replaceAll("i.payload->>'origem'", effective);
   return `CASE
     ${LEAD_ORIGIN_GROUPS.filter((group) => group.key !== "outros")
-      .map((group) => `WHEN ${group.condition} THEN '${group.key}'`)
+      .map((group) => `WHEN ${asEffective(group.condition)} THEN '${group.key}'`)
       .join("\n    ")}
     ELSE 'outros'
   END`;

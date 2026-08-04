@@ -1,5 +1,6 @@
 import { getPool } from "@/lib/db";
 import { listFunnels } from "@/lib/funnels";
+import { effectiveOriginSql } from "@/lib/leadOriginPriority";
 import { LEAD_ORIGIN_GROUPS, leadOriginGroupCase } from "@/lib/vozupFolders";
 import type { LeadYieldBasis, LeadYieldLead, LeadYieldStageStep } from "@/lib/leadYieldAnalysis";
 import type { CommercialStageKind } from "@/types/inscricao";
@@ -108,8 +109,8 @@ export async function getLeadYieldData({ from, to, basis }: LeadYieldQuery): Pro
        i.id,
        i.payload->>'nome' AS nome,
        i.payload->>'telefone' AS telefone,
-       COALESCE(NULLIF(TRIM(i.payload->>'origem'), ''), 'Sem origem') AS origem,
-       ${leadOriginGroupCase()} AS origin_group,
+       COALESCE(oe.origem_efetiva, 'Sem origem') AS origem,
+       ${leadOriginGroupCase("oe.origem_efetiva")} AS origin_group,
        i.criado_em,
        cl.funnel_id,
        cl.commercial_stage,
@@ -125,6 +126,9 @@ export async function getLeadYieldData({ from, to, basis }: LeadYieldQuery): Pro
        COALESCE(NULLIF(TRIM(i.payload->>'ad_name'), ''), NULLIF(TRIM(i.payload->>'utm_content'), '')) AS ad_name
      FROM inscricoes.inscricoes i
      LEFT JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id
+     -- Origem efetiva calculada uma vez por linha: quando a pessoa tem mais de
+     -- um vínculo, o canal de captação vence o formulário de produto.
+     CROSS JOIN LATERAL (SELECT ${effectiveOriginSql("i")} AS origem_efetiva) AS oe
      WHERE COALESCE(i.payload->>'dashboard_excluido', '') != 'true'
        AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
        AND (${periodCondition})
