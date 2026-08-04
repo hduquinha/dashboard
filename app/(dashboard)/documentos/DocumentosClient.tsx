@@ -253,23 +253,32 @@ export default function DocumentosClient() {
                 <div className="rounded bg-cyan-50 px-2 py-1 text-[6px] font-black uppercase text-[#075a78]">
                   2 · Agendamento da consultoria
                 </div>
-                <div className="mt-1 rounded border border-slate-200 p-2">
-                  <div className="max-w-[42%]">
-                    <PreviewLine label="Data da consultoria" />
+                <div className="mt-1 grid grid-cols-[42%_1fr] gap-2 rounded border border-slate-200 p-2">
+                  <div>
+                    <p className="text-[5px] font-bold uppercase tracking-[0.08em] text-slate-400">
+                      Data da consultoria
+                    </p>
+                    <div className="mt-1 flex items-end gap-[3px] text-[5px] text-slate-400">
+                      <span className="h-px w-[22%] bg-slate-300" />/
+                      <span className="h-px w-[22%] bg-slate-300" />/
+                      <span className="h-px w-[32%] bg-slate-300" />
+                    </div>
                   </div>
-                  <p className="mt-2 text-[5px] font-bold uppercase text-slate-500">
-                    Marque o período de preferência
-                  </p>
-                  <div className="mt-1 grid grid-cols-3 gap-1.5">
-                    {CONSULTING_PERIODS.map((period) => (
-                      <span
-                        key={period}
-                        className="flex items-center justify-center gap-1 rounded-sm border border-slate-200 bg-slate-50 py-2 text-[6px] font-bold text-slate-700"
-                      >
-                        <span className="inline-block h-[5px] w-[5px] rounded-[1px] border border-slate-400 bg-white" />
-                        {period}
-                      </span>
-                    ))}
+                  <div>
+                    <p className="text-[5px] font-bold uppercase text-slate-500">
+                      Marque o período de preferência
+                    </p>
+                    <div className="mt-1 grid grid-cols-3 gap-1">
+                      {CONSULTING_PERIODS.map((period) => (
+                        <span
+                          key={period}
+                          className="flex items-center justify-center gap-[3px] rounded-sm border border-slate-200 bg-slate-50 py-[3px] text-[5px] font-bold text-slate-700"
+                        >
+                          <span className="inline-block h-[4px] w-[4px] rounded-[1px] border border-slate-400 bg-white" />
+                          {period}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>

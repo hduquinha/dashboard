@@ -90,6 +90,59 @@ function drawWritingLine(
     .restore();
 }
 
+/** Campo de data em três lacunas (__ / __ / ____) em vez de uma linha corrida:
+ * na linha longa cada participante escreve num formato — "11/8", "11 de
+ * agosto", "amanhã" — e quem digita depois no CRM tem que adivinhar. */
+function drawDateField(
+  document: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  label: string
+): void {
+  document
+    .fillColor(MUTED)
+    .font("Helvetica-Bold")
+    .fontSize(7)
+    .text(label.toUpperCase(), x, y);
+
+  const lineY = y + 20;
+  const parts = [
+    { width: 30, hint: "DIA" },
+    { width: 30, hint: "MÊS" },
+    { width: 46, hint: "ANO" },
+  ];
+  let cursor = x;
+
+  parts.forEach((part, index) => {
+    document
+      .save()
+      .moveTo(cursor, lineY)
+      .lineTo(cursor + part.width, lineY)
+      .lineWidth(0.8)
+      .stroke(BORDER)
+      .restore();
+
+    // Cada legenda centrada sob a SUA lacuna: escritas numa string só, com
+    // espaços, elas nunca caem debaixo da linha certa.
+    document
+      .fillColor(BORDER)
+      .font("Helvetica")
+      .fontSize(5.5)
+      .text(part.hint, cursor, lineY + 3, { width: part.width, align: "center" });
+
+    cursor += part.width;
+
+    if (index < parts.length - 1) {
+      document
+        .fillColor(MUTED)
+        .font("Helvetica")
+        .fontSize(9)
+        .text("/", cursor + 4, lineY - 9, { lineBreak: false });
+      cursor += 13;
+    }
+  });
+}
+
 function drawSectionTitle(
   document: PDFKit.PDFDocument,
   x: number,
@@ -186,66 +239,66 @@ function drawConsultingSection(document: PDFKit.PDFDocument): void {
   const y = 259;
   const contentX = x + 14;
   const contentWidth = width - 28;
-  // Três opções em uma linha só, grandes: a ficha é preenchida em pé, no meio
-  // da aula, muitas vezes apoiada na perna. Quadradinho de 10pt numa grade de
-  // 17 horários virava rabisco em cima de dois horários vizinhos.
-  const gridY = y + 78;
-  const columnGap = 12;
-  const slotHeight = 74;
+  // Data à esquerda, período à direita, na mesma faixa: são só três opções, e
+  // ocupar meia página com elas roubava o espaço das indicações, que é onde a
+  // pessoa realmente escreve.
+  const periodsX = contentX + 208;
+  const periodsWidth = contentWidth - 208;
+  const columnGap = 10;
+  const slotHeight = 30;
   const columnCount = CONSULTING_PERIODS.length;
-  const slotWidth = (contentWidth - columnGap * (columnCount - 1)) / columnCount;
-  const boxSize = 16;
+  const slotWidth = (periodsWidth - columnGap * (columnCount - 1)) / columnCount;
+  const gridY = y + 56;
+  const boxSize = 12;
 
   drawSectionTitle(document, x, y, width, "2", "Agendamento da consultoria");
   document
     .save()
-    .roundedRect(x, y + 28, width, 176, 5)
+    .roundedRect(x, y + 28, width, 86, 5)
     .lineWidth(0.8)
     .stroke(BORDER)
     .restore();
 
-  drawWritingLine(document, contentX, y + 42, 174, "Data da consultoria");
+  drawDateField(document, contentX, y + 42, "Data da consultoria");
   document
     .fillColor(MUTED)
     .font("Helvetica-Bold")
     .fontSize(7.5)
-    .text("MARQUE O PERÍODO DE PREFERÊNCIA", contentX + 208, y + 43, {
-      width: contentWidth - 208,
-    });
+    .text("MARQUE O PERÍODO DE PREFERÊNCIA", periodsX, y + 43, { width: periodsWidth });
 
   CONSULTING_PERIODS.forEach((period, index) => {
-    const slotX = contentX + index * (slotWidth + columnGap);
+    const slotX = periodsX + index * (slotWidth + columnGap);
 
     document
       .save()
-      .roundedRect(slotX, gridY, slotWidth, slotHeight, 6)
+      .roundedRect(slotX, gridY, slotWidth, slotHeight, 5)
       .fillAndStroke(SURFACE, BORDER)
       .restore();
 
-    document.font("Helvetica-Bold").fontSize(13);
+    document.font("Helvetica-Bold").fontSize(10);
     const labelWidth = document.widthOfString(period);
-    const groupWidth = boxSize + 9 + labelWidth;
+    const groupWidth = boxSize + 7 + labelWidth;
     const groupX = slotX + (slotWidth - groupWidth) / 2;
     const groupY = gridY + (slotHeight - boxSize) / 2;
 
     document
       .save()
-      .roundedRect(groupX, groupY, boxSize, boxSize, 3)
-      .lineWidth(1.1)
+      .roundedRect(groupX, groupY, boxSize, boxSize, 2.5)
+      .lineWidth(1)
       .fillAndStroke("#ffffff", BORDER)
       .restore();
     document
       .fillColor(NAVY)
       .font("Helvetica-Bold")
-      .fontSize(13)
-      .text(period, groupX + boxSize + 9, groupY + 2, { lineBreak: false });
+      .fontSize(10)
+      .text(period, groupX + boxSize + 7, groupY + 2, { lineBreak: false });
   });
 
   document
     .fillColor(MUTED)
     .font("Helvetica-Oblique")
     .fontSize(7.2)
-    .text("O horário dentro do período será combinado pela equipe VozUP no contato.", contentX, y + 175, {
+    .text("O horário dentro do período será combinado pela equipe VozUP no contato.", contentX, y + 96, {
       width: contentWidth,
     });
 }
@@ -253,8 +306,11 @@ function drawConsultingSection(document: PDFKit.PDFDocument): void {
 function drawReferralsSection(document: PDFKit.PDFDocument): void {
   const x = PAGE_MARGIN;
   const width = document.page.width - PAGE_MARGIN * 2;
-  const y = 476;
+  // Sobe junto com o encolhimento do agendamento, e a folga vai para a altura
+  // das linhas: é aqui que se escreve nome e telefone à mão.
+  const y = 386;
   const tableY = y + 47;
+  const rowHeight = 48;
   const columns = [
     { label: "#", width: 24 },
     { label: "Nome", width: 184 },
@@ -289,13 +345,13 @@ function drawReferralsSection(document: PDFKit.PDFDocument): void {
   });
 
   for (let row = 0; row < 5; row += 1) {
-    const rowY = tableY + 20 + row * 34;
+    const rowY = tableY + 20 + row * rowHeight;
     columnX = x;
 
     columns.forEach((column, index) => {
       document
         .save()
-        .rect(columnX, rowY, column.width, 34)
+        .rect(columnX, rowY, column.width, rowHeight)
         .fillAndStroke(row % 2 === 0 ? "#ffffff" : SURFACE, BORDER)
         .restore();
 
@@ -304,7 +360,7 @@ function drawReferralsSection(document: PDFKit.PDFDocument): void {
           .fillColor(MUTED)
           .font("Helvetica-Bold")
           .fontSize(8)
-          .text(String(row + 1), columnX, rowY + 13, {
+          .text(String(row + 1), columnX, rowY + 20, {
             width: column.width,
             align: "center",
           });
@@ -313,20 +369,20 @@ function drawReferralsSection(document: PDFKit.PDFDocument): void {
     });
 
     let optionX = x + columns[0].width + columns[1].width + columns[2].width + 5;
-    optionX = drawCheckbox(document, optionX, rowY + 7, "Amigo", { size: 7, fontSize: 5.8 });
-    optionX = drawCheckbox(document, optionX, rowY + 7, "Parente", { size: 7, fontSize: 5.8 });
-    drawCheckbox(document, optionX, rowY + 7, "Colega", { size: 7, fontSize: 5.8 });
+    optionX = drawCheckbox(document, optionX, rowY + 13, "Amigo", { size: 7, fontSize: 5.8 });
+    optionX = drawCheckbox(document, optionX, rowY + 13, "Parente", { size: 7, fontSize: 5.8 });
+    drawCheckbox(document, optionX, rowY + 13, "Colega", { size: 7, fontSize: 5.8 });
     drawCheckbox(
       document,
       x + columns[0].width + columns[1].width + columns[2].width + 5,
-      rowY + 20,
+      rowY + 28,
       "Cliente",
       { size: 7, fontSize: 5.8 }
     );
     drawCheckbox(
       document,
       x + columns[0].width + columns[1].width + columns[2].width + 67,
-      rowY + 20,
+      rowY + 28,
       "Outro",
       { size: 7, fontSize: 5.8 }
     );
