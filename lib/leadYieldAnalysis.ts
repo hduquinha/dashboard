@@ -17,11 +17,12 @@ import type { CommercialStageKind } from "@/types/inscricao";
  */
 
 /** Sobre qual data o período do topo da tela é aplicado. */
-export type LeadYieldBasis = "chegada" | "movimentacao";
+export type LeadYieldBasis = "chegada" | "movimentacao" | "tudo";
 
 export const BASIS_LABEL: Record<LeadYieldBasis, string> = {
   chegada: "Chegada do lead",
   movimentacao: "Movimentação no funil",
+  tudo: "Tudo (sem período)",
 };
 
 export const BASIS_HINT: Record<LeadYieldBasis, string> = {
@@ -29,6 +30,8 @@ export const BASIS_HINT: Record<LeadYieldBasis, string> = {
     "Coorte: as pessoas que se cadastraram dentro do período, e até onde elas chegaram no funil (mesmo que tenham avançado depois).",
   movimentacao:
     "As pessoas que se MOVERAM no funil dentro do período, tenham chegado quando tiverem. Responde \"de tal dia a tal dia, tantas agendaram\".",
+  tudo:
+    "O quadro como ele está hoje, sem recorte de data — é este modo que bate card a card com o Kanban, que também não filtra por período.",
 };
 
 /** Uma passagem de etapa: quando a pessoa entrou nela pela primeira vez. */

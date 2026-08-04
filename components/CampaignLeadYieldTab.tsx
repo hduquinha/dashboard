@@ -395,10 +395,19 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
         <div className="flex flex-wrap items-center gap-2">
           <span className="flex items-center gap-1.5 text-xs font-semibold text-[rgb(var(--slate-11))]">
             <Filter className="h-3.5 w-3.5" />
-            O período ({from.split("-").reverse().join("/")} – {to.split("-").reverse().join("/")}) conta por
+            {basis === "tudo" ? (
+              <>
+                Ignorando o período ({from.split("-").reverse().join("/")} –{" "}
+                {to.split("-").reverse().join("/")}) — contando por
+              </>
+            ) : (
+              <>
+                O período ({from.split("-").reverse().join("/")} – {to.split("-").reverse().join("/")}) conta por
+              </>
+            )}
           </span>
           <div className="flex gap-1 rounded-md bg-[rgb(var(--slate-3))] p-1">
-            {(["chegada", "movimentacao"] as LeadYieldBasis[]).map((option) => (
+            {(["chegada", "movimentacao", "tudo"] as LeadYieldBasis[]).map((option) => (
               <button
                 key={option}
                 type="button"
@@ -580,7 +589,12 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                 >
                   Conversão
                 </th>
-                <th className="px-3 py-2 text-right font-semibold">Entraram no período</th>
+                <th
+                  className="px-3 py-2 text-right font-semibold"
+                  title={`Entraram nesta etapa entre ${from.split("-").reverse().join("/")} e ${to.split("-").reverse().join("/")}, mesmo no modo "Tudo".`}
+                >
+                  Entraram no período
+                </th>
                 <th className="px-3 py-2 text-right font-semibold">Tempo até chegar</th>
                 <th className="px-4 py-2 text-left font-semibold">Distribuição</th>
               </tr>

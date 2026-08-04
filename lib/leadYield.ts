@@ -82,18 +82,26 @@ export async function getLeadYieldData({ from, to, basis }: LeadYieldQuery): Pro
   // "Chegada" recorta por quando a pessoa se cadastrou; "movimentação" recorta
   // por quem andou no funil dentro da janela — quem chegou em junho e agendou
   // hoje só aparece no segundo modo, e é justamente o que "quantos agendaram
-  // essa semana" pergunta.
+  // essa semana" pergunta. "Tudo" não recorta: é o quadro de hoje, o único
+  // recorte que bate card a card com o Kanban (que não tem filtro de período).
+  //
+  // Em todos os modos a janela continua chegando na consulta dos eventos, para
+  // a coluna "entraram no período" seguir significando alguma coisa.
   const periodCondition =
-    basis === "movimentacao"
-      ? `EXISTS (
-           SELECT 1 FROM dashboard.commercial_events ev
-           WHERE ev.inscricao_id = i.id
-             AND ev.event_type = 'stage_changed'
-             AND ev.to_stage IS NOT NULL
-             AND ev.created_at >= ${WINDOW_START("$1")}
-             AND ev.created_at < ${WINDOW_END("$2")}
-         )`
-      : `i.criado_em >= ${WINDOW_START("$1")} AND i.criado_em < ${WINDOW_END("$2")}`;
+    basis === "tudo"
+      ? // Sem recorte, mas citando os dois parâmetros: o protocolo do Postgres
+        // recusa bind com parâmetro que a consulta não referencia.
+        `($1::date IS NOT NULL AND $2::date IS NOT NULL)`
+      : basis === "movimentacao"
+        ? `EXISTS (
+             SELECT 1 FROM dashboard.commercial_events ev
+             WHERE ev.inscricao_id = i.id
+               AND ev.event_type = 'stage_changed'
+               AND ev.to_stage IS NOT NULL
+               AND ev.created_at >= ${WINDOW_START("$1")}
+               AND ev.created_at < ${WINDOW_END("$2")}
+           )`
+        : `i.criado_em >= ${WINDOW_START("$1")} AND i.criado_em < ${WINDOW_END("$2")}`;
 
   const { rows } = await pool.query<LeadRow>(
     `SELECT

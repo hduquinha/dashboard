@@ -19,7 +19,8 @@ export async function GET(request: NextRequest) {
   }
 
   const basisRaw = searchParams.get("base");
-  const basis: LeadYieldBasis = basisRaw === "movimentacao" ? "movimentacao" : "chegada";
+  const basis: LeadYieldBasis =
+    basisRaw === "movimentacao" || basisRaw === "tudo" ? basisRaw : "chegada";
 
   try {
     const data = await getLeadYieldData({ from, to, basis });
