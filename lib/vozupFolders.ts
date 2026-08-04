@@ -291,6 +291,60 @@ export function getVozupFolder(key: string | null | undefined): VozupFolderDef |
   return VOZUP_FOLDERS.find((f) => f.key === key) ?? null;
 }
 
+/**
+ * De onde a PESSOA veio, no nível do lead (alias "i"), para telas fora da
+ * árvore VozUP que precisam separar leads por formulário de origem — o Kanban
+ * mistura Meta, landing page e aula exclusiva no mesmo quadro, e qualquer
+ * contagem de funil que não separe isso soma produtos diferentes.
+ *
+ * São as mesmas pastas do menu VozUP mais o Instituto UP (Encontro Online e UP
+ * Day Plus não têm pasta lá, mas existem no banco). Régua única de propósito:
+ * duplicar a classificação é como duas telas passarem a discordar sobre o que
+ * é "lead do Meta". Ver docs/cartilha-formularios-produtos.md.
+ */
+export interface LeadOriginGroup {
+  key: string;
+  label: string;
+  emoji: string;
+  /** Condição SQL (alias "i") que decide se o lead pertence ao grupo. */
+  condition: string;
+}
+
+export const LEAD_ORIGIN_GROUPS: LeadOriginGroup[] = [
+  ...NAMED_FOLDERS.map((folder) => ({
+    key: folder.key,
+    label: folder.label,
+    emoji: folder.emoji,
+    condition: folder.condition,
+  })),
+  {
+    key: "instituto",
+    label: "Instituto UP",
+    emoji: "🏛️",
+    condition: INSTITUTO_PRODUCT_CONDITION,
+  },
+  { key: "outros", label: "Outros cadastros", emoji: "🗂️", condition: OUTROS_CONDITION },
+];
+
+/** CASE que devolve a chave do grupo de origem de um lead (alias "i"). */
+export function leadOriginGroupCase(): string {
+  return `CASE
+    ${LEAD_ORIGIN_GROUPS.filter((group) => group.key !== "outros")
+      .map((group) => `WHEN ${group.condition} THEN '${group.key}'`)
+      .join("\n    ")}
+    ELSE 'outros'
+  END`;
+}
+
+/** Condição SQL (alias "i") que restringe aos grupos pedidos. Lista vazia ou
+ * com todos os grupos devolve null — sem filtro é mais barato que um OR de
+ * tudo, e deixa o chamador decidir se omite a cláusula. */
+export function leadOriginGroupsCondition(keys: string[]): string | null {
+  const wanted = LEAD_ORIGIN_GROUPS.filter((group) => keys.includes(group.key));
+  if (wanted.length === 0 || wanted.length === LEAD_ORIGIN_GROUPS.length) return null;
+  return `(${wanted.map((group) => group.condition).join(" OR ")})`;
+}
+
 function folderCondition(folder: VozupFolderDef): string {
   return folder.condition === "" ? OUTROS_CONDITION : folder.condition;
 }
