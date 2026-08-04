@@ -12,6 +12,7 @@ import {
   Target,
   TrendingDown,
   Users,
+  X,
 } from "lucide-react";
 import { useOpenLeadProfile } from "@/components/LeadProfileLauncher";
 import { formatNumber, formatPercent } from "@/lib/campaignFormat";
@@ -74,6 +75,17 @@ function formatDateTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** "Parados em Conexão" -> "parados-em-conexao", para o nome do CSV. */
+function slugify(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase()
+    .slice(0, 60);
 }
 
 function csvCell(value: string | number | null): string {
@@ -141,6 +153,271 @@ function Chip({
 }
 
 /**
+ * As pessoas por trás de um número. Usada nos dois lugares em que a tela
+ * responde "quem são": a lista do recorte inteiro, no fim da página, e o modal
+ * que abre ao clicar em qualquer contagem. Uma implementação só — a linha do
+ * lead precisa ser a mesma nos dois, incluindo a trilha.
+ */
+function LeadRows({
+  leads,
+  stageLabel,
+  originLabel,
+  openLead,
+  emptyLabel,
+}: {
+  leads: LeadYieldLead[];
+  stageLabel: (key: string | null) => string;
+  originLabel: (key: string) => string;
+  openLead: ((leadId: number) => void) | null;
+  emptyLabel: string;
+}) {
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (leads.length === 0) {
+    return <p className="px-4 py-6 text-center text-sm text-[rgb(var(--slate-9))]">{emptyLabel}</p>;
+  }
+
+  return (
+    <ul className="divide-y divide-[rgb(var(--border-weak))]">
+      {leads.map((lead) => {
+        const isOpen = expanded === lead.id;
+        const agendamento = lead.trail.find((step) => step.key === SCHEDULED_STAGE_KEY);
+        const whatsappUrl = lead.telefone ? buildWhatsAppWebUrl(lead.telefone) : null;
+        return (
+          <li key={lead.id} className="px-4 py-2.5">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <button
+                type="button"
+                onClick={() => setExpanded(isOpen ? null : lead.id)}
+                className="flex items-center gap-1 text-[rgb(var(--slate-9))] hover:text-[rgb(var(--slate-12))]"
+                aria-label={isOpen ? "Fechar caminho" : "Ver caminho"}
+              >
+                {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </button>
+
+              {openLead ? (
+                <button
+                  type="button"
+                  onClick={() => openLead(lead.id)}
+                  className="text-left text-sm font-medium text-[rgb(var(--slate-12))] underline-offset-2 hover:text-[rgb(var(--blue-11))] hover:underline"
+                  title="Abrir a ficha completa deste lead"
+                >
+                  {humanizeName(lead.nome) || "Sem nome"}
+                </button>
+              ) : (
+                <span className="text-sm font-medium text-[rgb(var(--slate-12))]">
+                  {humanizeName(lead.nome) || "Sem nome"}
+                </span>
+              )}
+
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  lead.stageKind ? STAGE_KIND_CHIP[lead.stageKind] : "bg-[rgb(var(--slate-3))] text-[rgb(var(--slate-11))]"
+                }`}
+              >
+                {stageLabel(lead.stageKey)}
+              </span>
+
+              <span className="text-[11px] text-[rgb(var(--slate-9))]">{originLabel(lead.originGroup)}</span>
+
+              {agendamento ? (
+                <span className="flex items-center gap-1 text-[11px] font-medium text-[rgb(var(--teal-9))]">
+                  <CalendarCheck2 className="h-3.5 w-3.5" />
+                  agendou em {formatDateTime(agendamento.at)}
+                </span>
+              ) : null}
+
+              <span className="ml-auto text-[11px] tabular-nums text-[rgb(var(--slate-9))]">
+                chegou {formatDateTime(lead.criadoEm)}
+              </span>
+
+              <span className="text-[11px] text-[rgb(var(--slate-10))]">{lead.sellerName ?? "sem dono"}</span>
+
+              {whatsappUrl ? (
+                <a
+                  href={whatsappUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(event) => openWhatsAppOnMobile(event, lead.telefone ?? "")}
+                  className="text-[rgb(var(--teal-9))] hover:opacity-80"
+                  title="Abrir conversa no WhatsApp"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                </a>
+              ) : null}
+            </div>
+
+            {isOpen ? (
+              <div className="mt-2 space-y-2 rounded-lg bg-[rgb(var(--slate-2))] px-3 py-2">
+                <p className="text-[11px] text-[rgb(var(--slate-10))]">
+                  <strong>Origem:</strong> {lead.origem}
+                  {lead.campaignName ? ` · campanha ${lead.campaignName}` : ""}
+                  {lead.adName ? ` · anúncio ${lead.adName}` : ""} · {lead.contactAttempts} tentativa(s) de contato
+                  registradas
+                  {lead.closedReason ? ` · motivo: ${lead.closedReason}` : ""}
+                </p>
+                {lead.trail.length === 0 ? (
+                  <p className="text-[11px] text-[rgb(var(--slate-9))]">
+                    Sem movimentação registrada — a pessoa nunca entrou no funil.
+                  </p>
+                ) : (
+                  <ol className="space-y-1">
+                    {lead.trail.map((step, index) => {
+                      const previous = index === 0 ? lead.criadoEm : lead.trail[index - 1].at;
+                      const gap = (new Date(step.at).getTime() - new Date(previous).getTime()) / 3_600_000;
+                      return (
+                        <li key={`${step.key}-${step.at}`} className="flex flex-wrap items-center gap-2 text-[11px]">
+                          <span className="w-4 text-right tabular-nums text-[rgb(var(--slate-9))]">{index + 1}.</span>
+                          <span className="font-medium text-[rgb(var(--slate-12))]">{stageLabel(step.key)}</span>
+                          <span className="tabular-nums text-[rgb(var(--slate-10))]">{formatDateTime(step.at)}</span>
+                          <span className="text-[rgb(var(--slate-9))]">
+                            ({index === 0 ? "após a chegada" : "depois"} · {formatDuration(gap)})
+                          </span>
+                          {step.actor ? <span className="text-[rgb(var(--slate-9))]">por {step.actor}</span> : null}
+                          {step.inWindow ? (
+                            <span className="rounded bg-[rgb(var(--blue-3))] px-1.5 py-0.5 text-[10px] text-[rgb(var(--blue-11))]">
+                              dentro do período
+                            </span>
+                          ) : null}
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Número clicável. Existe como componente porque a tela inteira segue a mesma
+ * promessa: todo número abre as pessoas que ele conta. */
+function CountButton({
+  value,
+  onClick,
+  title,
+  strong,
+  muted,
+  tone,
+}: {
+  value: number;
+  onClick: () => void;
+  title: string;
+  strong?: boolean;
+  muted?: boolean;
+  tone?: "won" | "lost";
+}) {
+  // Zero não abre nada: um botão que abre lista vazia só frustra o clique.
+  if (value === 0) {
+    return <span className="px-1.5 tabular-nums text-[rgb(var(--slate-8))]">0</span>;
+  }
+
+  const color =
+    tone === "won"
+      ? "font-semibold text-[rgb(var(--teal-9))]"
+      : tone === "lost"
+        ? "text-[rgb(var(--ruby-11))]"
+        : strong
+          ? "font-semibold text-[rgb(var(--slate-12))]"
+          : muted
+            ? "text-[rgb(var(--slate-10))]"
+            : "text-[rgb(var(--slate-11))]";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`rounded px-1.5 py-0.5 tabular-nums underline decoration-dotted underline-offset-2 transition hover:bg-[rgb(var(--blue-3))] hover:text-[rgb(var(--blue-11))] hover:decoration-solid ${color}`}
+    >
+      {formatNumber(value)}
+    </button>
+  );
+}
+
+/** Modal com as pessoas de um número clicado. */
+function LeadDetailModal({
+  title,
+  hint,
+  leads,
+  stageLabel,
+  originLabel,
+  openLead,
+  onExport,
+  onClose,
+}: {
+  title: string;
+  hint: string;
+  leads: LeadYieldLead[];
+  stageLabel: (key: string | null) => string;
+  originLabel: (key: string) => string;
+  openLead: ((leadId: number) => void) | null;
+  onExport: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-[rgb(var(--surface-1))] shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-[rgb(var(--border-weak))] px-4 py-3">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-[rgb(var(--slate-12))]">
+              {title} <span className="tabular-nums text-[rgb(var(--slate-9))]">({formatNumber(leads.length)})</span>
+            </h3>
+            <p className="mt-0.5 text-xs text-[rgb(var(--slate-9))]">
+              {hint} Abra uma linha para ver o caminho completo.
+            </p>
+          </div>
+          <div className="flex flex-none items-center gap-2">
+            <button
+              type="button"
+              onClick={onExport}
+              className="flex items-center gap-1.5 rounded-md border border-[rgb(var(--border-weak))] px-2.5 py-1 text-xs font-medium text-[rgb(var(--slate-11))] hover:bg-[rgb(var(--slate-2))]"
+            >
+              <Download className="h-3.5 w-3.5" />
+              CSV
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Fechar"
+              className="rounded-md p-1 text-[rgb(var(--slate-10))] hover:bg-[rgb(var(--slate-3))]"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </header>
+        <div className="overflow-y-auto">
+          <LeadRows
+            leads={leads}
+            stageLabel={stageLabel}
+            originLabel={originLabel}
+            openLead={openLead}
+            emptyLabel="Nenhuma pessoa aqui."
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Rendimento do lead: onde as pessoas de um recorte pararam no funil.
  *
  * A tela existe porque o Kanban é um quadro só — Meta, landing page e aula
@@ -165,10 +442,9 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
   const [sellers, setSellers] = useState<string[]>([]);
   const [includeNoCard, setIncludeNoCard] = useState(true);
   const [search, setSearch] = useState("");
-  const [stageFilter, setStageFilter] = useState<string | null>(null);
-  const [stageMode, setStageMode] = useState<"parou" | "passou">("parou");
-  const [expanded, setExpanded] = useState<number | null>(null);
   const [showAll, setShowAll] = useState(false);
+  /** Recorte aberto por um clique em número — ver openDetail. */
+  const [detail, setDetail] = useState<{ title: string; hint: string; leads: LeadYieldLead[] } | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -254,6 +530,10 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
     [leadsIgnoringOrigin, stages]
   );
   const sellerRows = useMemo(() => buildSellerBreakdown(leads, stages), [leads, stages]);
+  const entryStageKeys = useMemo(
+    () => new Set(stages.filter((stage) => stage.kind === "entry").map((stage) => stage.key)),
+    [stages]
+  );
 
   const originLabel = useMemo(() => {
     const map = new Map((data?.originGroups ?? []).map((group) => [group.key, group]));
@@ -268,19 +548,9 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
     return (key: string | null) => (key === null ? NO_CARD_LABEL : (map.get(key) ?? key));
   }, [stages]);
 
-  const listLeads = useMemo(() => {
-    if (!stageFilter) return leads;
-    if (stageFilter === NO_CARD_KEY) return leads.filter((lead) => lead.stageKey === null);
-    const stage = stages.find((item) => item.key === stageFilter);
-    if (!stage) return leads;
-    return stageMode === "parou"
-      ? leads.filter((lead) => lead.stageKey === stage.key)
-      : leads.filter((lead) => leadReachedStage(lead, stage, stages));
-  }, [leads, stageFilter, stageMode, stages]);
-
   const sortedList = useMemo(
-    () => [...listLeads].sort((a, b) => new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime()),
-    [listLeads]
+    () => [...leads].sort((a, b) => new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime()),
+    [leads]
   );
   const visibleList = showAll ? sortedList : sortedList.slice(0, 40);
 
@@ -307,21 +577,20 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
     setSellers([]);
     setIncludeNoCard(true);
     setSearch("");
-    setStageFilter(null);
-    setStageMode("parou");
   }
 
-  function selectStage(key: string, mode: "parou" | "passou") {
-    if (stageFilter === key && stageMode === mode) {
-      setStageFilter(null);
-      return;
-    }
-    setStageFilter(key);
-    setStageMode(mode);
-    setShowAll(false);
+  /** Todo número da tela abre as pessoas por trás dele. Sem isto, "23 em
+   * Conexão" continua sendo um número que ninguém consegue conferir — e o
+   * primeiro reflexo de quem lê é clicar. */
+  function openDetail(title: string, hint: string, subset: LeadYieldLead[]) {
+    setDetail({
+      title,
+      hint,
+      leads: [...subset].sort((a, b) => new Date(b.criadoEm).getTime() - new Date(a.criadoEm).getTime()),
+    });
   }
 
-  function exportCsv() {
+  function exportCsv(rows: LeadYieldLead[], suffix: string) {
     const header = [
       "Nome",
       "Telefone",
@@ -337,7 +606,7 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
       "Anúncio",
       "Trilha",
     ];
-    const lines = sortedList.map((lead) => {
+    const lines = rows.map((lead) => {
       const agendamento = lead.trail.find((step) => step.key === SCHEDULED_STAGE_KEY);
       const trilha = lead.trail
         .map((step) => `${stageLabel(step.key)} em ${formatDateTime(step.at)}${step.actor ? ` (${step.actor})` : ""}`)
@@ -366,7 +635,7 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `rendimento-leads-${from}-a-${to}.csv`;
+    link.download = `rendimento-${suffix}-${from}-a-${to}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -608,30 +877,31 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                     </span>
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => selectStage(row.key, "parou")}
-                      className={`rounded px-1.5 py-0.5 font-semibold tabular-nums underline-offset-2 hover:underline ${
-                        stageFilter === row.key && stageMode === "parou"
-                          ? "bg-[rgb(var(--blue-3))] text-[rgb(var(--blue-11))]"
-                          : "text-[rgb(var(--slate-12))]"
-                      }`}
-                    >
-                      {formatNumber(row.pararam)}
-                    </button>
+                    <CountButton
+                      value={row.pararam}
+                      strong
+                      title={`Ver quem está parado em ${row.label}`}
+                      onClick={() =>
+                        openDetail(
+                          `Parados em ${row.label}`,
+                          "Etapa em que estas pessoas estão hoje.",
+                          leads.filter((lead) => lead.stageKey === row.key)
+                        )
+                      }
+                    />
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => selectStage(row.key, "passou")}
-                      className={`rounded px-1.5 py-0.5 tabular-nums underline-offset-2 hover:underline ${
-                        stageFilter === row.key && stageMode === "passou"
-                          ? "bg-[rgb(var(--blue-3))] text-[rgb(var(--blue-11))]"
-                          : "text-[rgb(var(--slate-11))]"
-                      }`}
-                    >
-                      {formatNumber(row.alcancaram)}
-                    </button>
+                    <CountButton
+                      value={row.alcancaram}
+                      title={`Ver quem passou por ${row.label}`}
+                      onClick={() =>
+                        openDetail(
+                          `Passaram por ${row.label}`,
+                          "Estiveram nesta etapa em algum momento, mesmo que hoje estejam em outra.",
+                          leads.filter((lead) => leadReachedStage(lead, row, stages))
+                        )
+                      }
+                    />
                   </td>
                   <td className="px-3 py-2 text-right text-xs tabular-nums text-[rgb(var(--slate-10))]">
                     {formatPercent(row.doTotal)}
@@ -639,8 +909,21 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                   <td className="px-3 py-2 text-right text-xs tabular-nums text-[rgb(var(--slate-10))]">
                     {row.conversao !== null ? formatPercent(row.conversao) : "—"}
                   </td>
-                  <td className="px-3 py-2 text-right text-xs tabular-nums text-[rgb(var(--slate-10))]">
-                    {formatNumber(row.noPeriodo)}
+                  <td className="px-3 py-2 text-right">
+                    <CountButton
+                      value={row.noPeriodo}
+                      muted
+                      title={`Ver quem entrou em ${row.label} dentro do período`}
+                      onClick={() =>
+                        openDetail(
+                          `Entraram em ${row.label} no período`,
+                          `Entraram nesta etapa entre ${from.split("-").reverse().join("/")} e ${to.split("-").reverse().join("/")}.`,
+                          leads.filter((lead) =>
+                            lead.trail.some((step) => step.key === row.key && step.inWindow)
+                          )
+                        )
+                      }
+                    />
                   </td>
                   <td className="px-3 py-2 text-right text-xs tabular-nums text-[rgb(var(--slate-10))]">
                     {formatDuration(row.horasMedianas)}
@@ -664,17 +947,18 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                     </span>
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => selectStage(NO_CARD_KEY, "parou")}
-                      className={`rounded px-1.5 py-0.5 font-semibold tabular-nums underline-offset-2 hover:underline ${
-                        stageFilter === NO_CARD_KEY
-                          ? "bg-[rgb(var(--blue-3))] text-[rgb(var(--blue-11))]"
-                          : "text-[rgb(var(--slate-12))]"
-                      }`}
-                    >
-                      {formatNumber(summary.semCard)}
-                    </button>
+                    <CountButton
+                      value={summary.semCard}
+                      strong
+                      title="Ver quem nunca entrou no funil"
+                      onClick={() =>
+                        openDetail(
+                          NO_CARD_LABEL,
+                          "Nunca foram distribuídas — não têm card em funil nenhum.",
+                          leads.filter((lead) => lead.stageKey === null)
+                        )
+                      }
+                    />
                   </td>
                   <td colSpan={6} className="px-3 py-2 text-xs text-[rgb(var(--slate-9))]">
                     Nunca foram distribuídas — não têm card em funil nenhum.
@@ -700,7 +984,7 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
           <p className="mt-0.5 text-xs text-[rgb(var(--slate-9))]">
             Cada linha é um formulário de origem e cada coluna, a etapa em que as pessoas dele estão paradas —
             ignora o filtro de origem de propósito, para mostrar o que está dividindo as colunas do Kanban com o
-            Meta. Clique numa origem para trocar o recorte.
+            Meta. Clique no nome da origem para trocar o recorte, ou em qualquer número para ver quem são.
           </p>
         </header>
         <div className="overflow-x-auto">
@@ -734,24 +1018,71 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                       {originLabel(row.originGroup)}
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[rgb(var(--slate-12))]">
-                    {formatNumber(row.total)}
+                  <td className="px-3 py-2 text-right">
+                    <CountButton
+                      value={row.total}
+                      strong
+                      title={`Ver as pessoas de ${originLabel(row.originGroup)}`}
+                      onClick={() =>
+                        openDetail(
+                          originLabel(row.originGroup),
+                          "Todas as pessoas desta origem no recorte atual.",
+                          leadsIgnoringOrigin.filter((lead) => lead.originGroup === row.originGroup)
+                        )
+                      }
+                    />
                   </td>
                   {stages.map((stage) => (
-                    <td
-                      key={stage.key}
-                      className={`px-2 py-2 text-right tabular-nums ${
-                        row.porEtapa[stage.key] > 0 ? "text-[rgb(var(--slate-11))]" : "text-[rgb(var(--slate-8))]"
-                      }`}
-                    >
-                      {row.porEtapa[stage.key] ?? 0}
+                    <td key={stage.key} className="px-2 py-2 text-right">
+                      <CountButton
+                        value={row.porEtapa[stage.key] ?? 0}
+                        muted
+                        title={`Ver quem de ${originLabel(row.originGroup)} está em ${stage.label}`}
+                        onClick={() =>
+                          openDetail(
+                            `${originLabel(row.originGroup)} · ${stage.label}`,
+                            "Pessoas desta origem paradas nesta etapa.",
+                            leadsIgnoringOrigin.filter(
+                              (lead) => lead.originGroup === row.originGroup && lead.stageKey === stage.key
+                            )
+                          )
+                        }
+                      />
                     </td>
                   ))}
-                  <td className="px-2 py-2 text-right tabular-nums text-[rgb(var(--slate-9))]">
-                    {row.porEtapa[NO_CARD_KEY] ?? 0}
+                  <td className="px-2 py-2 text-right">
+                    <CountButton
+                      value={row.porEtapa[NO_CARD_KEY] ?? 0}
+                      muted
+                      title={`Ver quem de ${originLabel(row.originGroup)} nunca entrou no funil`}
+                      onClick={() =>
+                        openDetail(
+                          `${originLabel(row.originGroup)} · ${NO_CARD_LABEL}`,
+                          "Nunca foram distribuídas — não têm card em funil nenhum.",
+                          leadsIgnoringOrigin.filter(
+                            (lead) => lead.originGroup === row.originGroup && lead.stageKey === null
+                          )
+                        )
+                      }
+                    />
                   </td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[rgb(var(--teal-9))]">
-                    {formatNumber(row.agendaram)}
+                  <td className="px-3 py-2 text-right">
+                    <CountButton
+                      value={row.agendaram}
+                      tone="won"
+                      title={`Ver quem de ${originLabel(row.originGroup)} agendou`}
+                      onClick={() =>
+                        openDetail(
+                          `${originLabel(row.originGroup)} · agendaram`,
+                          "Passaram pela etapa de agendamento em algum momento.",
+                          leadsIgnoringOrigin.filter(
+                            (lead) =>
+                              lead.originGroup === row.originGroup &&
+                              lead.trail.some((step) => step.key === SCHEDULED_STAGE_KEY)
+                          )
+                        )
+                      }
+                    />
                   </td>
                 </tr>
               ))}
@@ -786,18 +1117,88 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
                 {sellerRows.map((row) => (
                   <tr key={row.seller} className="hover:bg-[rgb(var(--slate-2))]">
                     <td className="px-4 py-2 text-xs font-medium text-[rgb(var(--slate-12))]">{row.seller}</td>
-                    <td className="px-3 py-2 text-right tabular-nums">{formatNumber(row.total)}</td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-11))]">
-                      {formatNumber(row.avancaram)}
+                    <td className="px-3 py-2 text-right">
+                      <CountButton
+                        value={row.total}
+                        strong
+                        title={`Ver as pessoas de ${row.seller} no recorte`}
+                        onClick={() =>
+                          openDetail(
+                            row.seller,
+                            "Pessoas deste vendedor dentro dos filtros atuais.",
+                            leads.filter((lead) => (lead.sellerName ?? "Sem dono") === row.seller)
+                          )
+                        }
+                      />
                     </td>
-                    <td className="px-3 py-2 text-right font-semibold tabular-nums text-[rgb(var(--teal-9))]">
-                      {formatNumber(row.agendaram)}
+                    <td className="px-3 py-2 text-right">
+                      <CountButton
+                        value={row.avancaram}
+                        muted
+                        title={`Ver quem ${row.seller} tirou da etapa de entrada`}
+                        onClick={() =>
+                          openDetail(
+                            `${row.seller} · avançaram`,
+                            "Saíram da etapa de entrada do funil.",
+                            leads.filter(
+                              (lead) =>
+                                (lead.sellerName ?? "Sem dono") === row.seller &&
+                                lead.stageKey !== null &&
+                                !entryStageKeys.has(lead.stageKey)
+                            )
+                          )
+                        }
+                      />
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-11))]">
-                      {formatNumber(row.ganharam)}
+                    <td className="px-3 py-2 text-right">
+                      <CountButton
+                        value={row.agendaram}
+                        tone="won"
+                        title={`Ver quem ${row.seller} levou a agendamento`}
+                        onClick={() =>
+                          openDetail(
+                            `${row.seller} · agendaram`,
+                            "Passaram pela etapa de agendamento em algum momento.",
+                            leads.filter(
+                              (lead) =>
+                                (lead.sellerName ?? "Sem dono") === row.seller &&
+                                lead.trail.some((step) => step.key === SCHEDULED_STAGE_KEY)
+                            )
+                          )
+                        }
+                      />
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--ruby-11))]">
-                      {formatNumber(row.perderam)}
+                    <td className="px-3 py-2 text-right">
+                      <CountButton
+                        value={row.ganharam}
+                        muted
+                        title={`Ver os leads em etapa de ganho com ${row.seller}`}
+                        onClick={() =>
+                          openDetail(
+                            `${row.seller} · etapa de ganho`,
+                            "Estão hoje na etapa que o funil marca como ganho.",
+                            leads.filter(
+                              (lead) => (lead.sellerName ?? "Sem dono") === row.seller && lead.stageKind === "won"
+                            )
+                          )
+                        }
+                      />
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <CountButton
+                        value={row.perderam}
+                        tone="lost"
+                        title={`Ver os leads perdidos com ${row.seller}`}
+                        onClick={() =>
+                          openDetail(
+                            `${row.seller} · perdidos`,
+                            "Estão hoje na etapa que o funil marca como perdido.",
+                            leads.filter(
+                              (lead) => (lead.sellerName ?? "Sem dono") === row.seller && lead.stageKind === "lost"
+                            )
+                          )
+                        }
+                      />
                     </td>
                     <td className="px-3 py-2 text-right text-xs tabular-nums text-[rgb(var(--slate-10))]">
                       {formatPercent(row.total > 0 ? (row.agendaram / row.total) * 100 : null)}
@@ -815,9 +1216,7 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgb(var(--border-weak))] px-4 py-3">
           <div>
             <h3 className="text-sm font-semibold text-[rgb(var(--slate-12))]">
-              {stageFilter
-                ? `${stageMode === "parou" ? "Parados em" : "Passaram por"} ${stageLabel(stageFilter === NO_CARD_KEY ? null : stageFilter)}`
-                : "Pessoas do recorte"}{" "}
+              Pessoas do recorte{" "}
               <span className="tabular-nums text-[rgb(var(--slate-9))]">({formatNumber(sortedList.length)})</span>
             </h3>
             <p className="mt-0.5 text-xs text-[rgb(var(--slate-9))]">
@@ -826,18 +1225,9 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {stageFilter ? (
-              <button
-                type="button"
-                onClick={() => setStageFilter(null)}
-                className="rounded-md border border-[rgb(var(--border-weak))] px-2.5 py-1 text-xs text-[rgb(var(--slate-10))] hover:bg-[rgb(var(--slate-2))]"
-              >
-                Ver todos
-              </button>
-            ) : null}
             <button
               type="button"
-              onClick={exportCsv}
+              onClick={() => exportCsv(sortedList, "recorte")}
               className="flex items-center gap-1.5 rounded-md border border-[rgb(var(--border-weak))] px-2.5 py-1 text-xs font-medium text-[rgb(var(--slate-11))] hover:bg-[rgb(var(--slate-2))]"
             >
               <Download className="h-3.5 w-3.5" />
@@ -846,135 +1236,13 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
           </div>
         </header>
 
-        {sortedList.length === 0 ? (
-          <p className="px-4 py-6 text-center text-sm text-[rgb(var(--slate-9))]">
-            Nenhuma pessoa com esses filtros no período.
-          </p>
-        ) : (
-          <ul className="divide-y divide-[rgb(var(--border-weak))]">
-            {visibleList.map((lead) => {
-              const isOpen = expanded === lead.id;
-              const agendamento = lead.trail.find((step) => step.key === SCHEDULED_STAGE_KEY);
-              const whatsappUrl = lead.telefone ? buildWhatsAppWebUrl(lead.telefone) : null;
-              return (
-                <li key={lead.id} className="px-4 py-2.5">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(isOpen ? null : lead.id)}
-                      className="flex items-center gap-1 text-[rgb(var(--slate-9))] hover:text-[rgb(var(--slate-12))]"
-                      aria-label={isOpen ? "Fechar caminho" : "Ver caminho"}
-                    >
-                      {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                    </button>
-
-                    {openLead ? (
-                      <button
-                        type="button"
-                        onClick={() => openLead(lead.id)}
-                        className="text-left text-sm font-medium text-[rgb(var(--slate-12))] underline-offset-2 hover:text-[rgb(var(--blue-11))] hover:underline"
-                        title="Abrir a ficha completa deste lead"
-                      >
-                        {humanizeName(lead.nome) || "Sem nome"}
-                      </button>
-                    ) : (
-                      <span className="text-sm font-medium text-[rgb(var(--slate-12))]">
-                        {humanizeName(lead.nome) || "Sem nome"}
-                      </span>
-                    )}
-
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                        lead.stageKind ? STAGE_KIND_CHIP[lead.stageKind] : "bg-[rgb(var(--slate-3))] text-[rgb(var(--slate-11))]"
-                      }`}
-                    >
-                      {stageLabel(lead.stageKey)}
-                    </span>
-
-                    <span className="text-[11px] text-[rgb(var(--slate-9))]">{originLabel(lead.originGroup)}</span>
-
-                    {agendamento ? (
-                      <span className="flex items-center gap-1 text-[11px] font-medium text-[rgb(var(--teal-9))]">
-                        <CalendarCheck2 className="h-3.5 w-3.5" />
-                        agendou em {formatDateTime(agendamento.at)}
-                      </span>
-                    ) : null}
-
-                    <span className="ml-auto text-[11px] tabular-nums text-[rgb(var(--slate-9))]">
-                      chegou {formatDateTime(lead.criadoEm)}
-                    </span>
-
-                    <span className="text-[11px] text-[rgb(var(--slate-10))]">
-                      {lead.sellerName ?? "sem dono"}
-                    </span>
-
-                    {whatsappUrl ? (
-                      <a
-                        href={whatsappUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        onClick={(event) => openWhatsAppOnMobile(event, lead.telefone ?? "")}
-                        className="text-[rgb(var(--teal-9))] hover:opacity-80"
-                        title="Abrir conversa no WhatsApp"
-                      >
-                        <MessageCircle className="h-4 w-4" />
-                      </a>
-                    ) : null}
-                  </div>
-
-                  {isOpen ? (
-                    <div className="mt-2 space-y-2 rounded-lg bg-[rgb(var(--slate-2))] px-3 py-2">
-                      <p className="text-[11px] text-[rgb(var(--slate-10))]">
-                        <strong>Origem:</strong> {lead.origem}
-                        {lead.campaignName ? ` · campanha ${lead.campaignName}` : ""}
-                        {lead.adName ? ` · anúncio ${lead.adName}` : ""} · {lead.contactAttempts} tentativa(s) de
-                        contato registradas
-                        {lead.closedReason ? ` · motivo: ${lead.closedReason}` : ""}
-                      </p>
-                      {lead.trail.length === 0 ? (
-                        <p className="text-[11px] text-[rgb(var(--slate-9))]">
-                          Sem movimentação registrada — a pessoa nunca entrou no funil.
-                        </p>
-                      ) : (
-                        <ol className="space-y-1">
-                          {lead.trail.map((step, index) => {
-                            const previous = index === 0 ? lead.criadoEm : lead.trail[index - 1].at;
-                            const gap =
-                              (new Date(step.at).getTime() - new Date(previous).getTime()) / 3_600_000;
-                            return (
-                              <li key={`${step.key}-${step.at}`} className="flex flex-wrap items-center gap-2 text-[11px]">
-                                <span className="w-4 text-right tabular-nums text-[rgb(var(--slate-9))]">
-                                  {index + 1}.
-                                </span>
-                                <span className="font-medium text-[rgb(var(--slate-12))]">
-                                  {stageLabel(step.key)}
-                                </span>
-                                <span className="tabular-nums text-[rgb(var(--slate-10))]">
-                                  {formatDateTime(step.at)}
-                                </span>
-                                <span className="text-[rgb(var(--slate-9))]">
-                                  ({index === 0 ? "após a chegada" : "depois"} · {formatDuration(gap)})
-                                </span>
-                                {step.actor ? (
-                                  <span className="text-[rgb(var(--slate-9))]">por {step.actor}</span>
-                                ) : null}
-                                {step.inWindow ? (
-                                  <span className="rounded bg-[rgb(var(--blue-3))] px-1.5 py-0.5 text-[10px] text-[rgb(var(--blue-11))]">
-                                    dentro do período
-                                  </span>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                        </ol>
-                      )}
-                    </div>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <LeadRows
+          leads={visibleList}
+          stageLabel={stageLabel}
+          originLabel={originLabel}
+          openLead={openLead}
+          emptyLabel="Nenhuma pessoa com esses filtros no período."
+        />
 
         {sortedList.length > visibleList.length ? (
           <div className="border-t border-[rgb(var(--border-weak))] px-4 py-2 text-center">
@@ -988,6 +1256,19 @@ export default function CampaignLeadYieldTab({ from, to }: CampaignLeadYieldTabP
           </div>
         ) : null}
       </section>
+
+      {detail ? (
+        <LeadDetailModal
+          title={detail.title}
+          hint={detail.hint}
+          leads={detail.leads}
+          stageLabel={stageLabel}
+          originLabel={originLabel}
+          openLead={openLead}
+          onExport={() => exportCsv(detail.leads, slugify(detail.title))}
+          onClose={() => setDetail(null)}
+        />
+      ) : null}
     </div>
   );
 }
