@@ -1,0 +1,28 @@
+import { NextResponse, type NextRequest } from "next/server";
+import { setEnrollmentPaymentCommissionStatus } from "@/lib/finance";
+import { auditFinance } from "@/lib/financeAudit";
+import { financeError, parseId, readJsonBody, requireFinanceAccess } from "../../../utils";
+import type { CommissionStatus } from "@/types/finance";
+
+interface RouteContext {
+  params: Promise<{ id: string }>;
+}
+
+export async function PATCH(request: NextRequest, context: RouteContext) {
+  const auth = requireFinanceAccess(request);
+  if (auth) return auth;
+
+  try {
+    const [{ id }, body] = await Promise.all([context.params, readJsonBody(request)]);
+    const status: CommissionStatus = body.status === "paga" ? "paga" : "disponivel";
+    const entityId = parseId(id);
+    await auditFinance(
+      request,
+      { entity: "enrollment_payment", action: "status", entityId, note: `Comissão marcada como ${status}` },
+      () => setEnrollmentPaymentCommissionStatus(entityId, status)
+    );
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return financeError(error, "Falha ao atualizar status da comissão.");
+  }
+}

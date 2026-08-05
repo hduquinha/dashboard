@@ -5,14 +5,14 @@ import { createSector, listSectorsForUser, setSectorTeams } from "@/lib/tasks";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const auth = requireTasks(request);
+  const auth = await requireTasks(request);
   if (!auth.ok) return auth.response;
   const sectors = await listSectorsForUser(auth.user);
   return NextResponse.json({ sectors });
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireTasksMaster(request);
+  const auth = await requireTasksMaster(request);
   if (!auth.ok) return auth.response;
   const body = await request.json().catch(() => ({}));
   const name = typeof body?.name === "string" ? body.name.trim() : "";

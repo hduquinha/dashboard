@@ -6,17 +6,19 @@ import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import {
   currentMonth,
-  getAllTimeExpenseTotals,
+  getFinanceDataRange,
   getCommissionPanel,
   getCommissionsOverview,
   getFinanceCatalog,
   getFinanceDashboardSummary,
+  listFinanceAgenda,
   listAllFixedExpenses,
   listAllMonthlyTotals,
   listBranchItems,
   listCommissions,
   listEnrollments,
   listFixedExpenses,
+  listFixedExpensesRange,
   listRevenues,
   listVariableExpenses,
 } from "@/lib/finance";
@@ -52,10 +54,19 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
   }
 
   const resolved = await Promise.resolve(searchParams);
-  const month = pick(resolved.month) || currentMonth();
-  const periodMode = pick(resolved.periodo) === "custom" ? "custom" : "month";
-  const from = periodMode === "custom" ? pick(resolved.from) || month : month;
-  const to = periodMode === "custom" ? pick(resolved.to) || from : month;
+  const requestedPeriod = pick(resolved.periodo);
+  const requestedMonth = pick(resolved.month);
+  // Um mês explícito sempre prevalece sobre um `periodo=all` residual na URL.
+  // Isso evita que uma navegação anterior em "Tudo" faça a aba Despesas somar
+  // o histórico inteiro quando a pessoa já selecionou, por exemplo, julho.
+  const periodMode: "month" | "custom" | "all" =
+    requestedPeriod === "custom" ? "custom" : requestedPeriod === "all" && !requestedMonth ? "all" : "month";
+  // "Tudo" vira um intervalo concreto (primeiro movimento → mês corrente): o
+  // resto do módulo trabalha com from/to, então não há caminho especial.
+  const dataRange = periodMode === "all" ? await getFinanceDataRange() : null;
+  const month = dataRange ? dataRange.to : requestedMonth || currentMonth();
+  const from = dataRange ? dataRange.from : periodMode === "custom" ? pick(resolved.from) || month : month;
+  const to = dataRange ? dataRange.to : periodMode === "custom" ? pick(resolved.to) || from : month;
   const filters: FinanceFilters = {
     from,
     to,
@@ -65,14 +76,15 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
     sellerId: parseOptionalNumber(pick(resolved.sellerId)),
     paymentMethodId: parseOptionalNumber(pick(resolved.paymentMethodId)),
   };
-  const expenseMonthFilters: FinanceFilters = { ...filters, from: month, to: month };
-  // Addon "ver todos os meses": disponível em Despesas, Receitas, Fluxo de
-  // Caixa, Matrículas e Comissões. Cada aba tem seu próprio toggle
-  // independente — por padrão cada aba mostra o mês/período selecionado acima;
-  // em Despesas, as listas mensais ficam presas ao mês base para não misturar
-  // gastos variáveis de meses anteriores. Com <aba>Visao=todos essa aba
-  // específica passa a mostrar os itens de todos os meses.
-  const gastosVisao = pick(resolved.gastosVisao) === "todos" ? "todos" : "mes";
+  // Em "Mês", as listas de despesa ficam presas ao mês base para não misturar
+  // gastos de meses anteriores. Em "Período", elas seguem o intervalo escolhido
+  // — do contrário o filtro de período mostrava receitas do intervalo e despesas
+  // de um mês só (quase sempre vazias, porque o mês base não fazia parte dele).
+  const expenseFilters: FinanceFilters =
+    periodMode === "month" ? { ...filters, from: month, to: month } : { ...filters };
+  // O período das despesas é sempre o selecionado no filtro do topo. Não há
+  // uma visão independente de "todos os meses", pois ela podia sobrepor o
+  // recorte escolhido e exibir o total histórico em vez do mês solicitado.
   const receitasVisao = pick(resolved.receitasVisao) === "todos" ? "todos" : "mes";
   const fluxoVisao = pick(resolved.fluxoVisao) === "todos" ? "todos" : "mes";
   const matriculasVisao = pick(resolved.matriculasVisao) === "todos" ? "todos" : "mes";
@@ -88,9 +100,9 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
     commissions,
     branchItems,
     commissionPanel,
-    allTimeTotals,
     allMonthlyTotals,
     commissionsOverview,
+    agenda,
   ] = await Promise.all([
     getFinanceCatalog(),
     getFinanceDashboardSummary(month, filters),
@@ -103,21 +115,23 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
           paymentMethodId: filters.paymentMethodId,
         })
       : listRevenues(filters),
-    gastosVisao === "todos" ? listAllFixedExpenses() : listFixedExpenses(month),
-    gastosVisao === "todos"
-      ? listVariableExpenses({ categoryId: filters.categoryId })
-      : listVariableExpenses(expenseMonthFilters),
+    periodMode === "all"
+      ? listAllFixedExpenses()
+      : periodMode === "custom"
+        ? listFixedExpensesRange(from, to)
+        : listFixedExpenses(month),
+    listVariableExpenses(expenseFilters),
     matriculasVisao === "todos"
       ? listEnrollments({ courseId: filters.courseId, sellerId: filters.sellerId })
       : listEnrollments({ ...filters }),
     comissoesVisao === "todos" ? listCommissions({ sellerId: filters.sellerId }) : listCommissions({ ...filters }),
     listBranchItems(filters.branchId),
     getCommissionPanel(month),
-    gastosVisao === "todos" ? getAllTimeExpenseTotals() : Promise.resolve(null),
     fluxoVisao === "todos" ? listAllMonthlyTotals() : Promise.resolve(null),
     comissoesVisao === "todos"
       ? getCommissionsOverview({ sellerId: filters.sellerId })
       : getCommissionsOverview({ ...filters }),
+    listFinanceAgenda(),
   ]);
 
   return (
@@ -126,20 +140,20 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
       summary={summary}
       revenues={revenues}
       fixedExpenses={fixedExpenses}
+      fixedExpensesLocked={to < "2026-06"}
       variableExpenses={variableExpenses}
       enrollments={enrollments}
+      agenda={agenda}
       commissions={commissions}
       branchItems={branchItems}
       commissionPanel={commissionPanel}
       filters={filters}
       month={month}
       periodMode={periodMode}
-      gastosVisao={gastosVisao}
       receitasVisao={receitasVisao}
       fluxoVisao={fluxoVisao}
       matriculasVisao={matriculasVisao}
       comissoesVisao={comissoesVisao}
-      allTimeTotals={allTimeTotals}
       allMonthlyTotals={allMonthlyTotals}
       commissionsOverview={commissionsOverview}
       canDeleteAuditEvents={hasPermission(session?.user, "admin.audit")}

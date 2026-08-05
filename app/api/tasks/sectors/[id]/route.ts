@@ -5,7 +5,7 @@ import { getSectorTeamIds, setSectorTeams, updateSector } from "@/lib/tasks";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasksMaster(request);
+  const auth = await requireTasksMaster(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
   const teamIds = await getSectorTeamIds(Number(id));
@@ -13,7 +13,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasksMaster(request);
+  const auth = await requireTasksMaster(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
   const sectorId = Number(id);

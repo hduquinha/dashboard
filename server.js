@@ -189,3 +189,26 @@ if (cluster.isPrimary && process.env.GOOGLE_ADS_SYNC_ENABLED !== "false") {
   setInterval(triggerGoogleAdsSync, googleAdsSyncIntervalMs);
   setTimeout(triggerGoogleAdsSync, 45_000);
 }
+
+// Automações do módulo de Tarefas: comandos agendados ("toda segunda, criar o
+// card da sprint") e gatilhos de prazo (vence hoje / venceu), que também
+// disparam o aviso para os responsáveis. Mesmo padrão de loopback dos ciclos
+// acima — a lógica mora em lib/taskAutomations.ts.
+if (cluster.isPrimary && process.env.TASK_AUTOMATIONS_ENABLED !== "false") {
+  const tasksIntervalMs = Number.parseInt(process.env.TASK_AUTOMATIONS_INTERVAL_MS || "300000", 10);
+  const tasksToken = process.env.DASHBOARD_TOKEN || "";
+  const tasksUrl = `http://127.0.0.1:${port}/api/internal/task-automations`;
+
+  const triggerTaskAutomations = () => {
+    if (!tasksToken) return;
+    fetch(tasksUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${tasksToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] task automations trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerTaskAutomations, tasksIntervalMs);
+  setTimeout(triggerTaskAutomations, 25_000);
+}

@@ -5,7 +5,7 @@ import { createBoard, listBoards, userCanAccessSector } from "@/lib/tasks";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  const auth = requireTasks(request);
+  const auth = await requireTasks(request);
   if (!auth.ok) return auth.response;
   const sectorId = Number(new URL(request.url).searchParams.get("sectorId") ?? "");
   if (!Number.isFinite(sectorId)) return NextResponse.json({ error: "sectorId invalido" }, { status: 400 });
@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = requireTasksAdmin(request);
+  const auth = await requireTasksAdmin(request);
   if (!auth.ok) return auth.response;
   const body = await request.json().catch(() => ({}));
   const sectorId = Number(body?.sectorId);

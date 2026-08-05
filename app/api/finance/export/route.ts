@@ -339,8 +339,168 @@ async function buildRows(section: string, month: string, searchParams: URLSearch
   ];
 }
 
+type PdfColumn = {
+  key: string;
+  label: string;
+  width: number;
+  align?: "left" | "right" | "center";
+  format?: "currency" | "percent" | "date";
+};
+
+const PDF_COLUMNS: Record<string, PdfColumn[]> = {
+  dashboard: [
+    { key: "Indicador", label: "Indicador", width: 260 },
+    { key: "Valor", label: "Valor", width: 150, align: "right", format: "currency" },
+    { key: "Mes anterior", label: "Mês anterior", width: 150, align: "right", format: "currency" },
+    { key: "Variacao %", label: "Variação", width: 130, align: "right", format: "percent" },
+  ],
+  fluxo: [
+    { key: "Mes", label: "Mês", width: 95 },
+    { key: "Receitas", label: "Recebido", width: 115, align: "right", format: "currency" },
+    { key: "Receita prevista", label: "Previsto", width: 115, align: "right", format: "currency" },
+    { key: "Despesas fixas", label: "Fixas", width: 110, align: "right", format: "currency" },
+    { key: "Despesas variaveis", label: "Variáveis", width: 110, align: "right", format: "currency" },
+    { key: "Lucro liquido", label: "Resultado", width: 115, align: "right", format: "currency" },
+  ],
+  receitas: [
+    { key: "Data", label: "Data", width: 75, format: "date" },
+    { key: "Descricao", label: "Descrição", width: 235 },
+    { key: "Aluno", label: "Aluno", width: 145 },
+    { key: "Vendedor", label: "Vendedor", width: 100 },
+    { key: "Valor", label: "Previsto", width: 95, align: "right", format: "currency" },
+    { key: "Status", label: "Status", width: 85, align: "center" },
+  ],
+  "gastos-fixos": [
+    { key: "Mes", label: "Mês", width: 75 },
+    { key: "Descricao", label: "Descrição", width: 230 },
+    { key: "Categoria", label: "Categoria", width: 160 },
+    { key: "Vencimento", label: "Vencimento", width: 95, format: "date" },
+    { key: "Valor", label: "Valor", width: 105, align: "right", format: "currency" },
+    { key: "Status", label: "Status", width: 85, align: "center" },
+  ],
+  folha: [
+    { key: "Descricao", label: "Colaborador", width: 220 },
+    { key: "Categoria", label: "Categoria", width: 150 },
+    { key: "Salario", label: "Salário", width: 120, align: "right", format: "currency" },
+    { key: "Beneficios", label: "Benefícios", width: 120, align: "right", format: "currency" },
+    { key: "Valor", label: "Total", width: 120, align: "right", format: "currency" },
+    { key: "Status", label: "Status", width: 90, align: "center" },
+  ],
+  "gastos-variaveis": [
+    { key: "Data", label: "Data", width: 80, format: "date" },
+    { key: "Descricao", label: "Descrição", width: 260 },
+    { key: "Categoria", label: "Categoria", width: 165 },
+    { key: "Unidade", label: "Unidade", width: 130 },
+    { key: "Valor", label: "Valor", width: 120, align: "right", format: "currency" },
+  ],
+  matriculas: [
+    { key: "Aluno", label: "Aluno", width: 220 },
+    { key: "Curso", label: "Curso", width: 170 },
+    { key: "Valor do curso", label: "Contrato", width: 115, align: "right", format: "currency" },
+    { key: "Parcelas", label: "Parcelas", width: 75, align: "center" },
+    { key: "Mes inicial", label: "Início", width: 95 },
+    { key: "Vendedor", label: "Vendedor", width: 120 },
+  ],
+  comissoes: [
+    { key: "Tipo", label: "Tipo", width: 105 },
+    { key: "Vendedor", label: "Vendedor", width: 155 },
+    { key: "Aluno", label: "Aluno", width: 185 },
+    { key: "Comissao total", label: "Comissão", width: 115, align: "right", format: "currency" },
+    { key: "Pago", label: "Pago", width: 105, align: "right", format: "currency" },
+    { key: "Pendente", label: "Pendente", width: 105, align: "right", format: "currency" },
+  ],
+  trimestral: [
+    { key: "Trimestre", label: "Trimestre", width: 125 },
+    { key: "Receita", label: "Receita recebida", width: 145, align: "right", format: "currency" },
+    { key: "Despesas fixas", label: "Fixas", width: 120, align: "right", format: "currency" },
+    { key: "Despesas variaveis", label: "Variáveis", width: 120, align: "right", format: "currency" },
+    { key: "Total de despesas", label: "Despesas", width: 120, align: "right", format: "currency" },
+    { key: "Lucro", label: "Resultado", width: 120, align: "right", format: "currency" },
+  ],
+};
+
+function pdfValue(value: string | number | null | undefined, column: PdfColumn): string {
+  if (value === null || value === undefined || value === "") return "—";
+  if (column.format === "currency" && typeof value === "number") {
+    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value);
+  }
+  if (column.format === "percent" && typeof value === "number") return `${new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(value)}%`;
+  if (column.format === "date" && typeof value === "string" && /^\d{4}-\d{2}(-\d{2})?$/.test(value)) {
+    const [year, month, day = "01"] = value.split("-");
+    return `${day}/${month}/${year}`;
+  }
+  return String(value);
+}
+
+function pdfTruncate(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, Math.max(1, max - 1))}…` : value;
+}
+
+function pdfColumns(section: string, rows: ExportRow[]): PdfColumn[] {
+  if (PDF_COLUMNS[section]) return PDF_COLUMNS[section];
+  return Object.keys(rows[0] ?? {}).slice(0, 6).map((key) => ({ key, label: key, width: 125 }));
+}
+
+function drawPdfHeader(doc: PDFKit.PDFDocument, section: string, month: string, page: number) {
+  doc.rect(0, 0, doc.page.width, 82).fill("#071a33");
+  doc.rect(0, 78, doc.page.width, 4).fill("#17b6d4");
+  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(18).text("VozUP", 36, 24);
+  doc.fillColor("#b9d9ea").font("Helvetica").fontSize(9).text("GESTÃO FINANCEIRA · RELATÓRIO EXECUTIVO", 36, 49);
+  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(12).text(SECTION_LABELS[section] ?? "Exportação", 520, 27, { width: 285, align: "right" });
+  doc.fillColor("#b9d9ea").font("Helvetica").fontSize(9).text(`Competência: ${month}  ·  Página ${page}`, 520, 49, { width: 285, align: "right" });
+}
+
+function drawPdfFooter(doc: PDFKit.PDFDocument) {
+  doc.moveTo(36, 558).lineTo(806, 558).strokeColor("#dbe5ed").lineWidth(0.6).stroke();
+  doc.fillColor("#64748b").font("Helvetica").fontSize(7.5).text(`Gerado em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`, 36, 566);
+  doc.text("Dados financeiros internos · VozUP", 520, 566, { width: 285, align: "right" });
+}
+
+function drawPdfTable(doc: PDFKit.PDFDocument, section: string, month: string, rows: ExportRow[], startPage: number): number {
+  const columns = pdfColumns(section, rows);
+  const left = 36;
+  const tableWidth = columns.reduce((sum, column) => sum + column.width, 0);
+  const rowHeight = 23;
+  let page = startPage;
+  let y = 145;
+
+  const drawTableHeader = () => {
+    doc.roundedRect(left, y, tableWidth, 24, 3).fill("#e9f5f9");
+    let x = left;
+    for (const column of columns) {
+      doc.fillColor("#315267").font("Helvetica-Bold").fontSize(7.5).text(column.label.toUpperCase(), x + 6, y + 8, { width: column.width - 12, align: column.align ?? "left" });
+      x += column.width;
+    }
+    y += 24;
+  };
+
+  drawTableHeader();
+  for (const [index, row] of rows.entries()) {
+    if (y + rowHeight > 552) {
+      drawPdfFooter(doc);
+      doc.addPage();
+      page += 1;
+      drawPdfHeader(doc, section, month, page);
+      y = 116;
+      drawTableHeader();
+    }
+    if (index % 2 === 0) doc.rect(left, y, tableWidth, rowHeight).fill("#f8fbfc");
+    doc.moveTo(left, y + rowHeight).lineTo(left + tableWidth, y + rowHeight).strokeColor("#e4edf2").lineWidth(0.4).stroke();
+    let x = left;
+    for (const column of columns) {
+      const raw = pdfValue(row[column.key], column);
+      const maxChars = Math.max(8, Math.floor(column.width / 5.4));
+      doc.fillColor("#163147").font(column.align === "right" ? "Helvetica-Bold" : "Helvetica").fontSize(8.2).text(pdfTruncate(raw, maxChars), x + 6, y + 8, { width: column.width - 12, align: column.align ?? "left", lineBreak: false });
+      x += column.width;
+    }
+    y += rowHeight;
+  }
+  drawPdfFooter(doc);
+  return page;
+}
+
 async function buildPdf(sections: string[], months: string[], searchParams: URLSearchParams, context: ExportContext) {
-  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 36 });
+  const doc = new PDFDocument({ size: "A4", layout: "landscape", margin: 0, info: { Title: "VozUP · Gestão Financeira", Author: "VozUP" } });
   const chunks: Buffer[] = [];
 
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -349,27 +509,24 @@ async function buildPdf(sections: string[], months: string[], searchParams: URLS
   });
 
   let firstPage = true;
+  let page = 1;
   for (const month of months) {
     for (const section of sections) {
-      if (!firstPage) doc.addPage();
+      if (!firstPage) {
+        doc.addPage();
+        page += 1;
+      }
       firstPage = false;
       const rows = await buildRows(section, month, scopedSearchParams(searchParams, month), context);
-      doc.fontSize(18).fillColor("#0f172a").text("VozUP - Gestao Financeira", { continued: false });
-      doc.moveDown(0.3);
-      doc.fontSize(10).fillColor("#475569").text(`${SECTION_LABELS[section] ?? "Exportacao"} · ${month}`);
-      doc.moveDown();
+      drawPdfHeader(doc, section, month, page);
+      doc.fillColor("#0f172a").font("Helvetica-Bold").fontSize(14).text(SECTION_LABELS[section] ?? "Exportação", 36, 104);
+      doc.fillColor("#64748b").font("Helvetica").fontSize(8.5).text(`${rows.length} registro${rows.length === 1 ? "" : "s"} no recorte selecionado`, 36, 123);
       if (rows.length === 0) {
-        doc.fillColor("#64748b").fontSize(10).text("Sem dados para os filtros selecionados.");
+        doc.roundedRect(36, 155, 770, 64, 5).fill("#f1f5f9");
+        doc.fillColor("#64748b").font("Helvetica-Bold").fontSize(10).text("Sem dados para os filtros selecionados.", 54, 180);
+        drawPdfFooter(doc);
       } else {
-        rows.slice(0, 40).forEach((row) => {
-          doc.fillColor("#0f172a").fontSize(9).text(
-            Object.entries(row)
-              .map(([key, value]) => `${key}: ${value ?? ""}`)
-              .join("   |   "),
-            { width: 760 }
-          );
-          doc.moveDown(0.25);
-        });
+        page = drawPdfTable(doc, section, month, rows, page);
       }
     }
   }

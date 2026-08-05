@@ -11,6 +11,21 @@ jest.mock("@/lib/commercial", () => ({
   ensureCommercialSchema: jest.fn(),
 }));
 
+// O lead novo já nasce no funil padrão: sem `funnel_id` gravado aqui, o card
+// não aparece em coluna nenhuma do Kanban depois de distribuído.
+jest.mock("@/lib/funnels", () => ({
+  getDefaultFunnel: jest.fn(async () => ({
+    id: 7,
+    name: "Funil VozUP",
+    isDefault: true,
+    sellerIds: [],
+    stages: [{ id: 1, key: "novo", label: "Novo", kind: "entry", color: "slate", position: 0 }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  })),
+  findStageByKind: jest.requireActual("@/lib/funnels").findStageByKind,
+}));
+
 const mockedGetPool = getPool as jest.MockedFunction<typeof getPool>;
 const mockedMerge = autoMergeNewLeadByPhone as jest.MockedFunction<
   typeof autoMergeNewLeadByPhone
@@ -61,7 +76,7 @@ describe("ingestVozupLead attribution guard", () => {
     expect(query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining("INSERT INTO dashboard.commercial_leads"),
-      [321, "Landing Page VozUP - Home"]
+      [321, "Landing Page VozUP - Home", 7, "novo"]
     );
   });
 
@@ -97,7 +112,7 @@ describe("ingestVozupLead attribution guard", () => {
     expect(query).toHaveBeenNthCalledWith(
       2,
       expect.stringContaining("INSERT INTO dashboard.commercial_leads"),
-      [321, "Meta Ads VozUP - Gravar Videos"]
+      [321, "Meta Ads VozUP - Gravar Videos", 7, "novo"]
     );
   });
 });

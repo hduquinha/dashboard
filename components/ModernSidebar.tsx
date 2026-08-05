@@ -43,6 +43,7 @@ const ICON_MAP: Record<string, typeof LayoutDashboard> = {
   "encontro-online": Video,
   "vozup-leads": Users,
   "vozup-financeiro": PiggyBank,
+  documentos: FileText,
   usuarios: ShieldCheck,
   notificacoes: Bell,
 };
@@ -164,7 +165,7 @@ export default function ModernSidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-cyan-200/10 bg-[linear-gradient(180deg,#001b31_0%,#001526_55%,#00111f_100%)] text-white shadow-[18px_0_50px_rgba(1,16,31,0.24)] transition-all duration-200 ease-out lg:static",
+          "fixed inset-y-0 left-0 z-30 flex flex-col border-r border-cyan-200/10 bg-[linear-gradient(180deg,#001b31_0%,#001526_55%,#00111f_100%)] text-white shadow-[18px_0_50px_rgba(1,16,31,0.24)] transition-all duration-200 ease-out lg:static print:hidden",
           "w-[292px]",
           isCollapsed ? "lg:w-[76px]" : "lg:w-[292px]",
           isMobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"

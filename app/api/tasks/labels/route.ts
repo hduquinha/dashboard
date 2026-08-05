@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
 export async function POST(request: NextRequest) {
-  const auth = requireTasks(request);
+  const auth = await requireTasks(request);
   if (!auth.ok) return auth.response;
   const body = await request.json().catch(() => ({}));
   const boardId = Number(body?.boardId);

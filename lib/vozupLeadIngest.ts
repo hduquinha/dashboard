@@ -1,5 +1,6 @@
 import { getPool, autoMergeNewLeadByPhone } from "@/lib/db";
 import { ensureCommercialSchema } from "@/lib/commercial";
+import { findStageByKind, getDefaultFunnel } from "@/lib/funnels";
 import { normalizeMetaAdsAttributionPayload } from "@/lib/vozupTrafficAttribution";
 
 const NOTIFY_NUMBER = "5511988874277";
@@ -46,16 +47,23 @@ async function sendWhatsApp(text: string): Promise<void> {
 /**
  * Cria (ou garante) o registro na pipeline comercial para o lead.
  * Usa ON CONFLICT DO NOTHING para não sobrescrever stage já existente.
+ *
+ * O funil precisa ser gravado já aqui: o Kanban filtra por `funnel_id`
+ * (lib/db.ts), então lead com funil nulo some de todas as colunas assim que
+ * é distribuído — fica só na Chegada de Leads.
  */
 async function syncToPipeline(inscricaoId: number, origemValor: string): Promise<void> {
   try {
     await ensureCommercialSchema();
     const pool = getPool();
+    const defaultFunnel = await getDefaultFunnel();
+    const entryStage = findStageByKind(defaultFunnel, "entry");
     await pool.query(
-      `INSERT INTO ${COMMERCIAL_SCHEMA}.commercial_leads (inscricao_id, campaign_source, commercial_stage)
-       VALUES ($1, $2, 'novo')
+      `INSERT INTO ${COMMERCIAL_SCHEMA}.commercial_leads
+         (inscricao_id, campaign_source, funnel_id, commercial_stage, commercial_stage_kind)
+       VALUES ($1, $2, $3, $4, 'entry')
        ON CONFLICT (inscricao_id) DO NOTHING`,
-      [inscricaoId, origemValor]
+      [inscricaoId, origemValor, defaultFunnel.id, entryStage?.key ?? "novo"]
     );
   } catch (err) {
     console.error("[vozupLeadIngest] Erro ao sincronizar com Pipeline:", err);

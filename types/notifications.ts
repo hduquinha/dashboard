@@ -8,7 +8,11 @@ export type AppNotificationKind =
   | "new_lead"
   | "lead_assigned"
   | "stale_lead"
-  | "undistributed_lead";
+  | "undistributed_lead"
+  // Módulo de Tarefas: atribuição, citação em comentário e prazo do card.
+  | "task_assigned"
+  | "task_mention"
+  | "task_due";
 
 export interface AppNotification {
   id: number;

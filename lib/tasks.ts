@@ -40,6 +40,10 @@ export interface TaskTeam {
   sectorNames: string[];
 }
 
+/** `sector` = só quem enxerga o setor; `workspace` = qualquer um com view.tasks. */
+export type BoardVisibility = "sector" | "workspace";
+export const BOARD_VISIBILITIES: BoardVisibility[] = ["sector", "workspace"];
+
 export interface TaskBoard {
   id: number;
   sectorId: number;
@@ -47,6 +51,7 @@ export interface TaskBoard {
   description: string | null;
   position: number;
   archived: boolean;
+  visibility: BoardVisibility;
 }
 
 export interface TaskColumn {
@@ -55,6 +60,11 @@ export interface TaskColumn {
   name: string;
   color: string | null;
   position: number;
+  archived: boolean;
+  /** Limite de cards em andamento (WIP). null = sem limite. */
+  wipLimit: number | null;
+  /** Entrar nesta coluna marca a tarefa como concluída (e sair desmarca). */
+  completesTask: boolean;
 }
 
 export interface TaskLabel {
@@ -71,6 +81,8 @@ export interface TaskCard {
   title: string;
   description: string | null;
   priority: TaskPriority;
+  /** Data de início — é o que dá largura ao card na Timeline. */
+  startDate: string | null;
   dueDate: string | null;
   position: number;
   completedAt: string | null;
@@ -78,6 +90,27 @@ export interface TaskCard {
   labelIds: number[];
   createdBy: number | null;
   createdAt: string;
+  archivedAt?: string | null;
+  /** Capa: cor sólida ou imagem (anexo do próprio card). */
+  coverColor: string | null;
+  coverAttachmentId: number | null;
+  /** Contadores mostrados no card sem precisar abrir (estilo Trello). */
+  checklistTotal: number;
+  checklistDone: number;
+  commentCount: number;
+  attachmentCount: number;
+  /** Valores dos campos personalizados, por id do campo. */
+  customValues: Record<number, string>;
+}
+
+export interface TaskCustomField {
+  id: number;
+  boardId: number;
+  name: string;
+  type: "text" | "number" | "date" | "select" | "checkbox";
+  options: string[];
+  showOnCard: boolean;
+  position: number;
 }
 
 let schemaReady = false;
@@ -178,8 +211,172 @@ export async function ensureTasksSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_tasks_column ON ${SCHEMA}.tasks(column_id);
     CREATE INDEX IF NOT EXISTS idx_task_boards_sector ON ${SCHEMA}.task_boards(sector_id);
   `);
+  await getPool().query(TASKS_SCHEMA_V2);
   schemaReady = true;
 }
+
+/**
+ * Segunda leva do schema (checklists, comentários, anexos, atividade, campos
+ * personalizados, capas, templates, automações, webhooks e tokens de API).
+ * Separado do bloco original só por legibilidade — roda na mesma chamada de
+ * `ensureTasksSchema` e é todo idempotente (IF NOT EXISTS).
+ */
+const TASKS_SCHEMA_V2 = `
+  -- Card: data de início (para timeline/Gantt), capa, arquivamento datado e
+  -- marcação de template (template é um card que não aparece no quadro).
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS start_date DATE;
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS cover_color TEXT;
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS cover_attachment_id INTEGER;
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT false;
+
+  -- Coluna: arquivamento, limite de WIP e a marca de "esta coluna conclui a
+  -- tarefa" (é o que faz arrastar pra Concluído carimbar completed_at).
+  ALTER TABLE ${SCHEMA}.task_columns ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE ${SCHEMA}.task_columns ADD COLUMN IF NOT EXISTS wip_limit INTEGER;
+  ALTER TABLE ${SCHEMA}.task_columns ADD COLUMN IF NOT EXISTS completes_task BOOLEAN NOT NULL DEFAULT false;
+
+  -- Quadro: visibilidade (só o setor × todos que entram em Tarefas).
+  ALTER TABLE ${SCHEMA}.task_boards ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'sector';
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_checklists (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES ${SCHEMA}.tasks(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_checklist_items (
+    id SERIAL PRIMARY KEY,
+    checklist_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_checklists(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    done BOOLEAN NOT NULL DEFAULT false,
+    done_at TIMESTAMPTZ,
+    member_id INTEGER,
+    due_date DATE,
+    position INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_comments (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES ${SCHEMA}.tasks(id) ON DELETE CASCADE,
+    member_id INTEGER,
+    author_name TEXT NOT NULL,
+    author_email TEXT,
+    body TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    edited_at TIMESTAMPTZ
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_comment_reactions (
+    comment_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_comments(id) ON DELETE CASCADE,
+    actor_email TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    PRIMARY KEY (comment_id, actor_email, emoji)
+  );
+
+  -- Anexo: arquivo guardado no próprio banco (mesmo padrão dos comprovantes do
+  -- Financeiro) ou link externo (kind='link', content nulo).
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_attachments (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER NOT NULL REFERENCES ${SCHEMA}.tasks(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'file',
+    name TEXT NOT NULL,
+    url TEXT,
+    mime TEXT,
+    size_bytes INTEGER,
+    content BYTEA,
+    created_by INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_activity (
+    id SERIAL PRIMARY KEY,
+    task_id INTEGER REFERENCES ${SCHEMA}.tasks(id) ON DELETE CASCADE,
+    board_id INTEGER REFERENCES ${SCHEMA}.task_boards(id) ON DELETE CASCADE,
+    actor_name TEXT,
+    actor_email TEXT,
+    action TEXT NOT NULL,
+    detail JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_custom_fields (
+    id SERIAL PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_boards(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'text',
+    options JSONB NOT NULL DEFAULT '[]'::jsonb,
+    show_on_card BOOLEAN NOT NULL DEFAULT false,
+    position INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_custom_values (
+    task_id INTEGER NOT NULL REFERENCES ${SCHEMA}.tasks(id) ON DELETE CASCADE,
+    field_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_custom_fields(id) ON DELETE CASCADE,
+    value TEXT,
+    PRIMARY KEY (task_id, field_id)
+  );
+
+  -- Template de card: o conteúdo fica em JSON (título, descrição, checklists,
+  -- etiquetas…) em vez de um card oculto, pra não poluir contagens do quadro.
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_card_templates (
+    id SERIAL PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_boards(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Automação (Butler): kind='rule' dispara por evento, 'button' é acionado à
+  -- mão dentro do card, 'schedule' roda por horário.
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_automations (
+    id SERIAL PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_boards(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'rule',
+    name TEXT NOT NULL,
+    trigger JSONB NOT NULL DEFAULT '{}'::jsonb,
+    actions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    schedule_kind TEXT,
+    schedule_time TEXT,
+    schedule_weekday INTEGER,
+    schedule_day INTEGER,
+    last_run_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_webhooks (
+    id SERIAL PRIMARY KEY,
+    board_id INTEGER NOT NULL REFERENCES ${SCHEMA}.task_boards(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    events TEXT[] NOT NULL DEFAULT '{}',
+    secret TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    last_status TEXT,
+    last_sent_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Token de API: guardamos só o hash. O valor em claro aparece uma única vez,
+  -- na criação — igual a um PAT.
+  CREATE TABLE IF NOT EXISTS ${SCHEMA}.task_api_tokens (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_email TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_used_at TIMESTAMPTZ,
+    revoked BOOLEAN NOT NULL DEFAULT false
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_checklists_task ON ${SCHEMA}.task_checklists(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_comments_task ON ${SCHEMA}.task_comments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON ${SCHEMA}.task_attachments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_activity_task ON ${SCHEMA}.task_activity(task_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_task_activity_board ON ${SCHEMA}.task_activity(board_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_task_automations_board ON ${SCHEMA}.task_automations(board_id);
+`;
 
 function normalizePriority(value: unknown): TaskPriority {
   return TASK_PRIORITIES.includes(value as TaskPriority) ? (value as TaskPriority) : "media";
@@ -412,12 +609,12 @@ export async function setTeamMembers(teamId: number, memberIds: number[]): Promi
 
 // ── Quadros / colunas ────────────────────────────────────────────────────────
 const DEFAULT_COLUMNS = [
-  { name: "A fazer", color: "#94a3b8" },
-  { name: "Fazendo", color: "#3b82f6" },
+  { name: "A fazer", color: "#94a3b8", completes: false },
+  { name: "Fazendo", color: "#3b82f6", completes: false },
   // Sem esta coluna, o que depende de outra pessoa fica parado em "Fazendo"
   // fingindo que anda.
-  { name: "Travado / Aguardando terceiro", color: "#f59e0b" },
-  { name: "Concluído", color: "#22c55e" },
+  { name: "Travado / Aguardando terceiro", color: "#f59e0b", completes: false },
+  { name: "Concluído", color: "#22c55e", completes: true },
 ];
 
 export async function listBoards(sectorId: number): Promise<TaskBoard[]> {
@@ -437,6 +634,7 @@ function mapBoard(r: Record<string, unknown>): TaskBoard {
     description: (r.description as string) ?? null,
     position: Number(r.position),
     archived: Boolean(r.archived),
+    visibility: r.visibility === "workspace" ? "workspace" : "sector",
   };
 }
 
@@ -458,38 +656,197 @@ export async function createBoard(input: {
   let pos = 0;
   for (const col of DEFAULT_COLUMNS) {
     await pool.query(
-      `INSERT INTO ${SCHEMA}.task_columns (board_id, name, color, position) VALUES ($1,$2,$3,$4)`,
-      [board.id, col.name, col.color, pos++]
+      `INSERT INTO ${SCHEMA}.task_columns (board_id, name, color, position, completes_task) VALUES ($1,$2,$3,$4,$5)`,
+      [board.id, col.name, col.color, pos++, col.completes]
     );
   }
   return board;
 }
 
-export async function updateBoard(
+// ── Campos personalizados ────────────────────────────────────────────────────
+export const CUSTOM_FIELD_TYPES = ["text", "number", "date", "select", "checkbox"] as const;
+
+export async function listCustomFields(boardId: number): Promise<TaskCustomField[]> {
+  const { rows } = await getPool().query(
+    `SELECT * FROM ${SCHEMA}.task_custom_fields WHERE board_id=$1 ORDER BY position, id`,
+    [boardId]
+  );
+  return rows.map(mapCustomField);
+}
+
+export async function createCustomField(input: {
+  boardId: number;
+  name: string;
+  type: TaskCustomField["type"];
+  options?: string[];
+  showOnCard?: boolean;
+}): Promise<TaskCustomField> {
+  const type = CUSTOM_FIELD_TYPES.includes(input.type) ? input.type : "text";
+  const { rows } = await getPool().query(
+    `INSERT INTO ${SCHEMA}.task_custom_fields (board_id, name, type, options, show_on_card, position)
+     VALUES ($1,$2,$3,$4::jsonb,COALESCE($5,false),
+       COALESCE((SELECT MAX(position)+1 FROM ${SCHEMA}.task_custom_fields WHERE board_id=$1),0))
+     RETURNING *`,
+    [input.boardId, input.name.trim(), type, JSON.stringify(input.options ?? []), input.showOnCard ?? null]
+  );
+  return mapCustomField(rows[0]);
+}
+
+export async function updateCustomField(
   id: number,
-  input: { name?: string; description?: string | null; archived?: boolean }
+  input: { name?: string; options?: string[]; showOnCard?: boolean }
 ): Promise<void> {
   await getPool().query(
-    `UPDATE ${SCHEMA}.task_boards SET name=COALESCE($2,name), description=COALESCE($3,description), archived=COALESCE($4,archived) WHERE id=$1`,
-    [id, input.name ?? null, input.description ?? null, input.archived ?? null]
+    `UPDATE ${SCHEMA}.task_custom_fields SET
+       name = COALESCE($2,name),
+       options = COALESCE($3::jsonb, options),
+       show_on_card = COALESCE($4, show_on_card)
+     WHERE id=$1`,
+    [id, input.name?.trim() || null, input.options ? JSON.stringify(input.options) : null, input.showOnCard ?? null]
   );
 }
 
-export async function createColumn(boardId: number, name: string, color?: string): Promise<TaskColumn> {
-  const { rows } = await getPool().query(
-    `INSERT INTO ${SCHEMA}.task_columns (board_id, name, color, position)
-     VALUES ($1,$2,$3, COALESCE((SELECT MAX(position)+1 FROM ${SCHEMA}.task_columns WHERE board_id=$1),0))
-     RETURNING *`,
-    [boardId, name.trim(), color ?? null]
-  );
-  const r = rows[0];
-  return { id: Number(r.id), boardId, name: String(r.name), color: (r.color as string) ?? null, position: Number(r.position) };
+export async function deleteCustomField(id: number): Promise<void> {
+  await getPool().query(`DELETE FROM ${SCHEMA}.task_custom_fields WHERE id=$1`, [id]);
 }
 
-export async function updateColumn(id: number, input: { name?: string; color?: string }): Promise<void> {
+/** Grava (ou apaga, com valor vazio) o valor de um campo personalizado num card. */
+export async function setCustomValue(taskId: number, fieldId: number, value: string | null): Promise<void> {
+  const pool = getPool();
+  if (value === null || value === "") {
+    await pool.query(`DELETE FROM ${SCHEMA}.task_custom_values WHERE task_id=$1 AND field_id=$2`, [taskId, fieldId]);
+    return;
+  }
+  await pool.query(
+    `INSERT INTO ${SCHEMA}.task_custom_values (task_id, field_id, value) VALUES ($1,$2,$3)
+     ON CONFLICT (task_id, field_id) DO UPDATE SET value = EXCLUDED.value`,
+    [taskId, fieldId, value]
+  );
+}
+
+async function boardIdOfCustomField(fieldId: number): Promise<number | null> {
+  const { rows } = await getPool().query<{ board_id: number }>(
+    `SELECT board_id FROM ${SCHEMA}.task_custom_fields WHERE id=$1`,
+    [fieldId]
+  );
+  return rows[0]?.board_id ?? null;
+}
+
+export async function userCanAccessCustomField(
+  user: PermissionUser | null | undefined,
+  fieldId: number
+): Promise<boolean> {
+  const boardId = await boardIdOfCustomField(fieldId);
+  return boardId === null ? false : userCanAccessBoard(user, boardId);
+}
+
+export async function updateBoard(
+  id: number,
+  input: { name?: string; description?: string | null; archived?: boolean; visibility?: BoardVisibility }
+): Promise<void> {
   await getPool().query(
-    `UPDATE ${SCHEMA}.task_columns SET name=COALESCE($2,name), color=COALESCE($3,color) WHERE id=$1`,
-    [id, input.name ?? null, input.color ?? null]
+    `UPDATE ${SCHEMA}.task_boards SET name=COALESCE($2,name), description=COALESCE($3,description),
+       archived=COALESCE($4,archived), visibility=COALESCE($5,visibility) WHERE id=$1`,
+    [
+      id,
+      input.name ?? null,
+      input.description ?? null,
+      input.archived ?? null,
+      input.visibility && BOARD_VISIBILITIES.includes(input.visibility) ? input.visibility : null,
+    ]
+  );
+}
+
+/**
+ * Todos os quadros que o usuário enxerga, de todos os setores — é o que
+ * alimenta a visão de Workspace (vários quadros lado a lado) com os
+ * contadores de card aberto/atrasado por quadro.
+ */
+export interface WorkspaceBoard extends TaskBoard {
+  sectorName: string;
+  sectorColor: string;
+  openCount: number;
+  overdueCount: number;
+  doneCount: number;
+}
+
+export async function listWorkspaceBoards(user: PermissionUser | null | undefined): Promise<WorkspaceBoard[]> {
+  const sectors = await listSectorsForUser(user);
+  const ids = sectors.map((s) => s.id);
+  const { rows } = await getPool().query(
+    `SELECT b.*, s.name AS sector_name, s.color AS sector_color,
+       (SELECT COUNT(*) FROM ${SCHEMA}.tasks t WHERE t.board_id=b.id AND NOT t.archived AND NOT t.is_template
+          AND t.completed_at IS NULL) AS open_count,
+       (SELECT COUNT(*) FROM ${SCHEMA}.tasks t WHERE t.board_id=b.id AND NOT t.archived AND NOT t.is_template
+          AND t.completed_at IS NULL AND t.due_date < CURRENT_DATE) AS overdue_count,
+       (SELECT COUNT(*) FROM ${SCHEMA}.tasks t WHERE t.board_id=b.id AND NOT t.archived AND NOT t.is_template
+          AND t.completed_at IS NOT NULL) AS done_count
+     FROM ${SCHEMA}.task_boards b
+     JOIN ${SCHEMA}.task_sectors s ON s.id = b.sector_id
+     WHERE (b.sector_id = ANY($1::int[]) OR b.visibility = 'workspace') AND NOT b.archived
+     ORDER BY s.position, s.id, b.position, b.id`,
+    [ids]
+  );
+  return rows.map((r) => ({
+    ...mapBoard(r),
+    sectorName: String(r.sector_name),
+    sectorColor: String(r.sector_color),
+    openCount: Number(r.open_count),
+    overdueCount: Number(r.overdue_count),
+    doneCount: Number(r.done_count),
+  }));
+}
+
+export async function createColumn(
+  boardId: number,
+  name: string,
+  color?: string,
+  options?: { wipLimit?: number | null; completesTask?: boolean }
+): Promise<TaskColumn> {
+  const { rows } = await getPool().query(
+    `INSERT INTO ${SCHEMA}.task_columns (board_id, name, color, wip_limit, completes_task, position)
+     VALUES ($1,$2,$3,$4,COALESCE($5,false),
+       COALESCE((SELECT MAX(position)+1 FROM ${SCHEMA}.task_columns WHERE board_id=$1),0))
+     RETURNING *`,
+    [boardId, name.trim(), color ?? null, options?.wipLimit ?? null, options?.completesTask ?? null]
+  );
+  return mapColumn(rows[0]);
+}
+
+export async function updateColumn(
+  id: number,
+  input: { name?: string; color?: string; wipLimit?: number | null; completesTask?: boolean; archived?: boolean }
+): Promise<void> {
+  const touchWip = input.wipLimit !== undefined;
+  await getPool().query(
+    `UPDATE ${SCHEMA}.task_columns SET
+       name = COALESCE($2,name),
+       color = COALESCE($3,color),
+       wip_limit = CASE WHEN $4::boolean THEN $5::int ELSE wip_limit END,
+       completes_task = COALESCE($6, completes_task),
+       archived = COALESCE($7, archived)
+     WHERE id=$1`,
+    [
+      id,
+      input.name ?? null,
+      input.color ?? null,
+      touchWip,
+      touchWip ? input.wipLimit : null,
+      input.completesTask ?? null,
+      input.archived ?? null,
+    ]
+  );
+}
+
+/** Reordena as colunas do quadro (arrastar cabeçalho de lista). */
+export async function reorderColumns(boardId: number, orderedIds: number[]): Promise<void> {
+  if (orderedIds.length === 0) return;
+  await getPool().query(
+    `UPDATE ${SCHEMA}.task_columns c
+        SET position = o.ord - 1
+       FROM unnest($2::int[]) WITH ORDINALITY AS o(col_id, ord)
+      WHERE c.id = o.col_id AND c.board_id = $1`,
+    [boardId, orderedIds]
   );
 }
 
@@ -503,37 +860,54 @@ export interface BoardData {
   columns: TaskColumn[];
   tasks: TaskCard[];
   labels: TaskLabel[];
+  customFields: TaskCustomField[];
 }
+
+/**
+ * Subconsulta usada em toda listagem de card: agrega responsáveis, etiquetas,
+ * contadores (checklist/comentário/anexo) e os valores dos campos
+ * personalizados. Fica numa constante porque a listagem do quadro, o arquivo e
+ * a busca precisam do MESMO formato — card com contadores faltando some da tela.
+ */
+const TASK_SELECT = `
+  SELECT t.*,
+    COALESCE(array_agg(DISTINCT a.member_id) FILTER (WHERE a.member_id IS NOT NULL),'{}') AS assignee_ids,
+    COALESCE(array_agg(DISTINCT ll.label_id) FILTER (WHERE ll.label_id IS NOT NULL),'{}') AS label_ids,
+    (SELECT COUNT(*) FROM ${SCHEMA}.task_checklist_items ci
+       JOIN ${SCHEMA}.task_checklists c ON c.id = ci.checklist_id WHERE c.task_id = t.id) AS checklist_total,
+    (SELECT COUNT(*) FROM ${SCHEMA}.task_checklist_items ci
+       JOIN ${SCHEMA}.task_checklists c ON c.id = ci.checklist_id WHERE c.task_id = t.id AND ci.done) AS checklist_done,
+    (SELECT COUNT(*) FROM ${SCHEMA}.task_comments cm WHERE cm.task_id = t.id) AS comment_count,
+    (SELECT COUNT(*) FROM ${SCHEMA}.task_attachments at WHERE at.task_id = t.id) AS attachment_count,
+    (SELECT COALESCE(jsonb_object_agg(cv.field_id, cv.value) FILTER (WHERE cv.value IS NOT NULL), '{}'::jsonb)
+       FROM ${SCHEMA}.task_custom_values cv WHERE cv.task_id = t.id) AS custom_values
+  FROM ${SCHEMA}.tasks t
+  LEFT JOIN ${SCHEMA}.task_assignees a ON a.task_id = t.id
+  LEFT JOIN ${SCHEMA}.task_label_links ll ON ll.task_id = t.id
+`;
 
 export async function getBoardData(boardId: number): Promise<BoardData | null> {
   await ensureTasksSchema();
   const pool = getPool();
   const boardRes = await pool.query(`SELECT * FROM ${SCHEMA}.task_boards WHERE id = $1`, [boardId]);
   if (!boardRes.rows[0]) return null;
-  const [colsRes, tasksRes, labelsRes] = await Promise.all([
-    pool.query(`SELECT * FROM ${SCHEMA}.task_columns WHERE board_id=$1 ORDER BY position, id`, [boardId]),
+  const [colsRes, tasksRes, labelsRes, fieldsRes] = await Promise.all([
     pool.query(
-      `SELECT t.*,
-         COALESCE(array_agg(DISTINCT a.member_id) FILTER (WHERE a.member_id IS NOT NULL),'{}') AS assignee_ids,
-         COALESCE(array_agg(DISTINCT ll.label_id) FILTER (WHERE ll.label_id IS NOT NULL),'{}') AS label_ids
-       FROM ${SCHEMA}.tasks t
-       LEFT JOIN ${SCHEMA}.task_assignees a ON a.task_id = t.id
-       LEFT JOIN ${SCHEMA}.task_label_links ll ON ll.task_id = t.id
-       WHERE t.board_id=$1 AND NOT t.archived
+      `SELECT * FROM ${SCHEMA}.task_columns WHERE board_id=$1 AND NOT archived ORDER BY position, id`,
+      [boardId]
+    ),
+    pool.query(
+      `${TASK_SELECT}
+       WHERE t.board_id=$1 AND NOT t.archived AND NOT t.is_template
        GROUP BY t.id ORDER BY t.position, t.id`,
       [boardId]
     ),
     pool.query(`SELECT * FROM ${SCHEMA}.task_labels WHERE board_id=$1 ORDER BY id`, [boardId]),
+    pool.query(`SELECT * FROM ${SCHEMA}.task_custom_fields WHERE board_id=$1 ORDER BY position, id`, [boardId]),
   ]);
   return {
     board: mapBoard(boardRes.rows[0]),
-    columns: colsRes.rows.map((r) => ({
-      id: Number(r.id),
-      boardId,
-      name: String(r.name),
-      color: (r.color as string) ?? null,
-      position: Number(r.position),
-    })),
+    columns: colsRes.rows.map(mapColumn),
     tasks: tasksRes.rows.map(mapTask),
     labels: labelsRes.rows.map((r) => ({
       id: Number(r.id),
@@ -541,10 +915,73 @@ export async function getBoardData(boardId: number): Promise<BoardData | null> {
       name: String(r.name),
       color: String(r.color),
     })),
+    customFields: fieldsRes.rows.map(mapCustomField),
   };
 }
 
-function mapTask(r: Record<string, unknown>): TaskCard {
+function mapColumn(r: Record<string, unknown>): TaskColumn {
+  return {
+    id: Number(r.id),
+    boardId: Number(r.board_id),
+    name: String(r.name),
+    color: (r.color as string) ?? null,
+    position: Number(r.position),
+    archived: Boolean(r.archived),
+    wipLimit: r.wip_limit === null || r.wip_limit === undefined ? null : Number(r.wip_limit),
+    completesTask: Boolean(r.completes_task),
+  };
+}
+
+export function mapCustomField(r: Record<string, unknown>): TaskCustomField {
+  const raw = r.options;
+  const options = Array.isArray(raw) ? raw.map(String) : typeof raw === "string" ? JSON.parse(raw || "[]") : [];
+  return {
+    id: Number(r.id),
+    boardId: Number(r.board_id),
+    name: String(r.name),
+    type: String(r.type) as TaskCustomField["type"],
+    options,
+    showOnCard: Boolean(r.show_on_card),
+    position: Number(r.position),
+  };
+}
+
+/** Cards arquivados de um quadro — a tela de Arquivo lê daqui pra restaurar. */
+export async function listArchivedTasks(boardId: number): Promise<TaskCard[]> {
+  await ensureTasksSchema();
+  const { rows } = await getPool().query(
+    `${TASK_SELECT}
+     WHERE t.board_id=$1 AND t.archived AND NOT t.is_template
+     GROUP BY t.id ORDER BY COALESCE(t.archived_at, t.updated_at) DESC NULLS LAST, t.id DESC
+     LIMIT 300`,
+    [boardId]
+  );
+  return rows.map(mapTask);
+}
+
+/** Colunas arquivadas (restauráveis) de um quadro. */
+export async function listArchivedColumns(boardId: number): Promise<TaskColumn[]> {
+  const { rows } = await getPool().query(
+    `SELECT * FROM ${SCHEMA}.task_columns WHERE board_id=$1 AND archived ORDER BY position, id`,
+    [boardId]
+  );
+  return rows.map(mapColumn);
+}
+
+function isoDay(value: unknown): string | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+export function mapTask(r: Record<string, unknown>): TaskCard {
+  const rawCustom = r.custom_values;
+  const parsedCustom =
+    typeof rawCustom === "string" ? JSON.parse(rawCustom || "{}") : ((rawCustom as object) ?? {});
+  const customValues: Record<number, string> = {};
+  for (const [key, value] of Object.entries(parsedCustom as Record<string, unknown>)) {
+    if (value !== null && value !== undefined) customValues[Number(key)] = String(value);
+  }
   return {
     id: Number(r.id),
     boardId: Number(r.board_id),
@@ -552,13 +989,91 @@ function mapTask(r: Record<string, unknown>): TaskCard {
     title: String(r.title),
     description: (r.description as string) ?? null,
     priority: normalizePriority(r.priority),
-    dueDate: r.due_date ? new Date(r.due_date as string).toISOString().slice(0, 10) : null,
+    startDate: isoDay(r.start_date),
+    dueDate: isoDay(r.due_date),
     position: Number(r.position),
     completedAt: r.completed_at ? new Date(r.completed_at as string).toISOString() : null,
     assigneeIds: ((r.assignee_ids as number[]) ?? []).map(Number),
     labelIds: ((r.label_ids as number[]) ?? []).map(Number),
     createdBy: r.created_by === null ? null : Number(r.created_by),
     createdAt: new Date(r.created_at as string).toISOString(),
+    archivedAt: r.archived_at ? new Date(r.archived_at as string).toISOString() : null,
+    coverColor: (r.cover_color as string) ?? null,
+    coverAttachmentId: r.cover_attachment_id === null || r.cover_attachment_id === undefined ? null : Number(r.cover_attachment_id),
+    checklistTotal: Number(r.checklist_total ?? 0),
+    checklistDone: Number(r.checklist_done ?? 0),
+    commentCount: Number(r.comment_count ?? 0),
+    attachmentCount: Number(r.attachment_count ?? 0),
+    customValues,
+  };
+}
+
+/** Um card só, já no formato da listagem (usado pelo detalhe e pelas automações). */
+export async function getTask(taskId: number): Promise<TaskCard | null> {
+  const { rows } = await getPool().query(`${TASK_SELECT} WHERE t.id = $1 GROUP BY t.id`, [taskId]);
+  return rows[0] ? mapTask(rows[0]) : null;
+}
+
+/** Card enxuto para a visão Geral, sem carregar o detalhe completo de cada tarefa. */
+export interface TaskOverviewTask {
+  id: number;
+  boardId: number;
+  boardName: string;
+  sectorId: number;
+  sectorName: string;
+  sectorColor: string;
+  columnName: string | null;
+  title: string;
+  priority: TaskPriority;
+  dueDate: string | null;
+  completedAt: string | null;
+  assigneeIds: number[];
+}
+
+export interface TaskOverview {
+  boards: WorkspaceBoard[];
+  tasks: TaskOverviewTask[];
+}
+
+/** Consolida os cards de todos os quadros que o usuário pode abrir. */
+export async function getTaskOverview(user: PermissionUser | null | undefined): Promise<TaskOverview> {
+  const boards = await listWorkspaceBoards(user);
+  const boardIds = boards.map((board) => board.id);
+  if (boardIds.length === 0) return { boards, tasks: [] };
+
+  const { rows } = await getPool().query(
+    `SELECT t.id, t.board_id, t.title, t.priority, t.due_date, t.completed_at,
+       b.name AS board_name, b.sector_id,
+       s.name AS sector_name, s.color AS sector_color,
+       c.name AS column_name,
+       COALESCE(array_agg(DISTINCT a.member_id) FILTER (WHERE a.member_id IS NOT NULL), '{}') AS assignee_ids
+     FROM ${SCHEMA}.tasks t
+     JOIN ${SCHEMA}.task_boards b ON b.id = t.board_id
+     JOIN ${SCHEMA}.task_sectors s ON s.id = b.sector_id
+     LEFT JOIN ${SCHEMA}.task_columns c ON c.id = t.column_id
+     LEFT JOIN ${SCHEMA}.task_assignees a ON a.task_id = t.id
+     WHERE t.board_id = ANY($1::int[]) AND NOT t.archived AND NOT t.is_template
+     GROUP BY t.id, b.id, s.id, c.id
+     ORDER BY (t.completed_at IS NULL) DESC, t.due_date ASC NULLS LAST, t.created_at DESC`,
+    [boardIds]
+  );
+
+  return {
+    boards,
+    tasks: rows.map((row) => ({
+      id: Number(row.id),
+      boardId: Number(row.board_id),
+      boardName: String(row.board_name),
+      sectorId: Number(row.sector_id),
+      sectorName: String(row.sector_name),
+      sectorColor: String(row.sector_color),
+      columnName: (row.column_name as string) ?? null,
+      title: String(row.title),
+      priority: normalizePriority(row.priority),
+      dueDate: isoDay(row.due_date),
+      completedAt: row.completed_at ? new Date(row.completed_at as string).toISOString() : null,
+      assigneeIds: ((row.assignee_ids as number[]) ?? []).map(Number),
+    })),
   };
 }
 
@@ -569,7 +1084,9 @@ export async function createTask(input: {
   title: string;
   description?: string | null;
   priority?: TaskPriority;
+  startDate?: string | null;
   dueDate?: string | null;
+  coverColor?: string | null;
   assigneeIds?: number[];
   labelIds?: number[];
   createdBy?: number | null;
@@ -577,8 +1094,9 @@ export async function createTask(input: {
   await ensureTasksSchema();
   const pool = getPool();
   const { rows } = await pool.query(
-    `INSERT INTO ${SCHEMA}.tasks (board_id, column_id, title, description, priority, due_date, created_by, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,
+    `INSERT INTO ${SCHEMA}.tasks (board_id, column_id, title, description, priority, start_date, due_date,
+       cover_color, created_by, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
        COALESCE((SELECT MAX(position)+1 FROM ${SCHEMA}.tasks WHERE board_id=$1 AND column_id IS NOT DISTINCT FROM $2),0))
      RETURNING *`,
     [
@@ -587,7 +1105,9 @@ export async function createTask(input: {
       input.title.trim(),
       input.description ?? null,
       normalizePriority(input.priority),
+      input.startDate || null,
       input.dueDate || null,
+      input.coverColor || null,
       input.createdBy ?? null,
     ]
   );
@@ -597,30 +1117,67 @@ export async function createTask(input: {
   return { ...task, assigneeIds: input.assigneeIds ?? [], labelIds: input.labelIds ?? [] };
 }
 
+/**
+ * A data de conclusão chega da UI como "AAAA-MM-DD" (input type=date), mas a
+ * coluna é TIMESTAMPTZ. Carimbar meia-noite faria o dia "voltar" um dia pra
+ * quem lê em UTC-3, então o dia escolhido vira meio-dia UTC: qualquer fuso do
+ * Brasil (ou até UTC+11) continua mostrando a mesma data.
+ * Também aceita um ISO completo (ex.: vindo de outra API) sem mexer nele.
+ */
+export function normalizeCompletedAt(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T12:00:00.000Z` : trimmed;
+}
+
 export async function updateTask(
   id: number,
   input: {
     title?: string;
     description?: string | null;
     priority?: TaskPriority;
+    startDate?: string | null;
     dueDate?: string | null;
     completed?: boolean;
+    /** "AAAA-MM-DD" ou ISO: data em que a tarefa foi concluída. null limpa. */
+    completedAt?: string | null;
     archived?: boolean;
+    coverColor?: string | null;
+    coverAttachmentId?: number | null;
   }
 ): Promise<void> {
   // due_date e description não podem usar COALESCE: o usuário precisa conseguir
   // APAGAR um prazo/descrição, e COALESCE(null, valor) devolveria o valor antigo.
   // Por isso a flag "mexeu neste campo?" ($5/$7) separada do valor novo ($6/$8).
+  // Mesma coisa vale pra data de início e pra capa.
   const touchDueDate = input.dueDate !== undefined;
   const touchDescription = input.description !== undefined;
+  const touchStart = input.startDate !== undefined;
+  const touchCover = input.coverColor !== undefined;
+  const touchCoverAttachment = input.coverAttachmentId !== undefined;
+  const touchCompletedAt = input.completedAt !== undefined;
   await getPool().query(
     `UPDATE ${SCHEMA}.tasks SET
        title = COALESCE($2, title),
        priority = COALESCE($3, priority),
-       completed_at = CASE WHEN $4::boolean IS NULL THEN completed_at WHEN $4 THEN NOW() ELSE NULL END,
+       -- Ordem importa: uma data explícita ($16) manda em tudo. Sem ela, o
+       -- checkbox "concluída" ($4) só carimba se ainda não houver data —
+       -- COALESCE evita que salvar o card de novo reescreva a conclusão
+       -- original com a data de hoje.
+       completed_at = CASE
+         WHEN $16::boolean THEN $17::timestamptz
+         WHEN $4::boolean IS NULL THEN completed_at
+         WHEN $4 THEN COALESCE(completed_at, NOW())
+         ELSE NULL
+       END,
        due_date = CASE WHEN $5::boolean THEN $6::date ELSE due_date END,
        description = CASE WHEN $7::boolean THEN $8::text ELSE description END,
        archived = COALESCE($9, archived),
+       archived_at = CASE WHEN $9::boolean IS NULL THEN archived_at WHEN $9 THEN NOW() ELSE NULL END,
+       start_date = CASE WHEN $10::boolean THEN $11::date ELSE start_date END,
+       cover_color = CASE WHEN $12::boolean THEN $13::text ELSE cover_color END,
+       cover_attachment_id = CASE WHEN $14::boolean THEN $15::int ELSE cover_attachment_id END,
        updated_at = NOW()
      WHERE id = $1`,
     [
@@ -633,6 +1190,14 @@ export async function updateTask(
       touchDescription,
       touchDescription ? input.description || null : null,
       input.archived ?? null,
+      touchStart,
+      touchStart ? input.startDate || null : null,
+      touchCover,
+      touchCover ? input.coverColor || null : null,
+      touchCoverAttachment,
+      touchCoverAttachment ? input.coverAttachmentId ?? null : null,
+      touchCompletedAt,
+      touchCompletedAt ? normalizeCompletedAt(input.completedAt) : null,
     ]
   );
 }
@@ -664,10 +1229,43 @@ export async function moveTask(taskId: number, toColumnId: number | null, ordere
       }
     }
 
-    await client.query(`UPDATE ${SCHEMA}.tasks SET column_id = $2, updated_at = NOW() WHERE id = $1`, [
-      taskId,
-      toColumnId,
-    ]);
+    // Coluna marcada como "conclui a tarefa" carimba completed_at ao receber o
+    // card, e SAIR dessa coluna desmarca. Sem isto o kanban e o campo
+    // "concluída" contam histórias diferentes: o card está em Concluído e os
+    // relatórios continuam achando que está aberto.
+    //
+    // Só a origem "que concluía" pode limpar a data. Antes, qualquer movimento
+    // pra coluna comum zerava completed_at — arrastar um card entre duas
+    // colunas normais apagava a data de conclusão preenchida na mão.
+    const completesRes = toColumnId === null
+      ? null
+      : await client.query<{ completes_task: boolean }>(
+          `SELECT completes_task FROM ${SCHEMA}.task_columns WHERE id = $1`,
+          [toColumnId]
+        );
+    const completes = Boolean(completesRes?.rows[0]?.completes_task);
+
+    const fromRes = await client.query<{ completes_task: boolean }>(
+      `SELECT c.completes_task
+         FROM ${SCHEMA}.tasks t
+         JOIN ${SCHEMA}.task_columns c ON c.id = t.column_id
+        WHERE t.id = $1`,
+      [taskId]
+    );
+    const leftCompletingColumn = Boolean(fromRes.rows[0]?.completes_task) && !completes;
+
+    await client.query(
+      `UPDATE ${SCHEMA}.tasks SET
+         column_id = $2,
+         completed_at = CASE
+           WHEN $3::boolean THEN COALESCE(completed_at, NOW())
+           WHEN $4::boolean THEN NULL
+           ELSE completed_at
+         END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [taskId, toColumnId, completes, leftCompletingColumn]
+    );
 
     if (orderedTaskIds.length > 0) {
       // Uma query só, em vez de um UPDATE por card.
@@ -773,13 +1371,23 @@ async function boardIdOfTask(taskId: number): Promise<number | null> {
   return rows[0]?.board_id ?? null;
 }
 
-/** Acesso do usuário a um quadro (resolve setor). */
+/**
+ * Acesso do usuário a um quadro. Quadro com visibilidade `workspace` vale para
+ * qualquer um que já tenha view.tasks (a rota checa isso antes); os demais
+ * herdam o acesso do setor.
+ */
 export async function userCanAccessBoard(
   user: PermissionUser | null | undefined,
   boardId: number
 ): Promise<boolean> {
-  const sectorId = await sectorIdOfBoard(boardId);
-  return sectorId === null ? false : userCanAccessSector(user, sectorId);
+  const { rows } = await getPool().query<{ sector_id: number; visibility: string }>(
+    `SELECT sector_id, visibility FROM ${SCHEMA}.task_boards WHERE id = $1`,
+    [boardId]
+  );
+  const row = rows[0];
+  if (!row) return false;
+  if (row.visibility === "workspace") return true;
+  return userCanAccessSector(user, row.sector_id);
 }
 
 export async function userCanAccessColumn(user: PermissionUser | null | undefined, columnId: number): Promise<boolean> {

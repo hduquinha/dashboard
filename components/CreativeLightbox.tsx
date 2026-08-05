@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, ImageOff, Loader2, X } from "lucide-react";
-import type { AdRow, CreativeVideoSource } from "@/types/metaAds";
+import type { CreativeVideoSource, CreativeVisual } from "@/types/metaAds";
 
 interface CreativeLightboxProps {
-  ad: AdRow;
+  /** Só o necessário pra exibir (nome, imagem, vídeo) — assim serve tanto pro
+   * AdRow da galeria quanto pra uma linha diária. */
+  ad: CreativeVisual;
   onClose: () => void;
 }
 

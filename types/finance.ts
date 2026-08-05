@@ -126,7 +126,7 @@ export interface FinanceRevenue {
   hasInvoiceFile: boolean;
   invoiceFilename: string | null;
   // Agregados somente-leitura, calculados a partir de finance_revenue_payments
-  // (só têm sentido para revenueMode "avulso"; vêm 0 para linhas "legacy").
+  // (usados por receitas avulsas).
   paidAmount: number;
   balanceRemaining: number;
   paymentsFeeTotal: number;
@@ -134,6 +134,19 @@ export interface FinanceRevenue {
   netReceived: number;
   /** "Líquido previsto" = amount - paymentsFeeTotal (taxas futuras são imprevisíveis). */
   netExpected: number;
+  /**
+   * Resumo real do contrato quando esta linha é uma parcela de matrícula.
+   * O mesmo resumo aparece em todas as parcelas para deixar explícito que o
+   * pagamento é consolidado na matrícula, e não atribuído artificialmente a
+   * uma única parcela prevista.
+   */
+  enrollmentPaidAmount: number | null;
+  enrollmentBalanceRemaining: number | null;
+  enrollmentPaymentsFeeTotal: number | null;
+  enrollmentNetReceived: number | null;
+  enrollmentPaymentCount: number;
+  /** Pagamentos reais desta parcela específica, lançados pela matrícula. */
+  linkedEnrollmentPaymentCount: number;
 }
 
 export interface RevenuePayment {
@@ -161,7 +174,10 @@ export interface RevenuePayment {
 }
 
 export interface RealCommissionRow {
+  /** De onde veio o recebimento: pagamento de matrícula ou de receita avulsa. */
+  source: "matricula" | "avulso";
   paymentId: number;
+  /** Id da receita (avulso) ou da matrícula (matricula). */
   revenueId: number;
   sellerId: number;
   sellerName: string;
@@ -176,6 +192,7 @@ export interface RealCommissionRow {
 }
 
 export interface ProjectedCommissionRow {
+  source: "matricula" | "avulso";
   revenueId: number;
   sellerId: number;
   sellerName: string;
@@ -255,9 +272,86 @@ export interface FinanceEnrollment {
   branchId: number | null;
   branchName: string | null;
   ratePct: number;
+  /** Taxas previstas a partir das parcelas originalmente acordadas. */
   feeTotal: number;
+  /** Valores efetivamente registrados no histórico de pagamentos da matrícula. */
+  paidAmount: number;
+  balanceRemaining: number;
+  paymentsFeeTotal: number;
+  netReceived: number;
+  paymentCount: number;
   netTotal: number;
   notes: string | null;
+}
+
+/** Pagamento real lançado contra uma matrícula, independente do plano original de parcelas. */
+export interface EnrollmentPayment {
+  id: number;
+  enrollmentId: number;
+  /** Parcela prevista à qual este recebimento foi aplicado. */
+  revenueId: number | null;
+  revenueDescription: string | null;
+  revenueDate: string | null;
+  installmentNumber: number | null;
+  amount: number;
+  paymentDate: string;
+  paymentMethod: RevenuePaymentMethod;
+  installments: number | null;
+  cardBrandId: number | null;
+  cardBrandName: string | null;
+  feePct: number | null;
+  feeAmount: number;
+  netAmount: number;
+  notes: string | null;
+  /** URL de cobrança/checkout criada na Asaas, quando houver. */
+  asaasPaymentUrl: string | null;
+  /** Comissão do vendedor sobre este recebimento (% da matrícula aplicado ao valor pago). */
+  commissionPct: number;
+  commissionAmount: number;
+  commissionStatus: CommissionStatus;
+  commissionPaidAt: string | null;
+  createdByUserId: number | null;
+  createdByName: string | null;
+  createdAt: string;
+  hasInvoiceFile: boolean;
+  invoiceFilename: string | null;
+}
+
+/** Turma existente no calendário operacional, enriquecida para a Agenda Financeira. */
+export interface FinanceAgendaClass {
+  trainingId: string;
+  label: string;
+  startsAt: string;
+  days: number;
+  /** Datas efetivas de aula: uma turma semanal aparece em cada encontro. */
+  sessionDates: string[];
+  recurrence: "once" | "weekly";
+  durationMonths: number;
+  scheduleId: number | null;
+  /** Turmas criadas diretamente na Agenda podem ser removidas ali. */
+  isManual: boolean;
+  product: "online" | "up-day-plus" | "curso-oratoria" | null;
+  enrolledCount: number;
+  capacityId: number | null;
+  capacity: number | null;
+  seatsAvailable: number | null;
+  isFull: boolean;
+}
+
+/** Informações de cada pessoa inscrita, exibidas no detalhe da turma da Agenda. */
+export interface FinanceAgendaParticipant {
+  id: number;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  city: string | null;
+  profession: string | null;
+  role: "lead" | "recrutador" | null;
+  status: string | null;
+  recruiterName: string | null;
+  enrolledAt: string;
+  attendanceValidated: boolean;
+  attendanceApproved: boolean;
 }
 
 export interface FinanceCommissionInstallment {
@@ -320,6 +414,8 @@ export interface FinanceMonthTotals {
   profit: number;
   margin: number; // 0-100
   enrollmentsCount: number;
+  /** Valor contratado das matrículas vendidas no mês (não é a parcela do mês). */
+  enrollmentsAmount: number;
   cardFees: number;
 }
 
@@ -331,6 +427,8 @@ export interface FinanceKpi {
   /** Variação % vs mês anterior (null quando não há base de comparação). */
   deltaPct: number | null;
   format: "currency" | "number" | "percent";
+  /** Explica a base do número quando ela não é óbvia (competência × caixa, o que entra/não entra). */
+  hint?: string;
 }
 
 export interface FinanceDistributionSlice {
@@ -371,6 +469,28 @@ export interface FinanceAlertsSummary {
   pendingCommissions: FinanceAlertGroup;
 }
 
+/**
+ * Gasto acumulado de TODOS os meses, sem descontar receita. Ignora o filtro de
+ * período do topo de propósito: a pergunta é "quanto já saiu no total", não
+ * "quanto saiu no mês".
+ */
+export interface FinanceAllTimeSpend {
+  implementation: number;
+  preOperational: number;
+  fixedExpenses: number;
+  variableExpenses: number;
+  /** Soma das quatro linhas acima — é o número grande do card. */
+  total: number;
+  /** Meses futuros já lançados (não entram no total: ainda não saíram). */
+  futureProvisioned: number;
+  /** Comissões provisionadas — fora do total porque não foi pedido como gasto. */
+  commissionsProvisioned: number;
+  /** Data do lançamento mais antigo que entrou na conta. */
+  firstMovement: string | null;
+  /** Mês de corte das despesas fixas (antes disso os dados não são confiáveis). */
+  fixedFrom: string;
+}
+
 export interface FinanceDashboardSummary {
   month: string;
   kpis: FinanceKpi[];
@@ -383,6 +503,19 @@ export interface FinanceDashboardSummary {
   commissionBySeller: FinanceDistributionSlice[];
   quarterly: FinanceQuarterTotals[];
   cashBalance: number;
+  allTimeSpend: FinanceAllTimeSpend;
+  /**
+   * Recorte que realmente entrou nas contas depois do teto do mês corrente.
+   * `clamped` = o usuário pediu além do mês atual e a ponta futura foi cortada;
+   * `empty` = o recorte inteiro está no futuro e não há nada a somar.
+   */
+  effectivePeriod: {
+    from: string;
+    to: string;
+    requestedTo: string;
+    clamped: boolean;
+    empty: boolean;
+  };
 }
 
 export interface FinanceQuarterTotals {

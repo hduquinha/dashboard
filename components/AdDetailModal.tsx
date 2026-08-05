@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ImageOff, Layers, Mail, MessageCircle, Play, RotateCcw, X } from "lucide-react";
 import { AdDestination } from "@/components/AdDestination";
+import { costPer } from "@/lib/adDestinationGroups";
+import { formatCurrency, formatNullableCurrency, formatPercent } from "@/lib/campaignFormat";
 import { readableAdsetName } from "@/lib/metaAdsLabels";
+import { useOpenLeadProfile } from "@/components/LeadProfileLauncher";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
-import type { AdLeadSummary, AdRow, FunnelStageDef, MetaAdsFilters } from "@/types/metaAds";
+import type { AdLeadSummary, AdRow, FunnelStageDef, LeadBucket, MetaAdsFilters } from "@/types/metaAds";
 
 interface AdDetailModalProps {
   /** Criativo agregado (soma dos `ad_id` de mesmo nome). */
@@ -19,14 +22,6 @@ interface AdDetailModalProps {
   /** Abre o criativo (imagem plena / vídeo) em tela cheia. */
   onOpenCreative: () => void;
   onClose: () => void;
-}
-
-function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 });
-}
-
-function formatPercent(value: number | null): string {
-  return value === null ? "—" : `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
 }
 
 function formatDate(iso: string): string {
@@ -74,10 +69,36 @@ function stageBadge(label: string | null, kind: string | null) {
   );
 }
 
+/** "Já existia" cobria dois casos que significam coisas opostas para quem
+ * compra mídia: quem preencheu duas vezes agora (não é contato a mais) e quem
+ * é da base antiga e voltou (é gente de verdade). Separar os rótulos é o que
+ * torna a coluna "Cadastros" auditável olho a olho. */
+function BucketBadge({ bucket }: { bucket: LeadBucket }) {
+  if (bucket === "novo") return null;
+  const isRecontato = bucket === "recontato";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ${
+        isRecontato
+          ? "bg-[rgb(var(--blue-3))] text-[rgb(var(--blue-11))]"
+          : "bg-[rgb(var(--slate-3))] text-[rgb(var(--slate-11))]"
+      }`}
+      title={
+        isRecontato
+          ? "Já era da base antes deste período e voltou por este anúncio — conta em Cadastros, não em Novos."
+          : "Mesma pessoa preencheu de novo dentro deste período — não conta duas vezes."
+      }
+    >
+      <RotateCcw className="h-3 w-3" /> {isRecontato ? "Já existia" : "Repetido"}
+    </span>
+  );
+}
+
 export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenCreative, onClose }: AdDetailModalProps) {
   const [leads, setLeads] = useState<AdLeadSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const openLead = useOpenLeadProfile();
 
   // Um card é um criativo; busca os cadastros de TODOS os `ad_id` que ele roda.
   const adIdsKey = useMemo(
@@ -198,7 +219,7 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
           <AdDestination landingUrl={ad.landingUrl} />
 
           {/* Métricas */}
-          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3">
               <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Gasto</p>
               <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{formatCurrency(ad.spend)}</p>
@@ -211,17 +232,27 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
               <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">CTR</p>
               <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{formatPercent(ad.ctr)}</p>
             </div>
-            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3">
+            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3" title="A Meta conta ENVIO de formulário, não pessoa.">
               <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Meta marcou</p>
               <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{ad.leadsMeta}</p>
             </div>
-            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3">
-              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Cadastros salvos</p>
+            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3" title="Preenchimentos que chegaram aqui, inclusive repetido e descartado — a régua comparável com a Meta.">
+              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Envios</p>
+              <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{ad.envios}</p>
+            </div>
+            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3" title="Pessoas que este anúncio trouxe: inéditas + as que já eram da base.">
+              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Cadastros</p>
               <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{ad.cadastrosCrm}</p>
             </div>
-            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3">
-              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Contatos novos</p>
-              <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{ad.leadsCrm}</p>
+            <div className="rounded-lg bg-[rgb(var(--slate-2))] p-3" title="Pessoas inéditas no CRM.">
+              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--slate-9))]">Novos</p>
+              <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{ad.novos}</p>
+            </div>
+            <div className="rounded-lg bg-[rgb(var(--blue-2))] p-3" title="Gasto ÷ cadastros salvos deste criativo no período.">
+              <p className="text-[10px] font-semibold uppercase text-[rgb(var(--blue-11))]">Custo/lead</p>
+              <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">
+                {formatNullableCurrency(costPer(ad.spend, ad.cadastrosCrm))}
+              </p>
             </div>
           </div>
 
@@ -257,7 +288,7 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
                       <th className="px-3 py-2 font-semibold">Conjunto</th>
                       <th className="px-3 py-2 text-right font-semibold">Meta marcou</th>
                       <th className="px-3 py-2 text-right font-semibold">Cadastros</th>
-                      <th className="px-3 py-2 text-right font-semibold">Contatos novos</th>
+                      <th className="px-3 py-2 text-right font-semibold">Novos</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[rgb(var(--border-weak))]">
@@ -268,7 +299,7 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.leadsMeta}</td>
                         <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.cadastrosCrm}</td>
-                        <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.leadsCrm}</td>
+                        <td className="px-3 py-2 text-right tabular-nums text-[rgb(var(--slate-12))]">{member.novos}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -277,7 +308,7 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
                       <td className="px-3 py-2">Total do criativo</td>
                       <td className="px-3 py-2 text-right tabular-nums">{ad.leadsMeta}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{ad.cadastrosCrm}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{ad.leadsCrm}</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{ad.novos}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -285,10 +316,19 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
             </div>
           )}
 
-          {/* Lista de leads */}
+          {/* Lista de leads: mostra TODO envio que chegou (menos os descartados
+              à mão), com o rótulo de cada um. Contar só as pessoas aqui
+              esconderia justamente a linha que explica por que "Envios" é maior
+              que "Cadastros" — que é o que a pessoa veio conferir. */}
           <h4 className="mb-2 text-sm font-semibold text-[rgb(var(--slate-12))]">
-            Cadastros recebidos por este {breakdown ? "criativo" : "anúncio"} {leads ? `(${leads.length})` : ""}
+            Quem chegou por este {breakdown ? "criativo" : "anúncio"} {leads ? `(${leads.length})` : ""}
           </h4>
+          {leads && leads.some((lead) => lead.bucket !== "novo") ? (
+            <p className="mb-2 text-xs text-[rgb(var(--slate-9))]">
+              Os marcados como <strong>Repetido</strong> são a mesma pessoa preenchendo de novo e não entram em
+              Cadastros; os marcados como <strong>Já existia</strong> entram em Cadastros, mas não em Novos.
+            </p>
+          ) : null}
           {error && <p className="text-sm text-[rgb(var(--ruby-11))]">{error}</p>}
           {!error && leads === null && (
             <div className="space-y-2">
@@ -305,17 +345,24 @@ export default function AdDetailModal({ ad, members, filters, stageDefs, onOpenC
               {leads.map((lead) => (
                 <li key={lead.id} className="flex items-center justify-between gap-3 px-3 py-2">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-medium text-[rgb(var(--slate-12))]">
-                      {humanizeName(lead.nome) || "Sem nome"}
-                    </p>
+                    {openLead ? (
+                      <button
+                        type="button"
+                        onClick={() => openLead(lead.id)}
+                        className="truncate text-left text-sm font-medium text-[rgb(var(--slate-12))] underline-offset-2 hover:text-[rgb(var(--blue-11))] hover:underline"
+                        title="Abrir a ficha completa deste lead"
+                      >
+                        {humanizeName(lead.nome) || "Sem nome"}
+                      </button>
+                    ) : (
+                      <p className="truncate text-sm font-medium text-[rgb(var(--slate-12))]">
+                        {humanizeName(lead.nome) || "Sem nome"}
+                      </p>
+                    )}
                     <p className="text-xs text-[rgb(var(--slate-9))]">{formatDate(lead.criadoEm)}</p>
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-2">
-                    {lead.isReturning ? (
-                      <span className="inline-flex items-center gap-1 rounded-md bg-[rgb(var(--blue-3))] px-2 py-0.5 text-xs font-medium text-[rgb(var(--blue-11))]">
-                        <RotateCcw className="h-3 w-3" /> Já existia
-                      </span>
-                    ) : null}
+                    <BucketBadge bucket={lead.bucket} />
                     {stageBadge(lead.stageLabel, lead.stageKind)}
                     {lead.telefone && (
                       <a

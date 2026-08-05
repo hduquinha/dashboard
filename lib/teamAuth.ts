@@ -24,6 +24,7 @@ export interface TeamMember {
   distributionPosition: number;
   /** Quando true, a secao "Leads VozUP" fica oculta e /vozup bloqueado para este usuario. */
   institutoUpOnly: boolean;
+  passwordResetPromptSeenAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -39,6 +40,7 @@ interface TeamMemberRow {
   permissions: unknown;
   distribution_position: number;
   instituto_up_only: boolean;
+  password_reset_prompt_seen_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -56,6 +58,7 @@ function mapRow(row: TeamMemberRow): TeamMember {
     }),
     distributionPosition: row.distribution_position,
     institutoUpOnly: row.instituto_up_only,
+    passwordResetPromptSeenAt: row.password_reset_prompt_seen_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -95,6 +98,7 @@ export async function ensureTeamSchema(): Promise<void> {
       permissions JSONB,
       distribution_position INTEGER NOT NULL DEFAULT 0,
       instituto_up_only BOOLEAN NOT NULL DEFAULT false,
+      password_reset_prompt_seen_at TIMESTAMP WITH TIME ZONE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
       updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
@@ -102,7 +106,8 @@ export async function ensureTeamSchema(): Promise<void> {
     ALTER TABLE ${SCHEMA}.team_members
       ADD COLUMN IF NOT EXISTS priority_level INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS permissions JSONB,
-      ADD COLUMN IF NOT EXISTS instituto_up_only BOOLEAN NOT NULL DEFAULT false;
+      ADD COLUMN IF NOT EXISTS instituto_up_only BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS password_reset_prompt_seen_at TIMESTAMP WITH TIME ZONE;
 
     ALTER TABLE ${SCHEMA}.team_members
       DROP CONSTRAINT IF EXISTS team_members_role_check;
@@ -295,6 +300,31 @@ export async function updateTeamMember(id: number, input: UpdateTeamMemberInput)
   }
 
   return mapRow(rows[0]);
+}
+
+/** Registra a decisão do primeiro acesso para que o convite não reapareça. */
+export async function acknowledgePasswordResetPrompt(id: number): Promise<void> {
+  await ensureTeamSchema();
+  await getPool().query(
+    `UPDATE ${SCHEMA}.team_members
+     SET password_reset_prompt_seen_at = COALESCE(password_reset_prompt_seen_at, NOW()), updated_at = NOW()
+     WHERE id = $1`,
+    [id]
+  );
+}
+
+/** Troca voluntária da própria senha, encerrando também o convite inicial. */
+export async function resetOwnPassword(id: number, password: string): Promise<void> {
+  await ensureTeamSchema();
+  if (password.length < 8) throw new Error("A senha deve ter pelo menos 8 caracteres.");
+  const passwordHash = await hashPassword(password);
+  const result = await getPool().query(
+    `UPDATE ${SCHEMA}.team_members
+     SET password_hash = $2, password_reset_prompt_seen_at = NOW(), updated_at = NOW()
+     WHERE id = $1 AND active = TRUE`,
+    [id, passwordHash]
+  );
+  if (result.rowCount === 0) throw new Error("Usuário não encontrado ou inativo.");
 }
 
 /**

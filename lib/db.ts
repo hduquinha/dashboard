@@ -199,6 +199,18 @@ const UNIQUE_INSCRICAO_TRAINING_KEY = `LOWER(TRIM(COALESCE(NULLIF(${TRAINING_EXP
 // Uma linha por pessoa (não por pessoa+treinamento): histórico de eventos vira etiquetas
 const UNIQUE_INSCRICAO_PARTITION = UNIQUE_INSCRICAO_PERSON_KEY;
 const DASHBOARD_SCHEMA_NAME = "dashboard";
+/**
+ * Etapa filtrável: qualquer chave não-vazia, porque as etapas são livres por
+ * funil (`dashboard.funnel_stages`) desde os múltiplos funis. Exportada para
+ * ficar coberta por teste — foi uma lista fixa de chaves aqui que fez a coluna
+ * de uma etapa nova mostrar o funil inteiro.
+ */
+export function isNonEmptyStageKey(stage: string | null | undefined): stage is string {
+  return typeof stage === "string" && stage.trim().length > 0;
+}
+
+/** Etapas legadas — hoje só nomeiam o resumo do painel antigo, nunca decidem
+ * se um filtro de etapa vale. */
 const COMMERCIAL_STAGE_VALUES: CommercialStage[] = [
   "novo",
   "primeiro_contato",
@@ -1355,8 +1367,15 @@ export async function listInscricoes(
     conditions.push(`COALESCE(cl.campaign_term, ${CAMPAIGN_TERM_EXPRESSION}) = $${filtersValues.length}`);
   }
 
-  if (filters.commercialStage && COMMERCIAL_STAGE_VALUES.includes(filters.commercialStage)) {
-    filtersValues.push(filters.commercialStage);
+  // Qualquer chave de etapa filtra — inclusive as criadas no editor de funis.
+  // Antes isto exigia que a chave estivesse em COMMERCIAL_STAGE_VALUES (as 8
+  // etapas legadas): etapa nova caía fora do `if`, o filtro NÃO era aplicado e
+  // a consulta devolvia TODOS os leads do funil. Na tela isso apareceu como a
+  // coluna nova ("Compra futura") nascendo com centenas de cards repetidos das
+  // outras colunas. O valor vai parametrizado, e o /api/commercial/kanban já
+  // valida a chave contra as etapas do funil antes de chegar aqui.
+  if (isNonEmptyStageKey(filters.commercialStage)) {
+    filtersValues.push(filters.commercialStage.trim());
     conditions.push(`COALESCE(cl.commercial_stage, 'novo') = $${filtersValues.length}`);
   }
 

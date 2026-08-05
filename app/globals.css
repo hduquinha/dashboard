@@ -124,6 +124,15 @@ body {
     margin: 10mm;
   }
 
+  /* O app é uma tela cheia com rolagem interna; no papel isso vira "imprimiu
+     só a primeira página, cortada". Documento impresso rola no fluxo normal. */
+  html,
+  body {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
   body {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
@@ -140,6 +149,9 @@ body {
 
   /* Forçar main a ocupar toda a largura */
   main {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
     width: 100% !important;
     max-width: 100% !important;
     margin: 0 !important;

@@ -5,6 +5,8 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { ArrowRight, Database, DollarSign, Eye, MousePointerClick, Target, TrendingUp, UserPlus } from "lucide-react";
 import CampaignFunnel from "@/components/CampaignFunnel";
 import CampaignSetNavigator from "@/components/CampaignSetNavigator";
+import { costPer } from "@/lib/adDestinationGroups";
+import { formatCurrency, formatDayShort, formatNullableCurrency, formatNumber } from "@/lib/campaignFormat";
 import type { CampaignGroup, DailySeriesPoint, FunnelStagePoint, KpiTotals } from "@/types/metaAds";
 
 // Mesmas cores usadas em todo o resto do dashboard (ver app/globals.css:
@@ -13,23 +15,6 @@ import type { CampaignGroup, DailySeriesPoint, FunnelStagePoint, KpiTotals } fro
 const COLOR_SPEND = "#2781F6"; // --blue-9
 const COLOR_LEADS_CRM = "#12A594"; // --teal-9
 const COLOR_REGISTRATIONS_CRM = "#7C3AED";
-
-function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 });
-}
-
-function formatNumber(value: number): string {
-  return value.toLocaleString("pt-BR");
-}
-
-function formatNullableCurrency(value: number | null): string {
-  return value === null ? "—" : formatCurrency(value);
-}
-
-function formatDateShort(iso: string): string {
-  const [, month, day] = iso.split("-");
-  return `${day}/${month}`;
-}
 
 interface CampaignOverviewTabProps {
   hierarchy: CampaignGroup[];
@@ -60,23 +45,41 @@ export default function CampaignOverviewTab({
     setMounted(true);
   }, []);
 
-  const costPerRegistration = kpis.cadastrosCrm > 0 ? kpis.spend / kpis.cadastrosCrm : null;
-
   const kpiCards = [
-    { label: "Investimento", value: formatCurrency(kpis.spend), icon: DollarSign },
-    { label: "Custo por cadastro", value: formatNullableCurrency(costPerRegistration), icon: Database },
-    { label: "Custo por contato novo", value: formatNullableCurrency(kpis.cplReal), icon: UserPlus },
-    { label: "Qualificados", value: formatNumber(kpis.leadsQualificados), icon: Target },
-    { label: "Vendas fechadas", value: formatNumber(kpis.leadsFechados), icon: Target },
-    { label: "Valor fechado", value: formatCurrency(kpis.valorFechado), icon: DollarSign },
+    { label: "Investimento", value: formatCurrency(kpis.spend), hint: null, icon: DollarSign },
+    {
+      label: "Custo médio por lead",
+      value: formatNullableCurrency(kpis.custoPorCadastro),
+      hint:
+        kpis.custoPorCadastro === null
+          ? "sem cadastros no período"
+          : `${formatCurrency(kpis.spend)} ÷ ${formatNumber(kpis.cadastrosCrm)} cadastros`,
+      icon: Database,
+    },
+    {
+      label: "Custo por pessoa nova",
+      value: formatNullableCurrency(costPer(kpis.spend, kpis.novos)),
+      hint:
+        kpis.novos === 0
+          ? "sem pessoas novas no período"
+          : `${formatCurrency(kpis.spend)} ÷ ${formatNumber(kpis.novos)} inéditas`,
+      icon: UserPlus,
+    },
+    { label: "Qualificados", value: formatNumber(kpis.leadsQualificados), hint: null, icon: Target },
+    { label: "Vendas fechadas", value: formatNumber(kpis.leadsFechados), hint: null, icon: Target },
+    { label: "Valor fechado", value: formatCurrency(kpis.valorFechado), hint: null, icon: DollarSign },
   ];
 
   const flowSteps = [
     { label: "Exibições", value: formatNumber(kpis.impressions), description: "vezes que os anúncios apareceram", icon: Eye },
     { label: "Cliques", value: formatNumber(kpis.clicks), description: "cliques reportados pela Meta", icon: MousePointerClick },
     { label: "Meta marcou", value: formatNumber(kpis.leadsMeta), description: "eventos de conversão atribuídos", icon: TrendingUp },
-    { label: "Cadastros salvos", value: formatNumber(kpis.cadastrosCrm), description: "envios confirmados no banco", icon: Database },
-    { label: "Contatos novos", value: formatNumber(kpis.leadsCrm), description: "pessoas novas criadas no CRM", icon: UserPlus },
+    // Envio fica ao lado de "Meta marcou" de propósito: são a MESMA unidade
+    // (preenchimento de formulário) e é esse par que tem que andar junto. Só
+    // depois o funil estreita para pessoa e para pessoa inédita.
+    { label: "Envios", value: formatNumber(kpis.envios), description: "preenchimentos que chegaram aqui", icon: Database },
+    { label: "Cadastros", value: formatNumber(kpis.cadastrosCrm), description: "pessoas, sem contar repetição", icon: Database },
+    { label: "Novos", value: formatNumber(kpis.novos), description: "nunca tinham passado pela base", icon: UserPlus },
   ];
 
   return (
@@ -148,7 +151,7 @@ export default function CampaignOverviewTab({
           <h2 id="campaign-business-heading" className="text-lg font-semibold text-[rgb(var(--slate-12))]">
             Resultado comercial
           </h2>
-          <p className="text-sm text-[rgb(var(--slate-10))]">Custos e avanço dos contatos novos dentro do CRM.</p>
+          <p className="text-sm text-[rgb(var(--slate-10))]">Custos e avanço das pessoas novas dentro do CRM.</p>
         </div>
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-6">
           {kpiCards.map((metric) => (
@@ -160,14 +163,17 @@ export default function CampaignOverviewTab({
                 <metric.icon className="h-4 w-4 text-[rgb(var(--blue-9))]" />
                 <span className="text-xs font-medium text-[rgb(var(--slate-10))]">{metric.label}</span>
               </div>
-              <p className="text-lg font-semibold text-[rgb(var(--slate-12))]">{metric.value}</p>
+              <p className="text-lg font-semibold tabular-nums text-[rgb(var(--slate-12))]">{metric.value}</p>
+              {metric.hint ? (
+                <p className="mt-0.5 text-[11px] leading-snug text-[rgb(var(--slate-9))]">{metric.hint}</p>
+              ) : null}
             </div>
           ))}
         </div>
       </section>
 
       <div className="rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-5 shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
-        <h3 className="mb-1 text-base font-semibold text-[rgb(var(--slate-12))]">Onde os contatos novos estão no funil</h3>
+        <h3 className="mb-1 text-base font-semibold text-[rgb(var(--slate-12))]">Onde as pessoas novas estão no funil</h3>
         <p className="mb-4 text-xs text-[rgb(var(--slate-9))]">Cadastros repetidos não duplicam a mesma pessoa nesta visão comercial.</p>
         <CampaignFunnel stages={initialFunnel} />
       </div>
@@ -183,10 +189,10 @@ export default function CampaignOverviewTab({
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={series} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f3" />
-                  <XAxis dataKey="date" tickFormatter={formatDateShort} stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="date" tickFormatter={formatDayShort} stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} />
                   <YAxis stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} />
                   <Tooltip
-                    labelFormatter={(label) => formatDateShort(String(label))}
+                    labelFormatter={(label) => formatDayShort(String(label))}
                     formatter={(value: number) => formatCurrency(value)}
                     contentStyle={{ backgroundColor: "#fff", borderRadius: "8px", border: "1px solid #eaeaea" }}
                   />
@@ -201,16 +207,18 @@ export default function CampaignOverviewTab({
 
         <div className="rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-5 shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
           <h3 className="mb-1 text-base font-semibold text-[rgb(var(--slate-12))]">Cadastros recebidos por dia</h3>
-          <p className="mb-4 text-xs text-[rgb(var(--slate-9))]">Cadastros salvos e quantos eram contatos novos.</p>
+          <p className="mb-4 text-xs text-[rgb(var(--slate-9))]">
+            Pessoas que chegaram no dia e quantas delas eram inéditas na base.
+          </p>
           <div className="h-[240px] w-full">
             {mounted ? (
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={series} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f3" />
-                  <XAxis dataKey="date" tickFormatter={formatDateShort} stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} />
+                  <XAxis dataKey="date" tickFormatter={formatDayShort} stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} />
                   <YAxis stroke="#60646c" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
                   <Tooltip
-                    labelFormatter={(label) => formatDateShort(String(label))}
+                    labelFormatter={(label) => formatDayShort(String(label))}
                     contentStyle={{ backgroundColor: "#fff", borderRadius: "8px", border: "1px solid #eaeaea" }}
                   />
                   <Line
@@ -218,10 +226,10 @@ export default function CampaignOverviewTab({
                     dataKey="cadastrosCrm"
                     stroke={COLOR_REGISTRATIONS_CRM}
                     strokeWidth={2}
-                    name="Cadastros salvos"
+                    name="Cadastros"
                     dot={false}
                   />
-                  <Line type="linear" dataKey="leadsCrm" stroke={COLOR_LEADS_CRM} strokeWidth={2} name="Contatos novos" dot={false} />
+                  <Line type="linear" dataKey="novos" stroke={COLOR_LEADS_CRM} strokeWidth={2} name="Novos" dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             ) : (

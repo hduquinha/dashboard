@@ -1,36 +1,46 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ChevronRight, Megaphone, Layers, Image as ImageIcon } from "lucide-react";
+import { AlertTriangle, ChevronRight, Megaphone, Layers } from "lucide-react";
+import AdDetailModal from "@/components/AdDetailModal";
+import CreativeLightbox from "@/components/CreativeLightbox";
+import CreativeThumb from "@/components/CreativeThumb";
+import { costPer } from "@/lib/adDestinationGroups";
+import { formatCurrency, formatNullableCurrency, formatNumber } from "@/lib/campaignFormat";
 import { isAdvantagePlusAdset, readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
-import type { AdRow, AdsetGroup, AggregatedMetrics, CampaignGroup } from "@/types/metaAds";
+import type { AdRow, AdsetGroup, AggregatedMetrics, CampaignGroup, FunnelStageDef, MetaAdsFilters } from "@/types/metaAds";
 
 interface CampaignTableTabProps {
   hierarchy: CampaignGroup[];
+  /** Período da tela: o modal lista os cadastros dessa mesma janela. */
+  filters: Pick<MetaAdsFilters, "from" | "to">;
+  stageDefs: FunnelStageDef[];
 }
 
-type SortKey = "spend" | "cadastrosCrm" | "leadsCrm";
+type SortKey = "spend" | "cadastrosCrm" | "novos" | "custoPorLead";
 
 const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: "spend", label: "Investimento" },
   { key: "cadastrosCrm", label: "Cadastros" },
-  { key: "leadsCrm", label: "Contatos novos" },
+  { key: "novos", label: "Pessoas novas" },
+  { key: "custoPorLead", label: "Lead mais barato" },
 ];
 
-function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 });
-}
+type SortableTotals = Pick<AggregatedMetrics, "spend" | "cadastrosCrm" | "novos">;
 
-function formatNumber(value: number): string {
-  return value.toLocaleString("pt-BR");
-}
+/** Ordenação: as contagens vão do maior pro menor, mas custo por lead é o
+ * contrário — o melhor é o mais baixo. Quem não tem cadastro (custo
+ * incalculável) cai pro fim da lista, ordenado por gasto, para "lead mais
+ * barato" não premiar quem não trouxe lead nenhum. */
+function compareBySort(a: SortableTotals, b: SortableTotals, sortKey: SortKey): number {
+  if (sortKey !== "custoPorLead") return b[sortKey] - a[sortKey];
 
-function formatNullableCurrency(value: number | null): string {
-  return value === null ? "—" : formatCurrency(value);
-}
-
-function costPerContact(totals: Pick<AggregatedMetrics, "spend" | "leadsCrm">): number | null {
-  return totals.leadsCrm > 0 ? totals.spend / totals.leadsCrm : null;
+  const costA = costPer(a.spend, a.cadastrosCrm);
+  const costB = costPer(b.spend, b.cadastrosCrm);
+  if (costA === null && costB === null) return b.spend - a.spend;
+  if (costA === null) return 1;
+  if (costB === null) return -1;
+  return costA - costB;
 }
 
 function statusLabel(status: string): string {
@@ -61,24 +71,29 @@ function StatusDot({ status }: { status: string }) {
 function MetricStrip({
   spend,
   leadsMeta,
+  envios,
   cadastros,
-  contatos,
+  novos,
 }: {
   spend: number;
   leadsMeta: number;
+  envios: number;
   cadastros: number;
-  contatos: number;
+  novos: number;
 }) {
-  const gap = leadsMeta > cadastros;
-  const cpc = costPerContact({ spend, leadsCrm: contatos });
+  // O alerta compara ENVIO com ENVIO. Enquanto ele comparava o número da Meta
+  // com "Cadastros" (pessoas), acendia em todo anúncio que teve uma repetição —
+  // ruído, não sinal. Agora só acende quando a Meta contou mais preenchimento
+  // do que chegou aqui, que é perda de atribuição de verdade.
+  const gap = leadsMeta > envios;
   const cell = "flex flex-col items-end";
   return (
-    <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-right sm:grid-cols-5">
+    <div className="grid grid-cols-3 gap-x-4 gap-y-1 text-right sm:grid-cols-7">
       <div className={cell}>
         <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Investido</span>
         <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatCurrency(spend)}</span>
       </div>
-      <div className={`${cell} hidden sm:flex`} title="Eventos de Lead atribuídos pela Meta.">
+      <div className={`${cell} hidden sm:flex`} title="Eventos de Lead atribuídos pela Meta. Ela conta ENVIO de formulário, não pessoa.">
         <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Meta marcou</span>
         <span
           className={`inline-flex items-center gap-1 text-sm font-semibold tabular-nums ${
@@ -89,51 +104,89 @@ function MetricStrip({
           {formatNumber(leadsMeta)}
         </span>
       </div>
-      <div className={cell} title="Envios salvos pelo formulário, incluindo contatos que já existiam.">
+      <div
+        className={`${cell} hidden sm:flex`}
+        title="Todo preenchimento atribuído a este anúncio, inclusive repetido e descartado. Fala a mesma língua da Meta — é por aqui que se compara com o gerenciador."
+      >
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Envios</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNumber(envios)}</span>
+      </div>
+      <div className={cell} title="Pessoas que este anúncio trouxe: as novas mais as que já eram da base e voltaram.">
         <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Cadastros</span>
         <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNumber(cadastros)}</span>
       </div>
-      <div className={cell} title="Pessoas novas criadas no CRM.">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Contatos novos</span>
-        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--teal-9))]">{formatNumber(contatos)}</span>
+      <div className={`${cell} hidden sm:flex`} title="Pessoas inéditas no CRM — nunca tinham passado pela base.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Novos</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--teal-9))]">{formatNumber(novos)}</span>
       </div>
-      <div className={`${cell} hidden sm:flex`} title="Investimento ÷ contatos novos.">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/contato</span>
-        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNullableCurrency(cpc)}</span>
+      <div className={cell} title="Investimento ÷ cadastros — o custo médio por pessoa trazida.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/lead</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--blue-11))]">
+          {formatNullableCurrency(costPer(spend, cadastros))}
+        </span>
+      </div>
+      <div className={`${cell} hidden sm:flex`} title="Investimento ÷ pessoas novas.">
+        <span className="text-[10px] font-medium uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/novo</span>
+        <span className="text-sm font-semibold tabular-nums text-[rgb(var(--slate-12))]">
+          {formatNullableCurrency(costPer(spend, novos))}
+        </span>
       </div>
     </div>
   );
 }
 
-function AdRowLine({ ad }: { ad: AdRow }) {
-  const src = ad.thumbnailUrl ?? ad.imageUrl;
+function AdRowLine({
+  ad,
+  onOpenCreative,
+  onOpenDetail,
+}: {
+  ad: AdRow;
+  onOpenCreative: (ad: AdRow) => void;
+  onOpenDetail: (ad: AdRow) => void;
+}) {
   return (
     <div className="flex flex-col gap-2 py-2.5 pl-14 pr-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="flex min-w-0 items-center gap-2.5">
-        {src ? (
-          // eslint-disable-next-line @next/next/no-img-element -- miniatura do CDN do Meta
-          <img src={src} alt="" className="h-9 w-9 flex-shrink-0 rounded object-cover" loading="lazy" />
-        ) : (
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded bg-[rgb(var(--slate-3))]">
-            <ImageIcon className="h-4 w-4 text-[rgb(var(--slate-8))]" />
-          </span>
-        )}
+        <CreativeThumb creative={ad} onOpen={() => onOpenCreative(ad)} />
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-[rgb(var(--slate-12))]" title={ad.adName}>
+          {/* Ver a peça e ver QUEM ela trouxe são perguntas diferentes: a
+              miniatura abre o criativo, o nome abre os cadastros. */}
+          <button
+            type="button"
+            onClick={() => onOpenDetail(ad)}
+            title={`${ad.adName} — ver os cadastros deste anúncio`}
+            className="block max-w-full truncate text-left text-sm font-medium text-[rgb(var(--slate-12))] underline decoration-transparent underline-offset-2 transition hover:decoration-[rgb(var(--blue-9))] hover:text-[rgb(var(--blue-11))]"
+          >
             {ad.adName}
-          </p>
+          </button>
           <StatusDot status={ad.effectiveStatus ?? ad.status} />
         </div>
       </div>
-      <MetricStrip spend={ad.spend} leadsMeta={ad.leadsMeta} cadastros={ad.cadastrosCrm} contatos={ad.leadsCrm} />
+      <MetricStrip
+        spend={ad.spend}
+        leadsMeta={ad.leadsMeta}
+        envios={ad.envios}
+        cadastros={ad.cadastrosCrm}
+        novos={ad.novos}
+      />
     </div>
   );
 }
 
-function AdsetRow({ adset, sortKey }: { adset: AdsetGroup; sortKey: SortKey }) {
+function AdsetRow({
+  adset,
+  sortKey,
+  onOpenCreative,
+  onOpenDetail,
+}: {
+  adset: AdsetGroup;
+  sortKey: SortKey;
+  onOpenCreative: (ad: AdRow) => void;
+  onOpenDetail: (ad: AdRow) => void;
+}) {
   const [open, setOpen] = useState(false);
   const ads = useMemo(
-    () => [...adset.ads].sort((a, b) => b[sortKey] - a[sortKey]),
+    () => [...adset.ads].sort((a, b) => compareBySort(a, b, sortKey)),
     [adset.ads, sortKey]
   );
   return (
@@ -163,15 +216,16 @@ function AdsetRow({ adset, sortKey }: { adset: AdsetGroup; sortKey: SortKey }) {
           <MetricStrip
             spend={adset.totals.spend}
             leadsMeta={adset.totals.leadsMeta}
+            envios={adset.totals.envios}
             cadastros={adset.totals.cadastrosCrm}
-            contatos={adset.totals.leadsCrm}
+            novos={adset.totals.novos}
           />
         </div>
       </button>
       {open ? (
         <div className="bg-[rgb(var(--slate-1))]">
           {ads.map((ad) => (
-            <AdRowLine key={ad.adId} ad={ad} />
+            <AdRowLine key={ad.adId} ad={ad} onOpenCreative={onOpenCreative} onOpenDetail={onOpenDetail} />
           ))}
         </div>
       ) : null}
@@ -179,10 +233,20 @@ function AdsetRow({ adset, sortKey }: { adset: AdsetGroup; sortKey: SortKey }) {
   );
 }
 
-function CampaignRow({ campaign, sortKey }: { campaign: CampaignGroup; sortKey: SortKey }) {
+function CampaignRow({
+  campaign,
+  sortKey,
+  onOpenCreative,
+  onOpenDetail,
+}: {
+  campaign: CampaignGroup;
+  sortKey: SortKey;
+  onOpenCreative: (ad: AdRow) => void;
+  onOpenDetail: (ad: AdRow) => void;
+}) {
   const [open, setOpen] = useState(false);
   const adsets = useMemo(
-    () => [...campaign.adsets].sort((a, b) => b.totals[sortKey] - a.totals[sortKey]),
+    () => [...campaign.adsets].sort((a, b) => compareBySort(a.totals, b.totals, sortKey)),
     [campaign.adsets, sortKey]
   );
   return (
@@ -210,21 +274,36 @@ function CampaignRow({ campaign, sortKey }: { campaign: CampaignGroup; sortKey: 
           <MetricStrip
             spend={campaign.totals.spend}
             leadsMeta={campaign.totals.leadsMeta}
+            envios={campaign.totals.envios}
             cadastros={campaign.totals.cadastrosCrm}
-            contatos={campaign.totals.leadsCrm}
+            novos={campaign.totals.novos}
           />
         </div>
       </button>
-      {open ? <div className="border-t border-[rgb(var(--border-weak))]">{adsets.map((adset) => <AdsetRow key={adset.adsetId} adset={adset} sortKey={sortKey} />)}</div> : null}
+      {open ? (
+        <div className="border-t border-[rgb(var(--border-weak))]">
+          {adsets.map((adset) => (
+            <AdsetRow
+              key={adset.adsetId}
+              adset={adset}
+              sortKey={sortKey}
+              onOpenCreative={onOpenCreative}
+              onOpenDetail={onOpenDetail}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export default function CampaignTableTab({ hierarchy }: CampaignTableTabProps) {
+export default function CampaignTableTab({ hierarchy, filters, stageDefs }: CampaignTableTabProps) {
   const [sortKey, setSortKey] = useState<SortKey>("spend");
+  const [lightboxAd, setLightboxAd] = useState<AdRow | null>(null);
+  const [detailAd, setDetailAd] = useState<AdRow | null>(null);
 
   const campaigns = useMemo(
-    () => [...hierarchy].sort((a, b) => b.totals[sortKey] - a.totals[sortKey]),
+    () => [...hierarchy].sort((a, b) => compareBySort(a.totals, b.totals, sortKey)),
     [hierarchy, sortKey]
   );
 
@@ -236,7 +315,15 @@ export default function CampaignTableTab({ hierarchy }: CampaignTableTabProps) {
             Campanhas em camadas
           </h2>
           <p className="text-sm text-[rgb(var(--slate-10))]">
-            Clique numa campanha para abrir os conjuntos; clique num conjunto para abrir os anúncios.
+            Clique numa campanha para abrir os conjuntos; clique num conjunto para abrir os anúncios. No nome do
+            anúncio, você vê quem se cadastrou por ele; na miniatura, o criativo abre em tela cheia.
+          </p>
+          <p className="mt-1 text-xs text-[rgb(var(--slate-9))]">
+            <strong className="font-semibold text-[rgb(var(--slate-10))]">Envios</strong> é o número que fala a
+            língua da Meta (cada preenchimento conta, mesmo repetido);{" "}
+            <strong className="font-semibold text-[rgb(var(--slate-10))]">Cadastros</strong> é gente de verdade; e{" "}
+            <strong className="font-semibold text-[rgb(var(--slate-10))]">Novos</strong>, quem nunca tinha passado
+            pela base.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -264,7 +351,13 @@ export default function CampaignTableTab({ hierarchy }: CampaignTableTabProps) {
       {campaigns.length > 0 ? (
         <div className="space-y-2.5">
           {campaigns.map((campaign) => (
-            <CampaignRow key={campaign.campaignId} campaign={campaign} sortKey={sortKey} />
+            <CampaignRow
+              key={campaign.campaignId}
+              campaign={campaign}
+              sortKey={sortKey}
+              onOpenCreative={setLightboxAd}
+              onOpenDetail={setDetailAd}
+            />
           ))}
         </div>
       ) : (
@@ -272,6 +365,21 @@ export default function CampaignTableTab({ hierarchy }: CampaignTableTabProps) {
           Nenhuma campanha para esse recorte no período selecionado.
         </div>
       )}
+
+      {detailAd ? (
+        <AdDetailModal
+          key={detailAd.adId}
+          ad={detailAd}
+          filters={filters}
+          stageDefs={stageDefs}
+          onOpenCreative={() => setLightboxAd(detailAd)}
+          onClose={() => setDetailAd(null)}
+        />
+      ) : null}
+
+      {lightboxAd ? (
+        <CreativeLightbox key={lightboxAd.adId} ad={lightboxAd} onClose={() => setLightboxAd(null)} />
+      ) : null}
     </section>
   );
 }

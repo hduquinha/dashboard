@@ -26,11 +26,14 @@ function isStatusFilter(value: string): value is MetaAdsStatusFilter {
 }
 
 export function parseMetaAdsFilters(searchParams: URLSearchParams): MetaAdsFilters {
-  const statusRaw = searchParams.get("status") ?? "active";
+  // Mesmo padrão da página: "todas". Status é filtro de listagem, não de
+  // contabilidade — quem foi pausado ontem gastou dentro do período do mesmo
+  // jeito e precisa entrar na conta (ver DELIVERED_OR_HAS_LEAD em lib/metaAds).
+  const statusRaw = searchParams.get("status") ?? "all";
   return {
     from: searchParams.get("from") || "",
     to: searchParams.get("to") || "",
-    status: isStatusFilter(statusRaw) ? statusRaw : "active",
+    status: isStatusFilter(statusRaw) ? statusRaw : "all",
     search: searchParams.get("q") || undefined,
   };
 }

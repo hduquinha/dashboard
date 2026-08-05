@@ -213,6 +213,10 @@ async function ensureCommercialLeadRow(inscricaoId: number): Promise<void> {
       )
       ON CONFLICT (inscricao_id)
       DO UPDATE SET
+        -- Linha criada por outro caminho (ex.: ingest da landing page) pode ter
+        -- vindo sem funil; sem isso o lead nunca aparece em nenhuma coluna do
+        -- Kanban, que filtra por funnel_id.
+        funnel_id = COALESCE(${SCHEMA}.commercial_leads.funnel_id, EXCLUDED.funnel_id),
         campaign_source = COALESCE(${SCHEMA}.commercial_leads.campaign_source, EXCLUDED.campaign_source),
         campaign_name = COALESCE(${SCHEMA}.commercial_leads.campaign_name, EXCLUDED.campaign_name),
         campaign_medium = COALESCE(${SCHEMA}.commercial_leads.campaign_medium, EXCLUDED.campaign_medium),
@@ -543,6 +547,7 @@ export async function applyCommercialLeadAssignment(
           assigned_by_email = $6,
           assigned_by_name = $7,
           assigned_at = NOW(),
+          funnel_id = COALESCE(funnel_id, $11),
           commercial_stage = CASE WHEN $8 THEN $10 ELSE commercial_stage END,
           commercial_stage_kind = CASE WHEN $8 THEN 'entry' ELSE commercial_stage_kind END,
           position = CASE WHEN $8 THEN NULL ELSE position END,
@@ -564,6 +569,7 @@ export async function applyCommercialLeadAssignment(
       resetToEntry,
       wasClosed,
       entryStage.key,
+      funnel.id,
     ]
   );
   if (wasClosed) {

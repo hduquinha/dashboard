@@ -79,6 +79,9 @@ interface EntityDef {
 const ENTITY_DEFS: Record<string, EntityDef> = {
   revenue: { table: "finance_revenues", label: "Receita" },
   revenue_payment: { table: "finance_revenue_payments", label: "Pagamento de receita" },
+  enrollment_payment: { table: "finance_enrollment_payments", label: "Pagamento de matrícula" },
+  agenda_capacity: { table: "finance_training_capacities", label: "Capacidade de turma" },
+  agenda_schedule: { table: "finance_training_schedules", label: "Agenda de turma" },
   fixed_expense: { table: "finance_fixed_expenses", label: "Despesa fixa" },
   variable_expense: { table: "finance_variable_expenses", label: "Despesa variável" },
   enrollment: { table: "finance_enrollments", label: "Matrícula" },

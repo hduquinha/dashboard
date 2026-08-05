@@ -5,7 +5,7 @@ import { deleteTeam, setTeamMembers, updateTeam } from "@/lib/tasks";
 export const dynamic = "force-dynamic";
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasksMaster(request);
+  const auth = await requireTasksMaster(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
   const teamId = Number(id);
@@ -18,7 +18,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasksMaster(request);
+  const auth = await requireTasksMaster(request);
   if (!auth.ok) return auth.response;
   const { id } = await params;
   await deleteTeam(Number(id));

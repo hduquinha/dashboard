@@ -1,3 +1,4 @@
+import { addEngagement, emptyEngagement } from "@/lib/metaAdsEngagement";
 import type { AdRow } from "@/types/metaAds";
 
 /**
@@ -71,9 +72,15 @@ export function groupAdsByCreative(ads: AdRow[]): CreativeGroup[] {
     const leadsCrm = members.reduce((total, m) => total + m.leadsCrm, 0);
     const leadsFechados = members.reduce((total, m) => total + m.leadsFechados, 0);
 
+    const engagement = emptyEngagement();
+    for (const member of members) addEngagement(engagement, member);
+
     const card: AdRow = {
+      ...engagement,
       adId: members[0].adId,
       adName: key,
+      campaignObjective: members[0].campaignObjective,
+      campaignPurpose: members[0].campaignPurpose,
       ...pickStatus(members),
       thumbnailUrl: members.find((m) => m.thumbnailUrl)?.thumbnailUrl ?? null,
       imageUrl: members.find((m) => m.imageUrl)?.imageUrl ?? null,
@@ -95,6 +102,11 @@ export function groupAdsByCreative(ads: AdRow[]): CreativeGroup[] {
       frequency: null,
       leadsMeta: members.reduce((total, m) => total + m.leadsMeta, 0),
       cadastrosCrm: members.reduce((total, m) => total + m.cadastrosCrm, 0),
+      envios: members.reduce((total, m) => total + m.envios, 0),
+      descartados: members.reduce((total, m) => total + m.descartados, 0),
+      repetidos: members.reduce((total, m) => total + m.repetidos, 0),
+      recontatos: members.reduce((total, m) => total + m.recontatos, 0),
+      novos: members.reduce((total, m) => total + m.novos, 0),
       leadsCrm,
       leadsQualificados: members.reduce((total, m) => total + m.leadsQualificados, 0),
       leadsFechados,

@@ -1,10 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Clock, Mail, MessageCircle, RotateCcw, UserRound } from "lucide-react";
 import { readableCampaignName } from "@/lib/metaAdsLabels";
+import CreativeLightbox from "@/components/CreativeLightbox";
+import CreativeThumb from "@/components/CreativeThumb";
+import { useOpenLeadProfile } from "@/components/LeadProfileLauncher";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
-import type { FunnelStageKind, RecentAdLead } from "@/types/metaAds";
+import type { CreativeVisual, FunnelStageKind, RecentAdLead } from "@/types/metaAds";
 
 interface RecentLeadsTabProps {
   leads: RecentAdLead[];
@@ -42,6 +45,8 @@ function initials(name: string | null): string {
 
 export default function RecentLeadsTab({ leads, scoped }: RecentLeadsTabProps) {
   const withoutSeller = useMemo(() => leads.filter((l) => !l.sellerName).length, [leads]);
+  const [lightboxCreative, setLightboxCreative] = useState<CreativeVisual | null>(null);
+  const openLead = useOpenLeadProfile();
 
   return (
     <section aria-labelledby="recent-leads-heading" className="space-y-4">
@@ -77,22 +82,50 @@ export default function RecentLeadsTab({ leads, scoped }: RecentLeadsTabProps) {
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                      <p className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]">
-                        {humanizeName(lead.nome) || "Sem nome"}
-                      </p>
-                      {lead.isReturning ? (
-                        <span className="inline-flex items-center gap-1 rounded-md bg-[rgb(var(--blue-3))] px-1.5 py-0.5 text-[10px] font-medium text-[rgb(var(--blue-11))]">
-                          <RotateCcw className="h-3 w-3" /> Já existia
+                      {openLead ? (
+                        <button
+                          type="button"
+                          onClick={() => openLead(lead.id)}
+                          className="truncate text-left text-sm font-semibold text-[rgb(var(--slate-12))] underline-offset-2 hover:text-[rgb(var(--blue-11))] hover:underline"
+                          title="Abrir a ficha completa deste lead"
+                        >
+                          {humanizeName(lead.nome) || "Sem nome"}
+                        </button>
+                      ) : (
+                        <p className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]">
+                          {humanizeName(lead.nome) || "Sem nome"}
+                        </p>
+                      )}
+                      {lead.bucket !== "novo" ? (
+                        <span
+                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${
+                            lead.bucket === "recontato"
+                              ? "bg-[rgb(var(--blue-3))] text-[rgb(var(--blue-11))]"
+                              : "bg-[rgb(var(--slate-3))] text-[rgb(var(--slate-11))]"
+                          }`}
+                          title={
+                            lead.bucket === "recontato"
+                              ? "Já era da base e voltou por este anúncio."
+                              : "Mesma pessoa preencheu de novo dentro deste período."
+                          }
+                        >
+                          <RotateCcw className="h-3 w-3" /> {lead.bucket === "recontato" ? "Já existia" : "Repetido"}
                         </span>
                       ) : null}
                     </div>
                     <p className="mt-0.5 flex items-center gap-1 text-[11px] text-[rgb(var(--slate-9))]" title={fullDate(lead.criadoEm)}>
                       <Clock className="h-3 w-3" /> {timeAgo(lead.criadoEm)}
                     </p>
-                    <p className="mt-1 truncate text-xs text-[rgb(var(--slate-10))]" title={`${lead.campaignName} → ${lead.adsetName} → ${lead.adName}`}>
-                      <span className="font-medium text-[rgb(var(--slate-11))]">{lead.adName}</span>
-                      <span className="text-[rgb(var(--slate-8))]"> · {readableCampaignName(lead.campaignName)}</span>
-                    </p>
+                    <div className="mt-1 flex min-w-0 items-center gap-2">
+                      <CreativeThumb creative={lead} onOpen={() => setLightboxCreative(lead)} />
+                      <p
+                        className="min-w-0 truncate text-xs text-[rgb(var(--slate-10))]"
+                        title={`${lead.campaignName} → ${lead.adsetName} → ${lead.adName}`}
+                      >
+                        <span className="font-medium text-[rgb(var(--slate-11))]">{lead.adName}</span>
+                        <span className="text-[rgb(var(--slate-8))]"> · {readableCampaignName(lead.campaignName)}</span>
+                      </p>
+                    </div>
                   </div>
                 </div>
 
@@ -139,6 +172,14 @@ export default function RecentLeadsTab({ leads, scoped }: RecentLeadsTabProps) {
           Nenhum lead de anúncio chegou neste recorte e período.
         </div>
       )}
+
+      {lightboxCreative ? (
+        <CreativeLightbox
+          key={lightboxCreative.adName}
+          ad={lightboxCreative}
+          onClose={() => setLightboxCreative(null)}
+        />
+      ) : null}
     </section>
   );
 }

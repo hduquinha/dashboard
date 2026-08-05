@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { AlarmClock, Bell, Inbox, UserPlus, X } from "lucide-react";
+import { AlarmClock, Bell, Inbox, ListChecks, MessageSquare, UserPlus, X } from "lucide-react";
 import type { AppNotification, AppNotificationKind } from "@/types/notifications";
 
 const ICON_BY_KIND: Record<AppNotificationKind, typeof Bell> = {
@@ -9,6 +9,9 @@ const ICON_BY_KIND: Record<AppNotificationKind, typeof Bell> = {
   lead_assigned: UserPlus,
   stale_lead: AlarmClock,
   undistributed_lead: AlarmClock,
+  task_assigned: ListChecks,
+  task_mention: MessageSquare,
+  task_due: AlarmClock,
 };
 
 interface NotificationToastsProps {

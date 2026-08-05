@@ -7,6 +7,7 @@ import { Bell, Menu } from "lucide-react";
 import LeadNotifications from "@/components/LeadNotifications";
 import ModernSidebar from "@/components/ModernSidebar";
 import NotificationToasts from "@/components/NotificationToasts";
+import PasswordResetPrompt from "@/components/PasswordResetPrompt";
 import { useAppNotifications } from "@/components/useAppNotifications";
 import type { DashboardUser } from "@/lib/auth";
 
@@ -14,12 +15,14 @@ interface DashboardLayoutClientProps {
   children: React.ReactNode;
   currentUser?: DashboardUser | null;
   duplicateCount: number;
+  showPasswordResetPrompt: boolean;
 }
 
 export default function DashboardLayoutClient({
   children,
   currentUser,
   duplicateCount,
+  showPasswordResetPrompt,
 }: DashboardLayoutClientProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [mobileOpenPathname, setMobileOpenPathname] = useState<string | null>(null);
@@ -29,9 +32,15 @@ export default function DashboardLayoutClient({
   const notifications = useAppNotifications();
 
   return (
-    <div className="flex h-dvh w-full overflow-hidden bg-[#f5f8fb] text-slate-950">
+    // Na impressão o quadro deixa de ser "tela cheia com rolagem interna": sem
+    // isso o navegador imprime só o pedaço visível do <main> e o documento sai
+    // com uma página só, cortado no meio.
+    <div className="flex h-dvh w-full overflow-hidden bg-[#f5f8fb] text-slate-950 print:block print:h-auto print:overflow-visible print:bg-white">
       <LeadNotifications />
-      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-white/10 bg-[var(--dashboard-navy)] px-3 text-white shadow-[0_12px_30px_rgba(2,19,37,0.18)] lg:hidden">
+      {showPasswordResetPrompt && currentUser ? <PasswordResetPrompt name={currentUser.name} /> : null}
+      {/* Barra de topo do celular: `lg:hidden` não vale no papel (a largura de
+          impressão é menor que lg), então ela precisa sumir explicitamente. */}
+      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-white/10 bg-[var(--dashboard-navy)] px-3 text-white shadow-[0_12px_30px_rgba(2,19,37,0.18)] lg:hidden print:hidden">
         <div className="flex items-center gap-3">
           <button
             onClick={() => setMobileOpenPathname(pathname)}
@@ -75,8 +84,10 @@ export default function DashboardLayoutClient({
         closeMobileSidebar={() => setMobileOpenPathname(null)}
       />
       
-      <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 transition-all duration-300 lg:pt-0">
-        <div className={isVozupWorkspace ? "min-h-full p-0" : "min-h-full p-3 sm:p-4 lg:p-6"}>
+      <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 transition-all duration-300 lg:pt-0 print:h-auto print:overflow-visible print:pt-0">
+        <div
+          className={`${isVozupWorkspace ? "min-h-full p-0" : "min-h-full p-3 sm:p-4 lg:p-6"} print:min-h-0 print:p-0`}
+        >
           {children}
         </div>
       </main>

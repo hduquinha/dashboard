@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 const HEX = /^#[0-9a-fA-F]{6}$/;
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasks(request);
+  const auth = await requireTasks(request);
   if (!auth.ok) return auth.response;
   const labelId = Number((await params).id);
   if (!(await userCanAccessLabel(auth.user, labelId))) {
@@ -22,7 +22,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 }
 
 export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = requireTasks(request);
+  const auth = await requireTasks(request);
   if (!auth.ok) return auth.response;
   const labelId = Number((await params).id);
   if (!(await userCanAccessLabel(auth.user, labelId))) {

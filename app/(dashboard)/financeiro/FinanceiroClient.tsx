@@ -56,6 +56,9 @@ import type {
   CommissionsOverview,
   ExpenseStatus,
   FinanceAlertGroup,
+  FinanceAllTimeSpend,
+  FinanceAgendaClass,
+  FinanceAgendaParticipant,
   FinanceBranchItem,
   FinanceCatalog,
   FinanceCategoryKind,
@@ -73,7 +76,7 @@ import type {
   RevenueStatus,
 } from "@/types/finance";
 import FinanceAuditPanel from "@/components/FinanceAuditPanel";
-import RevenuePaymentsPanel from "./RevenuePaymentsPanel";
+import EnrollmentPaymentsPanel from "./EnrollmentPaymentsPanel";
 
 type TabKey =
   | "dashboard"
@@ -82,6 +85,7 @@ type TabKey =
   | "gastos"
   | "filiais"
   | "matriculas"
+  | "agenda"
   | "comissoes"
   | "trimestral"
   | "configuracoes"
@@ -101,27 +105,30 @@ interface FinanceiroClientProps {
   summary: FinanceDashboardSummary;
   revenues: FinanceRevenue[];
   fixedExpenses: FinanceFixedExpense[];
+  fixedExpensesLocked: boolean;
   variableExpenses: FinanceVariableExpense[];
   enrollments: FinanceEnrollment[];
+  agenda: FinanceAgendaClass[];
   commissions: FinanceCommission[];
   branchItems: FinanceBranchItem[];
   commissionPanel: FinanceCommissionPanel;
   filters: FinanceFilters;
   month: string;
-  periodMode: "month" | "custom";
-  gastosVisao: "mes" | "todos";
+  periodMode: PeriodMode;
   receitasVisao: "mes" | "todos";
   fluxoVisao: "mes" | "todos";
   matriculasVisao: "mes" | "todos";
   comissoesVisao: "mes" | "todos";
-  allTimeTotals: FinanceMonthTotals | null;
   allMonthlyTotals: FinanceMonthTotals[] | null;
   commissionsOverview: CommissionsOverview;
   /** Pode remover eventos do Registro de Auditoria (permissão admin.audit). */
   canDeleteAuditEvents: boolean;
 }
 
-type VisaoKey = "gastosVisao" | "receitasVisao" | "fluxoVisao" | "matriculasVisao" | "comissoesVisao";
+type VisaoKey = "receitasVisao" | "fluxoVisao" | "matriculasVisao" | "comissoesVisao";
+
+/** Recorte do filtro do topo: um mês, um intervalo escolhido, ou todo o histórico. */
+type PeriodMode = "month" | "custom" | "all";
 
 interface Column<T> {
   key: string;
@@ -148,6 +155,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof LineChartIcon }> = 
   { key: "gastos", label: "Despesas", icon: ReceiptText },
   { key: "filiais", label: "Unidade Tatuapé", icon: Building2 },
   { key: "matriculas", label: "Matrículas", icon: CalendarDays },
+  { key: "agenda", label: "Agenda de Turmas", icon: CalendarDays },
   { key: "comissoes", label: "Comissões", icon: Banknote },
   { key: "trimestral", label: "Consolidação Trimestral", icon: FileDown },
   { key: "configuracoes", label: "Configurações Financeiras", icon: Settings2 },
@@ -238,6 +246,7 @@ function sumClientTotals(monthly: FinanceMonthTotals[]): FinanceMonthTotals {
     profit: 0,
     margin: 0,
     enrollmentsCount: 0,
+    enrollmentsAmount: 0,
     cardFees: 0,
   };
   for (const item of monthly) {
@@ -250,6 +259,7 @@ function sumClientTotals(monthly: FinanceMonthTotals[]): FinanceMonthTotals {
     totals.totalExpenses += item.totalExpenses;
     totals.profit += item.profit;
     totals.enrollmentsCount += item.enrollmentsCount;
+    totals.enrollmentsAmount += item.enrollmentsAmount;
     totals.cardFees += item.cardFees;
   }
   totals.margin = totals.revenue > 0 ? (totals.profit / totals.revenue) * 100 : 0;
@@ -615,6 +625,7 @@ function KpiCard({ kpi }: { kpi: FinanceKpi }) {
       <p className="mt-1 text-xs text-slate-400">
         Mês anterior: {kpi.previous === null ? "sem base" : kpi.format === "currency" ? money(kpi.previous) : kpi.format === "percent" ? percent(kpi.previous) : number(kpi.previous)}
       </p>
+      {kpi.hint ? <p className="mt-2 text-[11px] font-semibold leading-snug text-slate-500">{kpi.hint}</p> : null}
     </div>
   );
 }
@@ -1027,6 +1038,94 @@ function FinanceOverviewPanel({ summary }: { summary: FinanceDashboardSummary })
   );
 }
 
+/**
+ * Sem este aviso, selecionar setembro mostraria tudo zerado enquanto a aba
+ * Despesas lista a folha de setembro — parece bug, mas é a regra: mês que ainda
+ * não aconteceu não entra em cálculo.
+ */
+function FuturePeriodNotice({ period }: { period: FinanceDashboardSummary["effectivePeriod"] }) {
+  if (!period.clamped && !period.empty) return null;
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+      {period.empty ? (
+        <>
+          O período selecionado ainda não aconteceu, então não há valores para somar. Indicadores e gráficos consideram
+          no máximo {monthLabel(period.to)}.
+        </>
+      ) : (
+        <>
+          Você pediu até {monthLabel(period.requestedTo)}, mas os cálculos vão só até {monthLabel(period.to)}. Despesa
+          fixa já provisionada para os meses seguintes não entra em KPI, lucro nem gráfico — só aparece na lista da aba
+          Despesas.
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Gasto acumulado da empresa — soma de tudo que saiu, sem descontar receita.
+ * De propósito NÃO reage ao filtro de período do topo; o aviso no rodapé diz
+ * isso, senão o número parece quebrado quando o usuário troca o mês.
+ */
+function TotalSpendPanel({ spend }: { spend: FinanceAllTimeSpend }) {
+  const linhas = [
+    { label: "Implementação", value: spend.implementation, color: "bg-violet-500" },
+    { label: "Pré-operacional", value: spend.preOperational, color: "bg-sky-500" },
+    { label: "Despesas Fixas", value: spend.fixedExpenses, color: "bg-rose-500" },
+    { label: "Despesas Variáveis", value: spend.variableExpenses, color: "bg-amber-500" },
+  ];
+  const desde = spend.firstMovement
+    ? new Date(`${spend.firstMovement}T00:00:00`).toLocaleDateString("pt-BR", { month: "long", year: "numeric" })
+    : null;
+
+  return (
+    <Section>
+      <SectionHeader
+        title="Gasto Total Acumulado"
+        subtitle="Tudo que saiu desde o início, somando todos os meses. Não desconta receita."
+      />
+      <div className="grid gap-5 p-5 lg:grid-cols-[minmax(0,260px)_1fr] lg:items-start">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Total geral</p>
+          <p className="mt-2 text-3xl font-black tracking-tight text-rose-700">{money(spend.total)}</p>
+          {desde ? <p className="mt-1 text-xs font-semibold text-slate-500">Desde {desde}</p> : null}
+        </div>
+
+        <div className="grid gap-2.5">
+          {linhas.map((linha) => {
+            const share = spend.total > 0 ? (linha.value / spend.total) * 100 : 0;
+            return (
+              <div key={linha.label}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="text-xs font-black uppercase tracking-[0.12em] text-slate-600">{linha.label}</span>
+                  <span className="text-sm font-black text-slate-950">
+                    {money(linha.value)}
+                    <span className="ml-2 text-[11px] font-bold text-slate-400">{percent(share)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                  <div className={cn("h-full rounded-full", linha.color)} style={{ width: `${Math.min(share, 100)}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="border-t border-slate-100 px-5 py-3 text-[11px] font-semibold leading-relaxed text-slate-500">
+        Não entra no total:{" "}
+        <strong className="text-slate-700">{money(spend.futureProvisioned)}</strong> já lançados para meses futuros
+        {spend.commissionsProvisioned > 0 ? (
+          <> e <strong className="text-slate-700">{money(spend.commissionsProvisioned)}</strong> de comissões provisionadas</>
+        ) : null}
+        . Despesas fixas contam a partir de {spend.fixedFrom} (antes disso os meses foram semeados automaticamente e não
+        representam gasto real). Este card mostra a empresa inteira — não muda com o filtro de período do topo.
+      </div>
+    </Section>
+  );
+}
+
 function FinanceAlertsPanel({ alerts }: { alerts: FinanceDashboardSummary["alerts"] }) {
   return (
     <Section>
@@ -1059,13 +1158,13 @@ function AlertGroupBlock({
   }[tone];
 
   return (
-    <div className="grid content-start gap-3 p-5">
+    <div className="grid min-w-0 content-start gap-3 overflow-hidden p-5">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-black text-slate-950">{title}</p>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-black text-slate-950">{title}</p>
           <p className="mt-1 text-xs font-bold text-slate-500">{group.count} registro{group.count === 1 ? "" : "s"}</p>
         </div>
-        <span className={cn("inline-flex rounded-md px-2 py-1 text-xs font-black ring-1", toneClasses)}>
+        <span className={cn("inline-flex shrink-0 rounded-md px-2 py-1 text-xs font-black ring-1", toneClasses)}>
           {money(group.total)}
         </span>
       </div>
@@ -1074,9 +1173,9 @@ function AlertGroupBlock({
         <div className="grid gap-2">
           {group.items.map((item) => (
             <div key={item.id} className="grid gap-1 border-t border-slate-100 pt-2 first:border-t-0 first:pt-0">
-              <div className="flex items-center justify-between gap-3">
-                <p className="truncate text-sm font-bold text-slate-700">{item.label}</p>
-                <p className="whitespace-nowrap text-sm font-black text-slate-950">{money(item.amount)}</p>
+              <div className="flex min-w-0 items-center justify-between gap-3">
+                <p className="min-w-0 flex-1 truncate text-sm font-bold text-slate-700">{item.label}</p>
+                <p className="shrink-0 whitespace-nowrap text-sm font-black text-slate-950">{money(item.amount)}</p>
               </div>
               <p className="truncate text-xs font-semibold text-slate-500">
                 {dateLabel(item.date)}{item.detail ? ` · ${item.detail}` : ""}
@@ -1102,20 +1201,20 @@ export default function FinanceiroClient({
   summary,
   revenues,
   fixedExpenses,
+  fixedExpensesLocked,
   variableExpenses,
   enrollments,
+  agenda,
   commissions,
   branchItems,
   commissionPanel,
   filters,
   month,
   periodMode,
-  gastosVisao,
   receitasVisao,
   fluxoVisao,
   matriculasVisao,
   comissoesVisao,
-  allTimeTotals,
   allMonthlyTotals,
   commissionsOverview,
   canDeleteAuditEvents,
@@ -1123,7 +1222,7 @@ export default function FinanceiroClient({
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
   const [modal, setModal] = useState<ModalState>(null);
-  const [paymentsPanelRevenue, setPaymentsPanelRevenue] = useState<FinanceRevenue | null>(null);
+  const [paymentsPanelEnrollment, setPaymentsPanelEnrollment] = useState<{ id: number; readOnly: boolean } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [localFilters, setLocalFilters] = useState({
@@ -1136,7 +1235,6 @@ export default function FinanceiroClient({
     categoryId: filters.categoryId ? String(filters.categoryId) : "",
     sellerId: filters.sellerId ? String(filters.sellerId) : "",
     paymentMethodId: filters.paymentMethodId ? String(filters.paymentMethodId) : "",
-    gastosVisao,
     receitasVisao,
     fluxoVisao,
     matriculasVisao,
@@ -1168,17 +1266,24 @@ export default function FinanceiroClient({
   }
 
   function applyFilters() {
-    const params = new URLSearchParams({ month: localFilters.month });
+    // Em "Período", o mês base passa a ser o início do intervalo: é ele que
+    // rotula os cards e alimenta o painel de comissões do mês. Em "Tudo" quem
+    // resolve o intervalo é o servidor, a partir do primeiro movimento.
+    const selectedFrom = localFilters.from || localFilters.month;
+    const selectedTo = localFilters.to || selectedFrom;
+    const baseMonth = localFilters.periodMode === "custom" ? selectedFrom : localFilters.month;
+    const params = new URLSearchParams(localFilters.periodMode === "all" ? {} : { month: baseMonth });
     if (localFilters.periodMode === "custom") {
       params.set("periodo", "custom");
-      params.set("from", localFilters.from || localFilters.month);
-      params.set("to", localFilters.to || localFilters.from || localFilters.month);
+      params.set("from", selectedFrom);
+      params.set("to", selectedTo);
     }
+    if (localFilters.periodMode === "all") params.set("periodo", "all");
     for (const key of ["branchId", "courseId", "categoryId", "sellerId", "paymentMethodId"] as const) {
       const value = localFilters[key];
       if (value) params.set(key, value);
     }
-    for (const key of ["gastosVisao", "receitasVisao", "fluxoVisao", "matriculasVisao", "comissoesVisao"] as const) {
+    for (const key of ["receitasVisao", "fluxoVisao", "matriculasVisao", "comissoesVisao"] as const) {
       if (localFilters[key] === "todos") params.set(key, "todos");
     }
     router.push(`/financeiro?${params.toString()}`);
@@ -1375,6 +1480,30 @@ export default function FinanceiroClient({
     }
   }
 
+  // Recorte ativo do filtro do topo. Em "Mês" é um mês só; em "Período" é o
+  // intervalo escolhido; em "Tudo" é todo o histórico resolvido no servidor.
+  // As abas rotulam e filtram por ele, não pelo mês base.
+  const periodFrom = filters.from || month;
+  const periodTo = filters.to || month;
+  const periodLabel =
+    periodMode === "all"
+      ? "todos os meses"
+      : periodFrom === periodTo
+        ? monthLabel(periodFrom)
+        : `${monthLabel(periodFrom)} a ${monthLabel(periodTo)}`;
+  // Em "Tudo" o addon por aba não tem o que alternar: o recorte global já é o
+  // histórico inteiro.
+  const showVisaoToggle = periodMode !== "all";
+
+  // Dimensões que só existem em receita: filtrar por elas deixa o resultado do
+  // período com 100% das despesas contra uma fatia da receita.
+  const partialFilterLabels = [
+    filters.courseId ? "curso" : null,
+    filters.sellerId ? "vendedor" : null,
+    filters.paymentMethodId ? "forma de pagamento" : null,
+    filters.categoryId ? "categoria" : null,
+  ].filter((item): item is string => item !== null);
+
   const chartMonthly = summary.monthly.map((item) => ({
     mes: item.month.slice(5),
     receitas: item.revenue,
@@ -1401,7 +1530,7 @@ export default function FinanceiroClient({
           </div>
           <div className="grid w-full gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
             <Field label="Tipo de período">
-              <div className="grid h-10 grid-cols-2 rounded-lg border border-slate-200 bg-white p-1">
+              <div className="grid h-10 grid-cols-3 rounded-lg border border-slate-200 bg-white p-1">
                 <button
                   type="button"
                   onClick={() => setLocalFilters((current) => ({ ...current, periodMode: "month", from: current.month, to: current.month }))}
@@ -1414,7 +1543,12 @@ export default function FinanceiroClient({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setLocalFilters((current) => ({ ...current, periodMode: "custom" }))}
+                  onClick={() => setLocalFilters((current) => ({
+                    ...current,
+                    periodMode: "custom",
+                    from: current.from || current.month,
+                    to: current.to || current.month,
+                  }))}
                   className={cn(
                     "rounded-md text-xs font-black transition",
                     localFilters.periodMode === "custom" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
@@ -1422,21 +1556,35 @@ export default function FinanceiroClient({
                 >
                   Período
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setLocalFilters((current) => ({ ...current, periodMode: "all" }))}
+                  className={cn(
+                    "rounded-md text-xs font-black transition",
+                    localFilters.periodMode === "all" ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
+                  )}
+                >
+                  Tudo
+                </button>
               </div>
             </Field>
-            <Field label={localFilters.periodMode === "custom" ? "Mês base" : "Mês"}>
-              <input
-                type="month"
-                value={localFilters.month}
-                onChange={(event) => setLocalFilters((current) => ({
-                  ...current,
-                  month: event.target.value,
-                  from: current.periodMode === "month" ? event.target.value : current.from,
-                  to: current.periodMode === "month" ? event.target.value : current.to,
-                }))}
-                className={inputClass}
-              />
-            </Field>
+            {/* Em "Período" o mês base é o próprio início do intervalo — manter os
+                dois campos fazia o usuário escolher três datas para um recorte só. */}
+            {localFilters.periodMode === "month" ? (
+              <Field label="Mês">
+                <input
+                  type="month"
+                  value={localFilters.month}
+                  onChange={(event) => setLocalFilters((current) => ({
+                    ...current,
+                    month: event.target.value,
+                    from: event.target.value,
+                    to: event.target.value,
+                  }))}
+                  className={inputClass}
+                />
+              </Field>
+            ) : null}
             {localFilters.periodMode === "custom" ? (
               <>
                 <Field label="De mês">
@@ -1456,6 +1604,13 @@ export default function FinanceiroClient({
                   />
                 </Field>
               </>
+            ) : null}
+            {periodMode === "all" && localFilters.periodMode === "all" ? (
+              <Field label="Intervalo">
+                <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600">
+                  {monthLabel(periodFrom)} a {monthLabel(periodTo)}
+                </div>
+              </Field>
             ) : null}
             <Field label="Unidade">
               <select value={localFilters.branchId} onChange={(event) => setLocalFilters((current) => ({ ...current, branchId: event.target.value }))} className={inputClass}>
@@ -1516,6 +1671,14 @@ export default function FinanceiroClient({
           </div>
         ) : null}
 
+        {partialFilterLabels.length > 0 ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <span className="font-black">Filtro parcial:</span>{" "}
+            {partialFilterLabels.join(" e ")} {partialFilterLabels.length === 1 ? "filtra" : "filtram"} apenas as receitas — despesas
+            fixas, variáveis e comissões não têm essa informação e continuam inteiras. Lucro e margem ficam distorcidos neste recorte.
+          </div>
+        ) : null}
+
         {activeTab === "dashboard" ? (
           <DashboardTab summary={summary} chartMonthly={chartMonthly} month={month} filters={filters} />
         ) : null}
@@ -1524,7 +1687,8 @@ export default function FinanceiroClient({
           <FluxoTab
             monthly={localFilters.fluxoVisao === "todos" && allMonthlyTotals ? allMonthlyTotals : summary.monthly}
             cashBalance={summary.cashBalance}
-            month={localFilters.month}
+            periodLabel={periodLabel}
+            showVisaoToggle={showVisaoToggle}
             fluxoVisao={localFilters.fluxoVisao}
             onChangeFluxoVisao={(next) => setVisao("fluxoVisao", next)}
           />
@@ -1533,25 +1697,22 @@ export default function FinanceiroClient({
         {activeTab === "receitas" ? (
           <ReceitasTab
             rows={revenues}
-            month={localFilters.month}
+            periodLabel={periodLabel}
+            showVisaoToggle={showVisaoToggle}
+            periodFrom={periodFrom}
+            periodTo={periodTo}
             receitasVisao={localFilters.receitasVisao}
             onChangeReceitasVisao={(next) => setVisao("receitasVisao", next)}
-            onAdd={() => setModal({ type: "revenue", mode: "create" })}
-            onEdit={(record) => setModal({ type: "revenue", mode: "edit", record })}
-            onDelete={(record) => destroy(`/api/finance/revenues/${record.id}`, "receita")}
-            onOpenPayments={(record) => setPaymentsPanelRevenue(record)}
-            onAddEnrollment={() => setModal({ type: "enrollment", mode: "create" })}
+            onOpenEnrollment={(enrollmentId) => setPaymentsPanelEnrollment({ id: enrollmentId, readOnly: true })}
           />
         ) : null}
 
         {activeTab === "gastos" ? (
           <GastosTab
             fixed={fixedExpenses}
+            fixedExpensesLocked={fixedExpensesLocked}
             variable={variableExpenses}
-            totals={localFilters.gastosVisao === "todos" && allTimeTotals ? allTimeTotals : (currentTotals as FinanceMonthTotals)}
-            month={localFilters.month}
-            gastosVisao={localFilters.gastosVisao}
-            onChangeGastosVisao={(next) => setVisao("gastosVisao", next)}
+            totals={currentTotals as FinanceMonthTotals}
             onAddFixed={() => setModal({ type: "fixed", mode: "create" })}
             onEditFixed={(record) => setModal({ type: "fixed", mode: "edit", record })}
             onDeleteFixed={(record) => destroy(`/api/finance/fixed-expenses/${record.id}`, "despesa fixa")}
@@ -1582,12 +1743,37 @@ export default function FinanceiroClient({
           <MatriculasTab
             rows={enrollments}
             catalog={catalog}
-            month={localFilters.month}
+            periodLabel={periodLabel}
+            showVisaoToggle={showVisaoToggle}
             matriculasVisao={localFilters.matriculasVisao}
             onChangeMatriculasVisao={(next) => setVisao("matriculasVisao", next)}
             onAdd={() => setModal({ type: "enrollment", mode: "create" })}
             onEdit={(record) => setModal({ type: "enrollment", mode: "edit", record })}
             onDelete={(record) => destroy(`/api/finance/enrollments/${record.id}`, "matrícula")}
+            onOpenPayments={(enrollmentId) => setPaymentsPanelEnrollment({ id: enrollmentId, readOnly: false })}
+          />
+        ) : null}
+
+        {activeTab === "agenda" ? (
+          <AgendaTab
+            rows={agenda}
+            month={localFilters.month}
+            onSaveCapacity={async (trainingId, capacity) => {
+              await apiJson("/api/finance/agenda/capacities", "POST", { trainingId, capacity });
+              refresh("Capacidade da turma atualizada.");
+            }}
+            onSaveSchedule={async (trainingId, schedule) => {
+              await apiJson("/api/finance/agenda/schedules", "POST", { trainingId, ...schedule });
+              refresh("Calendário da turma atualizado.");
+            }}
+            onCreateClass={async (classInput) => {
+              await apiJson("/api/finance/agenda/classes", "POST", classInput);
+              refresh("Turma criada na agenda.");
+            }}
+            onDeleteClass={async (trainingId) => {
+              await apiJson(`/api/finance/agenda/classes/${encodeURIComponent(trainingId)}`, "DELETE");
+              refresh("Turma excluída da agenda.");
+            }}
           />
         ) : null}
 
@@ -1597,6 +1783,8 @@ export default function FinanceiroClient({
             panel={commissionPanel}
             overview={commissionsOverview}
             month={month}
+            periodLabel={periodLabel}
+            showVisaoToggle={showVisaoToggle}
             comissoesVisao={localFilters.comissoesVisao}
             onChangeComissoesVisao={(next) => setVisao("comissoesVisao", next)}
             onAdd={() => setModal({ type: "commission", mode: "create" })}
@@ -1605,8 +1793,9 @@ export default function FinanceiroClient({
               await apiJson(`/api/finance/commission-installments/${id}`, "PATCH", { status });
               refresh("Parcela atualizada.");
             }}
-            onToggleRealCommission={async (paymentId, status) => {
-              await apiJson(`/api/finance/revenue-payments/${paymentId}/commission-status`, "PATCH", { status });
+            onToggleRealCommission={async (paymentId, status, source) => {
+              const base = source === "matricula" ? "enrollment-payments" : "revenue-payments";
+              await apiJson(`/api/finance/${base}/${paymentId}/commission-status`, "PATCH", { status });
               refresh("Comissão atualizada.");
             }}
           />
@@ -1642,15 +1831,13 @@ export default function FinanceiroClient({
         />
       ) : null}
 
-      {paymentsPanelRevenue ? (
-        <RevenuePaymentsPanel
-          revenue={paymentsPanelRevenue}
+      {paymentsPanelEnrollment ? (
+        <EnrollmentPaymentsPanel
+          enrollmentId={paymentsPanelEnrollment.id}
           cardBrands={catalog.cardBrands.filter((brand) => brand.active)}
-          onClose={() => setPaymentsPanelRevenue(null)}
-          onChanged={(updatedRevenue) => {
-            setPaymentsPanelRevenue(updatedRevenue);
-            refresh();
-          }}
+          readOnly={paymentsPanelEnrollment.readOnly}
+          onClose={() => setPaymentsPanelEnrollment(null)}
+          onChanged={() => refresh()}
         />
       ) : null}
     </div>
@@ -1670,7 +1857,11 @@ function DashboardTab({
 }) {
   return (
     <div className="space-y-5">
+      <FuturePeriodNotice period={summary.effectivePeriod} />
+
       <FinanceOverviewPanel summary={summary} />
+
+      <TotalSpendPanel spend={summary.allTimeSpend} />
 
       <FinanceAlertsPanel alerts={summary.alerts} />
 
@@ -1994,13 +2185,15 @@ function SimpleBarChart({ data }: { data: Array<{ name: string; value: number }>
 function FluxoTab({
   monthly,
   cashBalance,
-  month,
+  periodLabel,
+  showVisaoToggle,
   fluxoVisao,
   onChangeFluxoVisao,
 }: {
   monthly: FinanceMonthTotals[];
   cashBalance: number;
-  month: string;
+  periodLabel: string;
+  showVisaoToggle: boolean;
   fluxoVisao: "mes" | "todos";
   onChangeFluxoVisao: (next: "mes" | "todos") => void;
 }) {
@@ -2016,7 +2209,7 @@ function FluxoTab({
         <KpiMini label="Margem" value={percent(current?.margin)} />
         <KpiMini label="Saldo Final" value={money(cashBalance)} />
       </div>
-      <VisaoToggle visao={fluxoVisao} month={month} onChange={onChangeFluxoVisao} itemsLabel="Tabela mensal" />
+      {showVisaoToggle ? <VisaoToggle visao={fluxoVisao} periodLabel={periodLabel} onChange={onChangeFluxoVisao} itemsLabel="Tabela mensal" /> : null}
       <Section>
         <SectionHeader title="Fluxo de caixa dinâmico" subtitle="Uma tela por período, atualizada pelo seletor de mês e ano." />
         <div className="p-5">
@@ -2053,43 +2246,60 @@ function RowActions({ children }: { children: ReactNode }) {
 
 function ReceitasTab({
   rows,
-  month,
+  periodLabel,
+  showVisaoToggle,
+  periodFrom,
+  periodTo,
   receitasVisao,
   onChangeReceitasVisao,
-  onAdd,
-  onEdit,
-  onDelete,
-  onOpenPayments,
-  onAddEnrollment,
+  onOpenEnrollment,
 }: {
   rows: FinanceRevenue[];
-  month: string;
+  periodLabel: string;
+  showVisaoToggle: boolean;
+  periodFrom: string;
+  periodTo: string;
   receitasVisao: "mes" | "todos";
   onChangeReceitasVisao: (next: "mes" | "todos") => void;
-  onAdd: () => void;
-  onEdit: (record: FinanceRevenue) => void;
-  onDelete: (record: FinanceRevenue) => void;
-  onOpenPayments: (record: FinanceRevenue) => void;
-  onAddEnrollment: () => void;
+  onOpenEnrollment: (enrollmentId: number) => void;
 }) {
   const [scope, setScope] = useState<"todas" | "avulsas" | "parcelas">("todas");
   const visibleRows = rows.filter((item) => scope === "todas" || (scope === "avulsas" ? item.revenueMode === "avulso" : item.enrollmentId !== null));
   const activeRows = visibleRows.filter((item) => item.status !== "cancelado");
-  const total = activeRows.reduce((sum, item) => sum + item.amount, 0);
-  // Parcelas legadas não têm pagamentos parciais; seu status continua sendo a fonte de verdade.
-  const totalRecebido = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.paidAmount : item.status === "recebido" ? item.amount : 0), 0);
-  const totalSaldo = Math.max(0, total - totalRecebido);
-  const totalAtrasado = activeRows.filter((item) => item.status === "atrasado").reduce((sum, item) => sum + item.amount, 0);
-  const totalTaxas = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.paymentsFeeTotal : item.feeAmount), 0);
-  const totalComissao = activeRows.reduce((sum, item) => sum + item.paymentsCommissionTotal, 0);
-  const totalLiquidoRecebido = activeRows.reduce((sum, item) => sum + (item.revenueMode === "avulso" ? item.netReceived : item.status === "recebido" ? item.amount - item.feeAmount : 0), 0);
-  const totalLiquidoPrevisto = Math.max(0, total - totalTaxas);
+  // Mesmo com a lista em "todos os meses", os indicadores acima sempre
+  // representam somente o recorte escolhido no filtro global (mês ou período).
+  const monthRows = activeRows.filter((item) => {
+    const itemMonth = item.date.slice(0, 7);
+    return itemMonth >= periodFrom && itemMonth <= periodTo;
+  });
+  const total = monthRows.reduce((sum, item) => sum + item.amount, 0);
+  // Matrículas nunca viram "recebidas" apenas pelo status legado: o valor só
+  // entra no caixa depois de um pagamento real ser lançado e vinculado à parcela.
+  const isTracked = (item: FinanceRevenue) => item.revenueMode === "avulso" || item.enrollmentId !== null;
+  const receivedFor = (item: FinanceRevenue) => isTracked(item) ? item.paidAmount : item.status === "recebido" ? item.amount : 0;
+  const balanceFor = (item: FinanceRevenue) => isTracked(item) ? item.balanceRemaining : item.status === "recebido" ? 0 : item.amount;
+  const feesFor = (item: FinanceRevenue) => isTracked(item) ? item.paymentsFeeTotal : item.feeAmount;
+  const netReceivedFor = (item: FinanceRevenue) => isTracked(item) ? item.netReceived : item.status === "recebido" ? item.amount - item.feeAmount : 0;
+  const statusFor = (item: FinanceRevenue): RevenueStatus => {
+    if (item.enrollmentId === null) return item.status;
+    if (item.paidAmount >= item.amount) return "recebido";
+    if (item.paidAmount > 0) return "parcial";
+    return (item.dueDate ?? item.date) < new Date().toISOString().slice(0, 10) ? "atrasado" : "previsto";
+  };
+  const totalRecebido = monthRows.reduce((sum, item) => sum + receivedFor(item), 0);
+  const totalSaldo = monthRows.reduce((sum, item) => sum + balanceFor(item), 0);
+  const totalAtrasado = monthRows.filter((item) => statusFor(item) === "atrasado").reduce((sum, item) => sum + balanceFor(item), 0);
+  const totalTaxas = monthRows.reduce((sum, item) => sum + feesFor(item), 0);
+  const totalComissao = monthRows.reduce((sum, item) => sum + item.paymentsCommissionTotal, 0);
+  const totalLiquidoRecebido = monthRows.reduce((sum, item) => sum + netReceivedFor(item), 0);
+  const totalTaxasPrevistas = monthRows.reduce((sum, item) => sum + feesFor(item), 0);
+  const totalLiquidoPrevisto = Math.max(0, total - totalTaxasPrevistas);
   return (
     <div className="space-y-5">
-      <VisaoToggle visao={receitasVisao} month={month} onChange={onChangeReceitasVisao} itemsLabel="Lista" />
+      {showVisaoToggle ? <VisaoToggle visao={receitasVisao} periodLabel={periodLabel} onChange={onChangeReceitasVisao} itemsLabel="Lista" /> : null}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
         <span className="font-black">Leitura financeira:</span>
-        <span>vendas e matrículas ficam na aba própria; aqui você acompanha parcelas, recebimentos e receitas no período.</span>
+        <span>Esta aba é somente para acompanhamento. Cadastre e receba valores em Matrículas; aqui cada parcela mostra o que foi previsto, recebido e ainda pode ser recebido.</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {(["todas", "avulsas", "parcelas"] as const).map((item) => (
@@ -2099,7 +2309,7 @@ function ReceitasTab({
         ))}
       </div>
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-        <KpiMini label="Previsto no período" value={money(total)} />
+        <KpiMini label={`Previsto em ${periodLabel}`} value={money(total)} />
         <KpiMini label="Recebido" value={money(totalRecebido)} />
         <KpiMini label="Saldo a receber" value={money(totalSaldo)} />
         <KpiMini label="Em atraso" value={money(totalAtrasado)} />
@@ -2111,8 +2321,7 @@ function ReceitasTab({
       <Section>
         <SectionHeader
           title="Receitas e contas a receber"
-          subtitle={`${visibleRows.length} lançamento(s) · previsto: ${money(total)} · recebido: ${money(totalRecebido)}`}
-          action={<div className="flex flex-wrap gap-2"><button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Receita avulsa</button><button type="button" onClick={onAddEnrollment} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 hover:border-cyan-300 hover:text-cyan-700"><CalendarDays size={16} />Matrícula</button></div>}
+          subtitle={`${monthRows.length} lançamento(s) no mês · previsto: ${money(total)} · recebido: ${money(totalRecebido)}`}
         />
         <div className="p-5">
           <SmartTable
@@ -2128,22 +2337,22 @@ function ReceitasTab({
               {
                 key: "paid",
                 label: "Recebido",
-                render: (r) => (r.revenueMode === "avulso" ? money(r.paidAmount) : "-"),
-                value: (r) => (r.revenueMode === "avulso" ? r.paidAmount : null),
+                render: (r) => money(receivedFor(r)),
+                value: (r) => receivedFor(r),
               },
               {
                 key: "balance",
                 label: "Saldo Restante",
-                render: (r) => (r.revenueMode === "avulso" ? money(r.balanceRemaining) : "-"),
-                value: (r) => (r.revenueMode === "avulso" ? r.balanceRemaining : null),
+                render: (r) => money(balanceFor(r)),
+                value: (r) => balanceFor(r),
               },
               {
                 key: "status",
                 label: "Status",
                 render: (r) => (
-                  <StatusBadge status={r.status} label={r.revenueMode === "avulso" ? AVULSO_STATUS_LABELS[r.status] : undefined} />
+                  <StatusBadge status={statusFor(r)} label={isTracked(r) ? AVULSO_STATUS_LABELS[statusFor(r)] : undefined} />
                 ),
-                value: (r) => r.status,
+                value: (r) => statusFor(r),
               },
               {
                 key: "invoice",
@@ -2154,11 +2363,7 @@ function ReceitasTab({
             ]}
             actions={(record) => (
               <RowActions>
-                {record.revenueMode === "avulso" ? (
-                  <IconButton title="Histórico de pagamentos" onClick={() => onOpenPayments(record)}><WalletCards size={15} /></IconButton>
-                ) : null}
-                <IconButton title="Editar receita" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
-                <IconButton title="Excluir receita" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
+                {record.enrollmentId !== null ? <IconButton title="Ver matrícula e recebimentos" onClick={() => onOpenEnrollment(record.enrollmentId!)}><WalletCards size={15} /></IconButton> : <span className="text-xs font-semibold text-slate-400">Somente leitura</span>}
               </RowActions>
             )}
           />
@@ -2201,12 +2406,13 @@ function fixedExpenseSortKey(row: FinanceFixedExpense): string {
 /** Addon "ver todos os meses" — reaproveitado nas abas Despesas, Receitas, Fluxo, Matrículas e Comissões. */
 function VisaoToggle({
   visao,
-  month,
+  periodLabel,
   onChange,
   itemsLabel = "Cards e listas",
 }: {
   visao: "mes" | "todos";
-  month: string;
+  /** "julho de 2026" ou "julho de 2026 a dezembro de 2026" — o recorte do filtro do topo. */
+  periodLabel: string;
   onChange: (next: "mes" | "todos") => void;
   itemsLabel?: string;
 }) {
@@ -2214,10 +2420,10 @@ function VisaoToggle({
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-3">
       <div>
         <p className="text-sm font-black text-slate-900">
-          {itemsLabel} exibindo: {visao === "todos" ? "todos os meses" : monthLabel(month)}
+          {itemsLabel} exibindo: {visao === "todos" ? "todos os meses" : periodLabel}
         </p>
         <p className="text-xs text-slate-500">
-          Por padrão mostra só o mês selecionado no filtro do topo.
+          Por padrão mostra só o período selecionado no filtro do topo.
         </p>
       </div>
       <div className="grid h-10 grid-cols-2 rounded-lg border border-slate-200 bg-slate-50 p-1">
@@ -2248,11 +2454,9 @@ function VisaoToggle({
 
 function GastosTab({
   fixed,
+  fixedExpensesLocked,
   variable,
   totals,
-  month,
-  gastosVisao,
-  onChangeGastosVisao,
   onAddFixed,
   onEditFixed,
   onDeleteFixed,
@@ -2261,11 +2465,9 @@ function GastosTab({
   onDeleteVariable,
 }: {
   fixed: FinanceFixedExpense[];
+  fixedExpensesLocked: boolean;
   variable: FinanceVariableExpense[];
   totals: FinanceMonthTotals;
-  month: string;
-  gastosVisao: "mes" | "todos";
-  onChangeGastosVisao: (next: "mes" | "todos") => void;
   onAddFixed: () => void;
   onEditFixed: (record: FinanceFixedExpense) => void;
   onDeleteFixed: (record: FinanceFixedExpense) => void;
@@ -2290,8 +2492,6 @@ function GastosTab({
         <KpiMini label="Lucro Líquido" value={money(totals.profit)} />
         <KpiMini label="Margem" value={percent(totals.margin)} />
       </div>
-
-      <VisaoToggle visao={gastosVisao} month={month} onChange={onChangeGastosVisao} itemsLabel="Cards e listas" />
 
       <Section>
         <SectionHeader
@@ -2332,14 +2532,16 @@ function GastosTab({
       <Section>
         <SectionHeader title="Despesas Fixas" subtitle="Ordenadas por categoria — logística primeiro, depois folha de pagamento, depois as demais — e alfabeticamente dentro de cada categoria." action={<button type="button" onClick={onAddFixed} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar fixa</button>} />
         <div className="p-5">
-          <SmartTable
+          {fixedExpensesLocked ? (
+            <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm font-bold text-slate-600">
+              <LockKeyhole size={18} className="text-slate-500" />
+              Despesas fixas passaram a existir apenas em junho de 2026.
+            </div>
+          ) : <SmartTable
             rows={fixed}
             defaultSortDir="asc"
-            defaultSortKey={gastosVisao === "todos" ? "month" : undefined}
+            defaultSortKey={undefined}
             columns={[
-              ...(gastosVisao === "todos"
-                ? [{ key: "month", label: "Mês", render: (r: FinanceFixedExpense) => monthLabel(r.month), value: (r: FinanceFixedExpense) => r.month }]
-                : []),
               { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => fixedExpenseSortKey(r) },
               {
                 key: "category",
@@ -2362,7 +2564,7 @@ function GastosTab({
                 <IconButton title="Excluir despesa fixa" onClick={() => onDeleteFixed(record)} danger><Trash2 size={15} /></IconButton>
               </RowActions>
             )}
-          />
+          />}
         </div>
       </Section>
 
@@ -2714,24 +2916,247 @@ function FiliaisTab({
   );
 }
 
+function AgendaTab({
+  rows,
+  month,
+  onSaveCapacity,
+  onSaveSchedule,
+  onCreateClass,
+  onDeleteClass,
+}: {
+  rows: FinanceAgendaClass[];
+  month: string;
+  onSaveCapacity: (trainingId: string, capacity: number) => Promise<void>;
+  onSaveSchedule: (trainingId: string, schedule: { startsAt: string; recurrence: "once" | "weekly"; durationMonths: number }) => Promise<void>;
+  onCreateClass: (input: { label: string; trainingId: string | null; product: "online" | "up-day-plus" | "curso-oratoria" | null; startsAt: string; recurrence: "once" | "weekly"; durationMonths: number; daysPerMeeting: number; capacity: number }) => Promise<void>;
+  onDeleteClass: (trainingId: string) => Promise<void>;
+}) {
+  const [editingTrainingId, setEditingTrainingId] = useState<string | null>(null);
+  const [capacityDraft, setCapacityDraft] = useState(0);
+  const [editingScheduleId, setEditingScheduleId] = useState<string | null>(null);
+  const [scheduleDraft, setScheduleDraft] = useState({ startsAt: "", recurrence: "once" as "once" | "weekly", durationMonths: 1 });
+  const [creatingClass, setCreatingClass] = useState(false);
+  const [newClass, setNewClass] = useState({ label: "", trainingId: "", product: "online" as "online" | "up-day-plus" | "curso-oratoria", startsAt: `${month}-01`, recurrence: "weekly" as "once" | "weekly", durationMonths: 3, daysPerMeeting: 1, capacity: 20 });
+  const [selectedTraining, setSelectedTraining] = useState<FinanceAgendaClass | null>(null);
+  const [participants, setParticipants] = useState<FinanceAgendaParticipant[]>([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const days = new Map<string, FinanceAgendaClass[]>();
+  for (const row of rows) {
+    for (const date of row.sessionDates) {
+      if (!date.startsWith(month)) continue;
+      const entries = days.get(date) ?? [];
+      entries.push(row);
+      days.set(date, entries);
+    }
+  }
+  const dayEntries = Array.from(days.entries()).sort(([left], [right]) => left.localeCompare(right));
+  const visibleClasses = Array.from(new Map(dayEntries.flatMap(([, entries]) => entries).map((row) => [row.trainingId, row])).values());
+  const fullCount = visibleClasses.filter((row) => row.isFull).length;
+  const enrolledCount = visibleClasses.reduce((sum, row) => sum + row.enrolledCount, 0);
+  const availableSeats = visibleClasses.reduce((sum, row) => sum + (row.seatsAvailable ?? 0), 0);
+
+  async function saveCapacity(trainingId: string) {
+    const capacity = Math.trunc(capacityDraft);
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+      setError("Informe uma capacidade maior que zero.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSaveCapacity(trainingId, capacity);
+      setEditingTrainingId(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Falha ao atualizar a capacidade.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveSchedule(trainingId: string) {
+    const durationMonths = Math.trunc(scheduleDraft.durationMonths);
+    if (!scheduleDraft.startsAt || !Number.isFinite(durationMonths) || durationMonths < 1 || durationMonths > 24) {
+      setError("Informe a data inicial e uma duração entre 1 e 24 meses.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSaveSchedule(trainingId, { ...scheduleDraft, durationMonths });
+      setEditingScheduleId(null);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Falha ao atualizar o calendário.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openTraining(row: FinanceAgendaClass) {
+    setSelectedTraining(row);
+    setParticipants([]);
+    setParticipantsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/finance/agenda/participants/${encodeURIComponent(row.trainingId)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof data.error === "string" ? data.error : "Falha ao carregar pessoas da turma.");
+      setParticipants(Array.isArray(data.participants) ? data.participants : []);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Falha ao carregar pessoas da turma.");
+    } finally {
+      setParticipantsLoading(false);
+    }
+  }
+
+  async function createClass() {
+    if (!newClass.label.trim() || !newClass.startsAt) {
+      setError("Informe o nome e a data inicial da turma.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onCreateClass({ ...newClass, trainingId: newClass.trainingId.trim() || null });
+      setCreatingClass(false);
+      setNewClass({ label: "", trainingId: "", product: "online", startsAt: `${month}-01`, recurrence: "weekly", durationMonths: 3, daysPerMeeting: 1, capacity: 20 });
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Falha ao criar turma.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteClass(row: FinanceAgendaClass) {
+    if (!window.confirm(`Excluir a turma “${row.label}”? Esta ação remove o calendário e a capacidade dela da Agenda.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onDeleteClass(row.trainingId);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Falha ao excluir turma.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
+        <CalendarDays size={17} className="shrink-0" />
+        <span>Agenda conectada às turmas já existentes. Configure uma turma semanal para ela aparecer em cada aula e abra-a para ver todas as pessoas inscritas.</span>
+      </div>
+      <Section>
+        <SectionHeader title="Turmas" subtitle="Crie a turma diretamente na Agenda; não é necessário cadastrá-la nas Configurações Financeiras." action={<button type="button" onClick={() => setCreatingClass((value) => !value)} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />{creatingClass ? "Fechar" : "Criar turma"}</button>} />
+        {creatingClass ? <div className="grid gap-3 border-t border-slate-100 p-5 sm:grid-cols-2 xl:grid-cols-4">
+          <Field label="Nome da turma"><input value={newClass.label} onChange={(event) => setNewClass((current) => ({ ...current, label: event.target.value }))} className={inputClass} placeholder="Ex.: Oratória - Noite" /></Field>
+          <Field label="Código da turma (opcional)"><input value={newClass.trainingId} onChange={(event) => setNewClass((current) => ({ ...current, trainingId: event.target.value }))} className={inputClass} placeholder="Use o mesmo nas inscrições" /></Field>
+          <Field label="Tipo"><select value={newClass.product} onChange={(event) => setNewClass((current) => ({ ...current, product: event.target.value === "up-day-plus" ? "up-day-plus" : event.target.value === "curso-oratoria" ? "curso-oratoria" : "online" }))} className={inputClass}><option value="online">Encontro online</option><option value="up-day-plus">UP Day Plus</option><option value="curso-oratoria">Curso de Oratória</option></select></Field>
+          <Field label="Primeira aula"><input type="date" value={newClass.startsAt} onChange={(event) => setNewClass((current) => ({ ...current, startsAt: event.target.value }))} className={inputClass} /></Field>
+          <Field label="Frequência"><select value={newClass.recurrence} onChange={(event) => setNewClass((current) => ({ ...current, recurrence: event.target.value === "once" ? "once" : "weekly" }))} className={inputClass}><option value="weekly">Toda semana</option><option value="once">Aula única</option></select></Field>
+          <Field label="Duração (meses)"><input type="number" min="1" max="24" disabled={newClass.recurrence === "once"} value={newClass.durationMonths} onChange={(event) => setNewClass((current) => ({ ...current, durationMonths: Number(event.target.value) }))} className={inputClass} /></Field>
+          <Field label="Dias por encontro"><input type="number" min="1" max="7" value={newClass.daysPerMeeting} onChange={(event) => setNewClass((current) => ({ ...current, daysPerMeeting: Number(event.target.value) }))} className={inputClass} /></Field>
+          <Field label="Capacidade"><input type="number" min="1" value={newClass.capacity} onChange={(event) => setNewClass((current) => ({ ...current, capacity: Number(event.target.value) }))} className={inputClass} /></Field>
+          <div className="sm:col-span-2 xl:col-span-4"><p className="mb-3 text-xs text-slate-500">Para relacionar inscrições futuras à turma, use o mesmo código da turma no campo de treinamento do formulário. Sem código, a turma permanece como agenda interna.</p><button type="button" disabled={saving} onClick={() => void createClass()} className="inline-flex h-10 items-center gap-2 rounded-lg bg-cyan-600 px-4 text-sm font-black text-white hover:bg-cyan-700 disabled:opacity-50"><Plus size={15} />{saving ? "Criando..." : "Criar turma e calendário"}</button></div>
+        </div> : null}
+      </Section>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <KpiMini label="Turmas no mês" value={number(visibleClasses.length)} />
+        <KpiMini label="Inscritos" value={number(enrolledCount)} />
+        <KpiMini label="Turmas lotadas" value={number(fullCount)} />
+        <KpiMini label="Vagas disponíveis" value={number(availableSeats)} />
+      </div>
+      {error ? <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p> : null}
+      <Section>
+        <SectionHeader title={`Agenda de turmas · ${monthLabel(month)}`} subtitle="Cursos organizados por dia, com inscrições, calendário recorrente e capacidade." />
+        {dayEntries.length === 0 ? (
+          <div className="p-8 text-center text-sm font-semibold text-slate-400">Nenhuma turma com data cadastrada neste mês.</div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {dayEntries.map(([date, entries]) => (
+              <div key={date} className="grid gap-3 p-5 lg:grid-cols-[150px_1fr]">
+                <div>
+                  <p className="text-sm font-black text-slate-950">{dateLabel(date)}</p>
+                  <p className="mt-1 text-xs font-bold uppercase tracking-[0.12em] text-slate-400">{entries.length} turma{entries.length === 1 ? "" : "s"}</p>
+                </div>
+                <div className="grid gap-3 xl:grid-cols-2">
+                  {entries.map((row) => (
+                    <div key={row.trainingId} className={cn("rounded-lg border p-4", row.isFull ? "border-rose-200 bg-rose-50/40" : "border-slate-200 bg-white")}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-black text-slate-900">{row.label}</p>
+                          <p className="mt-1 text-xs text-slate-500">{row.product === "up-day-plus" ? "UP Day Plus" : row.product === "curso-oratoria" ? "Curso de Oratória" : row.product === "online" ? "Encontro online" : "Turma"}{row.recurrence === "weekly" ? ` · semanal por ${row.durationMonths} ${row.durationMonths === 1 ? "mês" : "meses"}` : row.days > 1 ? ` · ${row.days} dias` : ""}</p>
+                        </div>
+                        <span className={cn("shrink-0 rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wide", row.isFull ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700")}>
+                          {row.isFull ? "Lotada" : "Aberta"}
+                        </span>
+                      </div>
+                      <div className="mt-4 flex flex-wrap items-center gap-2 text-xs font-bold text-slate-600">
+                        <span className="rounded-md bg-slate-100 px-2 py-1">{number(row.enrolledCount)} inscrito{row.enrolledCount === 1 ? "" : "s"}</span>
+                        {row.capacity !== null ? <span className="rounded-md bg-cyan-50 px-2 py-1 text-cyan-800">{number(row.seatsAvailable)} vaga{row.seatsAvailable === 1 ? "" : "s"} livre{row.seatsAvailable === 1 ? "" : "s"} de {number(row.capacity)}</span> : <span className="rounded-md bg-amber-50 px-2 py-1 text-amber-800">Capacidade não definida</span>}
+                      </div>
+                      {editingTrainingId === row.trainingId ? (
+                        <div className="mt-3 flex items-center gap-2">
+                          <input type="number" min="1" value={capacityDraft || ""} onChange={(event) => setCapacityDraft(Number(event.target.value))} className="h-9 w-24 rounded-lg border border-slate-200 px-2 text-sm" aria-label={`Capacidade de ${row.label}`} />
+                          <button type="button" disabled={saving} onClick={() => void saveCapacity(row.trainingId)} className="h-9 rounded-lg bg-slate-950 px-3 text-xs font-black text-white disabled:opacity-50">Salvar</button>
+                          <button type="button" disabled={saving} onClick={() => setEditingTrainingId(null)} className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-600">Cancelar</button>
+                        </div>
+                      ) : <button type="button" onClick={() => { setEditingTrainingId(row.trainingId); setCapacityDraft(row.capacity ?? Math.max(1, row.enrolledCount)); }} className="mt-3 text-xs font-black text-cyan-700 hover:underline">{row.capacity === null ? "Definir capacidade" : "Editar capacidade"}</button>}
+                      {editingScheduleId === row.trainingId ? (
+                        <div className="mt-3 grid gap-2 rounded-lg border border-cyan-100 bg-cyan-50/50 p-3 sm:grid-cols-2">
+                          <label className="text-xs font-bold text-slate-600">Primeira aula<input type="date" value={scheduleDraft.startsAt} onChange={(event) => setScheduleDraft((current) => ({ ...current, startsAt: event.target.value }))} className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm" /></label>
+                          <label className="text-xs font-bold text-slate-600">Frequência<select value={scheduleDraft.recurrence} onChange={(event) => setScheduleDraft((current) => ({ ...current, recurrence: event.target.value === "weekly" ? "weekly" : "once" }))} className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm"><option value="once">Aula única</option><option value="weekly">Toda semana</option></select></label>
+                          {scheduleDraft.recurrence === "weekly" ? <label className="text-xs font-bold text-slate-600">Duração (meses)<input type="number" min="1" max="24" value={scheduleDraft.durationMonths} onChange={(event) => setScheduleDraft((current) => ({ ...current, durationMonths: Number(event.target.value) }))} className="mt-1 h-9 w-full rounded-lg border border-slate-200 bg-white px-2 text-sm" /></label> : null}
+                          <div className="flex items-end gap-2"><button type="button" disabled={saving} onClick={() => void saveSchedule(row.trainingId)} className="h-9 rounded-lg bg-slate-950 px-3 text-xs font-black text-white disabled:opacity-50">Salvar calendário</button><button type="button" disabled={saving} onClick={() => setEditingScheduleId(null)} className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-600">Cancelar</button></div>
+                        </div>
+                      ) : <div className="mt-3 flex flex-wrap gap-3"><button type="button" onClick={() => { setEditingScheduleId(row.trainingId); setScheduleDraft({ startsAt: row.startsAt, recurrence: row.recurrence, durationMonths: row.durationMonths }); }} className="text-xs font-black text-cyan-700 hover:underline">Configurar aulas</button><button type="button" onClick={() => void openTraining(row)} className="text-xs font-black text-slate-800 hover:text-cyan-700 hover:underline">Ver turma completa</button>{row.isManual ? <button type="button" disabled={saving} onClick={() => void deleteClass(row)} className="inline-flex items-center gap-1 text-xs font-black text-rose-700 hover:underline disabled:opacity-50"><Trash2 size={13} />Excluir turma</button> : null}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+      {selectedTraining ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`Turma ${selectedTraining.label}`}>
+          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4"><div><h2 className="text-lg font-black text-slate-950">{selectedTraining.label}</h2><p className="mt-1 text-sm text-slate-500">{selectedTraining.recurrence === "weekly" ? `Aulas semanais por ${selectedTraining.durationMonths} meses` : "Aula única"} · {selectedTraining.enrolledCount} inscrito{selectedTraining.enrolledCount === 1 ? "" : "s"}</p></div><button type="button" onClick={() => setSelectedTraining(null)} aria-label="Fechar" className="grid size-9 place-content-center rounded-lg hover:bg-slate-100"><X size={18} /></button></div>
+            <div className="overflow-y-auto p-5">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4"><p className="text-[11px] font-black uppercase tracking-[0.12em] text-slate-500">Calendário de aulas</p><div className="mt-2 flex flex-wrap gap-2">{selectedTraining.sessionDates.map((date) => <span key={date} className="rounded-md bg-white px-2 py-1 text-xs font-bold text-slate-700 ring-1 ring-slate-200">{dateLabel(date)}</span>)}</div></div>
+              <div className="mt-5 rounded-lg border border-slate-200"><div className="border-b border-slate-100 px-4 py-3"><p className="text-sm font-black text-slate-900">Pessoas da turma</p><p className="text-xs text-slate-500">Dados de todas as pessoas inscritas nesta turma.</p></div><div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-100 text-sm"><thead className="bg-slate-50"><tr>{["Nome", "Telefone", "E-mail", "Cidade", "Profissão", "Perfil", "Status", "Recrutador", "Inscrição", "Presença"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 text-left text-[10px] font-black uppercase tracking-[0.1em] text-slate-500">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100 bg-white">{participantsLoading ? <tr><td colSpan={10} className="px-4 py-8 text-center text-sm font-semibold text-slate-400">Carregando pessoas…</td></tr> : participants.length === 0 ? <tr><td colSpan={10} className="px-4 py-8 text-center text-sm font-semibold text-slate-400">Nenhuma pessoa encontrada nesta turma.</td></tr> : participants.map((person) => <tr key={person.id}><td className="whitespace-nowrap px-3 py-2 font-bold text-slate-900">{person.name ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.phone ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.email ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.city ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.profession ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.role ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.status ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.recruiterName ?? "-"}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{dateLabel(person.enrolledAt)}</td><td className="whitespace-nowrap px-3 py-2 text-slate-600">{person.attendanceApproved ? "Aprovada" : person.attendanceValidated ? "Validada" : "Pendente"}</td></tr>)}</tbody></table></div></div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function MatriculasTab({
   rows,
   catalog,
-  month,
+  periodLabel,
+  showVisaoToggle,
   matriculasVisao,
   onChangeMatriculasVisao,
   onAdd,
   onEdit,
   onDelete,
+  onOpenPayments,
 }: {
   rows: FinanceEnrollment[];
   catalog: FinanceCatalog;
-  month: string;
+  periodLabel: string;
+  showVisaoToggle: boolean;
   matriculasVisao: "mes" | "todos";
   onChangeMatriculasVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
   onEdit: (record: FinanceEnrollment) => void;
   onDelete: (record: FinanceEnrollment) => void;
+  onOpenPayments: (enrollmentId: number) => void;
 }) {
   const [amount, setAmount] = useState(3000);
   const [installments, setInstallments] = useState(4);
@@ -2788,9 +3213,9 @@ function MatriculasTab({
           </div>
         </div>
       </Section>
-      <VisaoToggle visao={matriculasVisao} month={month} onChange={onChangeMatriculasVisao} itemsLabel="Lista" />
+      {showVisaoToggle ? <VisaoToggle visao={matriculasVisao} periodLabel={periodLabel} onChange={onChangeMatriculasVisao} itemsLabel="Lista" /> : null}
       <Section>
-        <SectionHeader title="Matrículas" />
+        <SectionHeader title="Matrículas" subtitle="As parcelas mostram a previsão original; o botão de carteira registra os pagamentos reais e atualiza o saldo total." />
         <div className="p-5">
           <SmartTable
             rows={rows}
@@ -2798,6 +3223,8 @@ function MatriculasTab({
               { key: "student", label: "Aluno", render: (r) => r.student, value: (r) => r.student },
               { key: "course", label: "Curso", render: (r) => r.courseName ?? "-", value: (r) => r.courseName },
               { key: "amount", label: "Valor", render: (r) => money(r.totalAmount), value: (r) => r.totalAmount },
+              { key: "paid", label: "Recebido", render: (r) => money(r.paidAmount), value: (r) => r.paidAmount },
+              { key: "balance", label: "Saldo restante", render: (r) => money(r.balanceRemaining), value: (r) => r.balanceRemaining },
               { key: "installments", label: "Parcelas", render: (r) => `${r.installments}x`, value: (r) => r.installments },
               { key: "payment", label: "Pagamento", render: (r) => r.paymentMethodName ?? "-", value: (r) => r.paymentMethodName },
               { key: "brand", label: "Bandeira", render: (r) => r.cardBrandName ?? "-", value: (r) => r.cardBrandName },
@@ -2808,6 +3235,7 @@ function MatriculasTab({
             ]}
             actions={(record) => (
               <RowActions>
+                <IconButton title="Histórico de pagamentos" onClick={() => onOpenPayments(record.id)}><WalletCards size={15} /></IconButton>
                 <IconButton title="Editar matrícula" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
                 <IconButton title="Excluir matrícula" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
               </RowActions>
@@ -2824,6 +3252,8 @@ function ComissoesTab({
   panel,
   overview,
   month,
+  periodLabel,
+  showVisaoToggle,
   comissoesVisao,
   onChangeComissoesVisao,
   onAdd,
@@ -2835,12 +3265,14 @@ function ComissoesTab({
   panel: FinanceCommissionPanel;
   overview: CommissionsOverview;
   month: string;
+  periodLabel: string;
+  showVisaoToggle: boolean;
   comissoesVisao: "mes" | "todos";
   onChangeComissoesVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
   onDelete: (record: FinanceCommission) => void;
   onStatus: (id: number, status: "pago" | "pendente") => Promise<void>;
-  onToggleRealCommission: (paymentId: number, status: CommissionStatus) => Promise<void>;
+  onToggleRealCommission: (paymentId: number, status: CommissionStatus, source: "matricula" | "avulso") => Promise<void>;
 }) {
   return (
     <div className="space-y-5">
@@ -2853,16 +3285,16 @@ function ComissoesTab({
           <Plus size={16} /> Nova comissão
         </button>
       </div>
-      <VisaoToggle visao={comissoesVisao} month={month} onChange={onChangeComissoesVisao} itemsLabel="Lista" />
+      {showVisaoToggle ? <VisaoToggle visao={comissoesVisao} periodLabel={periodLabel} onChange={onChangeComissoesVisao} itemsLabel="Lista" /> : null}
 
       <div className="grid gap-3 sm:grid-cols-3">
-        <KpiMini label="Comissões Geradas (receitas)" value={money(overview.totals.realGenerated)} />
-        <KpiMini label="Comissões Pagas (receitas)" value={money(overview.totals.realPaid)} />
-        <KpiMini label="Projetado (saldo em aberto)" value={money(overview.totals.projected)} />
+        <KpiMini label="Comissões sobre valores recebidos" value={money(overview.totals.realGenerated)} />
+        <KpiMini label="Dessas, já pagas ao vendedor" value={money(overview.totals.realPaid)} />
+        <KpiMini label="Projetado (saldo a receber do cliente)" value={money(overview.totals.projected)} />
       </div>
 
       <Section>
-        <SectionHeader title="Comissões Reais (Pagamentos)" subtitle="Uma linha por pagamento avulso já registrado numa receita." />
+        <SectionHeader title="Comissões Reais (Pagamentos)" subtitle="Uma linha por pagamento já recebido — de matrícula ou de receita avulsa. Os cards do topo mostram o provisionamento contábil; estes, a comissão sobre dinheiro que entrou." />
         <div className="p-5">
           <SmartTable
             rows={overview.real}
@@ -2886,7 +3318,7 @@ function ComissoesTab({
               <RowActions>
                 <IconButton
                   title={record.status === "paga" ? "Marcar como disponível" : "Marcar como paga"}
-                  onClick={() => onToggleRealCommission(record.paymentId, record.status === "paga" ? "disponivel" : "paga")}
+                  onClick={() => onToggleRealCommission(record.paymentId, record.status === "paga" ? "disponivel" : "paga", record.source)}
                 >
                   <CheckCircle2 size={15} />
                 </IconButton>
@@ -2968,7 +3400,7 @@ function TrimestralTab({ summary, month, filters }: { summary: FinanceDashboardS
       <Section>
         <SectionHeader
           title="Consolidação Trimestral"
-          subtitle="Apresentação executiva para investidores."
+          subtitle={`Apresentação executiva para investidores. Trimestres fechados do ano de ${month.slice(0, 4)} — o trimestre corrente e os seguintes ainda incluem meses não realizados.`}
           action={<a href={`/api/finance/export?section=trimestral&format=pdf&month=${month}`} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Download size={16} />PDF</a>}
         />
         <div className="grid gap-5 p-5 xl:grid-cols-2">
@@ -3745,22 +4177,17 @@ function EnrollmentForm({ catalog, month, record }: { catalog: FinanceCatalog; m
   const initialSeller = catalog.sellers.find((item) => String(item.id) === sellerId);
   const [commissionPct, setCommissionPct] = useState(String(record?.commissionPct ?? initialSeller?.defaultPct ?? 0));
   const selectedPaymentMethod = catalog.paymentMethods.find((item) => String(item.id) === paymentMethodId);
-  const isInstallmentPayment = selectedPaymentMethod?.kind === "parcelado";
+  const hasCardInstallmentFee = selectedPaymentMethod?.kind === "parcelado";
 
   return (
     <>
       <TextInput label="Aluno" name="student" required defaultValue={record?.student} />
       <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={catalog.courses.filter((item) => item.active)} /></SelectInput>
       <DecimalInput label="Valor do Curso" name="totalAmount" required defaultValue={record?.totalAmount ?? 3000} />
-      {isInstallmentPayment ? (
-        <TextInput label="Quantidade de Parcelas" name="installments" type="number" required defaultValue={record?.installments ?? 4} />
-      ) : (
-        <input type="hidden" name="installments" value="1" />
-      )}
+      <TextInput label="Parcelas previstas" name="installments" type="number" required defaultValue={record?.installments ?? 1} />
       <SelectInput label="Forma de Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId} onChange={setPaymentMethodId}><Options items={catalog.paymentMethods.filter((item) => item.active)} /></SelectInput>
-      {isInstallmentPayment ? <SelectInput label="Bandeira do Cartão" name="cardBrandId" defaultValue={record?.cardBrandId}><Options items={catalog.cardBrands.filter((item) => item.active)} emptyLabel="Padrão (sem bandeira)" /></SelectInput> : <input type="hidden" name="cardBrandId" value="" />}
-      {!paymentMethodId ? <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-slate-500">Escolha uma forma de pagamento para definir se haverá parcelas e taxa.</p> : null}
-      {paymentMethodId && !isInstallmentPayment ? <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-emerald-700">Pagamento à vista: 1x, sem taxa de parcelamento.</p> : null}
+      {hasCardInstallmentFee ? <SelectInput label="Bandeira do Cartão" name="cardBrandId" defaultValue={record?.cardBrandId}><Options items={catalog.cardBrands.filter((item) => item.active)} emptyLabel="Padrão (sem bandeira)" /></SelectInput> : <input type="hidden" name="cardBrandId" value="" />}
+      <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-slate-500">A previsão pode ser parcelada em qualquer forma de pagamento. Taxas por parcela são aplicadas apenas quando a forma cadastrada for cartão.</p>
       <TextInput label="Mês Inicial" name="firstMonth" type="month" required defaultValue={record?.firstMonth ?? month} />
       <TextInput label="Data" name="saleDate" type="date" required defaultValue={toInputDate(record?.saleDate) || new Date().toISOString().slice(0, 10)} />
       <SelectInput

@@ -28,6 +28,21 @@ Scripts de migração para o schema normalizado do banco PostgreSQL.
 
 12. **[012_super_master_permissions.sql](012_super_master_permissions.sql)** — Adiciona o perfil `super_master`, prioridade e permissões granulares em `dashboard.team_members`.
 
+13. **[013_create_enrollment_payments.sql](013_create_enrollment_payments.sql)** — Cria o histórico de pagamentos reais de matrículas, independente das parcelas previstas.
+
+14. **[014_link_enrollment_payments_and_agenda.sql](014_link_enrollment_payments_and_agenda.sql)** — Vincula o recebimento à parcela prevista, guarda o link da Asaas e adiciona capacidade das turmas para a Agenda Financeira.
+
+15. **[015_create_training_schedules.sql](015_create_training_schedules.sql)** — Adiciona o calendário recorrente das turmas (por exemplo, toda quarta-feira por três meses) à Agenda Financeira.
+
+16. **[016_create_agenda_classes.sql](016_create_agenda_classes.sql)** — Permite criar turmas diretamente na Agenda, sem cadastro prévio em Configurações Financeiras.
+
+17. **[017_add_oratory_course_type.sql](017_add_oratory_course_type.sql)** — Adiciona o tipo “Curso de Oratória” às turmas da Agenda.
+
+18. **[018_repair_enrollment_forecasts.sql](018_repair_enrollment_forecasts.sql)** — Recalcula previsões antigas de matrículas para que a soma das parcelas seja igual ao valor contratado.
+
+19. **[019_finance_receipts_alignment.sql](019_finance_receipts_alignment.sql)** — Recria o cronograma de contratos que ficaram sem parcelas, dá vencimento às parcelas no dia da venda, alinha os meses da comissão ao cronograma do contrato, grava a comissão de cada recebimento e recalcula o status das parcelas pela cascata dos pagamentos.
+20. **[020_link_enrollment_payments_to_installments.sql](020_link_enrollment_payments_to_installments.sql)** — Vincula pagamentos antigos à parcela do mês correspondente e recalcula o status individual de cada parcela.
+
 > **Nota sobre `dashboard.commercial_leads.position`** (ordem manual do Kanban, coluna adicionada via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` em `ensureCommercialSchema`/`ensureCommercialSchemaForReads`): não precisou de migração de backfill. Leads sem `position` explícito (nunca arrastados) usam o fallback `COALESCE(cl.position, -i.id)` — único por lead e já preserva "mais recente primeiro" sem precisar tocar dado nenhum.
 
 ## Como executar
@@ -46,6 +61,13 @@ psql $DATABASE_URL -f 009_team_members_and_cleanup.sql
 psql $DATABASE_URL -f 010_team_members_instituto_up_only.sql
 psql $DATABASE_URL -f 011_phone_merge_queue_and_trigger.sql
 psql $DATABASE_URL -f 012_super_master_permissions.sql
+psql $DATABASE_URL -f 013_create_enrollment_payments.sql
+psql $DATABASE_URL -f 014_link_enrollment_payments_and_agenda.sql
+psql $DATABASE_URL -f 015_create_training_schedules.sql
+psql $DATABASE_URL -f 016_create_agenda_classes.sql
+psql $DATABASE_URL -f 017_add_oratory_course_type.sql
+psql $DATABASE_URL -f 018_repair_enrollment_forecasts.sql
+psql $DATABASE_URL -f 019_finance_receipts_alignment.sql
 ```
 
 > **Atenção:** Faça backup do banco antes de executar as migrações em produção.

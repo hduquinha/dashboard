@@ -31,6 +31,10 @@ export default async function TarefasPage() {
     listTeamMembers({ activeOnly: true }),
   ]);
 
+  // Quem sou eu na lista de membros — é o que permite o filtro "só as minhas".
+  const email = session?.user.email?.trim().toLowerCase() ?? "";
+  const currentMemberId = members.find((m) => m.email.toLowerCase() === email)?.id ?? null;
+
   return (
     <TarefasClient
       initialSectors={sectors}
@@ -38,6 +42,7 @@ export default async function TarefasPage() {
       members={members.map((m) => ({ id: m.id, name: m.name, email: m.email, role: m.role }))}
       isAdmin={isAdmin}
       isMaster={isMaster}
+      currentMemberId={currentMemberId}
     />
   );
 }

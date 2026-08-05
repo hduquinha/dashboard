@@ -1,4 +1,6 @@
 import type { AggregatedMetrics, CampaignGroup } from "@/types/metaAds";
+import { costPer } from "@/lib/adDestinationGroups";
+import { formatCurrency, formatNullableCurrency, formatNumber } from "@/lib/campaignFormat";
 import { isAdvantagePlusAdset, readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
 
 interface CampaignSetNavigatorProps {
@@ -24,18 +26,6 @@ interface NavigationCardProps {
   selected: boolean;
   advantagePlus?: boolean;
   onClick: () => void;
-}
-
-function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", {
-    style: "currency",
-    currency: "BRL",
-    maximumFractionDigits: 2,
-  });
-}
-
-function formatNumber(value: number): string {
-  return value.toLocaleString("pt-BR");
 }
 
 function plural(value: number, singular: string, pluralForm: string): string {
@@ -112,7 +102,7 @@ function NavigationCard({ name, fullName, status, context, metrics, selected, ad
         ) : null}
         <span>{context}</span>
       </span>
-      <span className="mt-3 grid grid-cols-3 gap-1.5 border-t border-[rgb(var(--border-weak))] pt-2.5">
+      <span className="mt-3 grid grid-cols-4 gap-1.5 border-t border-[rgb(var(--border-weak))] pt-2.5">
         <span className="min-w-0">
           <span className="block text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Investido</span>
           <span className="block break-words text-xs font-semibold text-[rgb(var(--slate-12))]">{formatCurrency(metrics.spend)}</span>
@@ -124,6 +114,12 @@ function NavigationCard({ name, fullName, status, context, metrics, selected, ad
         <span className="min-w-0">
           <span className="block text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Cadastros</span>
           <span className="block text-xs font-semibold text-[rgb(var(--slate-12))]">{formatNumber(metrics.cadastrosCrm)}</span>
+        </span>
+        <span className="min-w-0" title="Investimento ÷ cadastros — o custo médio por lead.">
+          <span className="block text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/lead</span>
+          <span className="block break-words text-xs font-semibold text-[rgb(var(--blue-11))]">
+            {formatNullableCurrency(costPer(metrics.spend, metrics.cadastrosCrm))}
+          </span>
         </span>
       </span>
     </button>
@@ -337,7 +333,7 @@ export default function CampaignSetNavigator({
         <p className="mt-1 text-[11px] text-[rgb(var(--slate-9))]">
           {plural(selectedScopeAdCount, "anúncio", "anúncios")} neste escopo antes do filtro de entrega.
         </p>
-        <dl className="mt-2 grid grid-cols-3 gap-2 border-t border-[rgb(var(--border-weak))] pt-2">
+        <dl className="mt-2 grid grid-cols-4 gap-2 border-t border-[rgb(var(--border-weak))] pt-2">
           <div>
             <dt className="text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Investido</dt>
             <dd className="break-words text-xs font-semibold text-[rgb(var(--slate-12))]">{formatCurrency(selectedScopeMetrics.spend)}</dd>
@@ -349,6 +345,12 @@ export default function CampaignSetNavigator({
           <div>
             <dt className="text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Cadastros</dt>
             <dd className="text-xs font-semibold text-[rgb(var(--slate-12))]">{formatNumber(selectedScopeMetrics.cadastrosCrm)}</dd>
+          </div>
+          <div title="Investimento ÷ cadastros — o custo médio por lead.">
+            <dt className="text-[9px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-9))]">Custo/lead</dt>
+            <dd className="break-words text-xs font-semibold text-[rgb(var(--blue-11))]">
+              {formatNullableCurrency(costPer(selectedScopeMetrics.spend, selectedScopeMetrics.cadastrosCrm))}
+            </dd>
           </div>
         </dl>
       </div>

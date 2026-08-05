@@ -6,7 +6,10 @@ import AdDetailModal from "@/components/AdDetailModal";
 import CreativeLightbox from "@/components/CreativeLightbox";
 import { AdDestination } from "@/components/AdDestination";
 import CampaignScopeSelect from "@/components/CampaignScopeSelect";
+import { costPer } from "@/lib/adDestinationGroups";
 import { attentionPriority, hasMovement, hasRegistration, needsAttention } from "@/lib/campaignDiagnostics";
+import { formatCurrency, formatNullableCurrency, formatNumber, formatPercent } from "@/lib/campaignFormat";
+import { scopeAds } from "@/lib/campaignScope";
 import { groupAdsByCreative, type CreativeGroup } from "@/lib/creativeGroups";
 import { isAdvantagePlusAdset, readableAdsetName, readableCampaignName } from "@/lib/metaAdsLabels";
 import type { AdRow, CampaignGroup, FunnelStageDef, MetaAdsFilters } from "@/types/metaAds";
@@ -24,18 +27,6 @@ interface CampaignAdsGalleryProps {
 type GalleryFilter = "moving" | "attention" | "registrations" | "all";
 
 const PAGE_SIZE = 20;
-
-function formatCurrency(value: number): string {
-  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 });
-}
-
-function formatNumber(value: number): string {
-  return value.toLocaleString("pt-BR");
-}
-
-function formatPercent(value: number | null): string {
-  return value === null ? "—" : `${value.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
-}
 
 function effectiveStatusLabel(status: string): string {
   if (status === "ACTIVE") return "Em veiculação";
@@ -258,8 +249,13 @@ function CreativeCard({
                   : "Eventos Lead atribuídos pela Meta."
               }
             />
-            <Metric label="Cadastros" value={formatNumber(ad.cadastrosCrm)} title="Envios salvos pelo formulário, incluindo contatos que já existiam." />
-            <Metric label="Contatos novos" value={formatNumber(ad.leadsCrm)} title="Pessoas novas criadas no CRM; não inclui cadastros repetidos." />
+            <Metric label="Cadastros" value={formatNumber(ad.cadastrosCrm)} title="Pessoas que este criativo trouxe: as inéditas mais as que já eram da base e voltaram." />
+            <Metric label="Novos" value={formatNumber(ad.novos)} title="Pessoas inéditas no CRM — nunca tinham passado pela base." />
+            <Metric
+              label="Custo/lead"
+              value={formatNullableCurrency(costPer(ad.spend, ad.cadastrosCrm))}
+              title="Investimento ÷ cadastros deste criativo no período."
+            />
           </div>
 
           <button
@@ -289,11 +285,6 @@ export default function CampaignAdsGallery({
   const [filter, setFilter] = useState<GalleryFilter>("moving");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  const allAds = useMemo(
-    () => hierarchy.flatMap((campaign) => campaign.adsets.flatMap((adset) => adset.ads)),
-    [hierarchy]
-  );
-
   const selectedCampaign = selectedCampaignId
     ? (hierarchy.find((campaign) => campaign.campaignId === selectedCampaignId) ?? null)
     : null;
@@ -303,13 +294,10 @@ export default function CampaignAdsGallery({
     : null;
   const effectiveAdsetId = selectedAdset?.adsetId ?? null;
 
-  const scopedAds = useMemo(() => {
-    if (!effectiveCampaignId) return allAds;
-    const campaign = hierarchy.find((item) => item.campaignId === effectiveCampaignId);
-    if (!campaign) return allAds;
-    if (!effectiveAdsetId) return campaign.adsets.flatMap((adset) => adset.ads);
-    return campaign.adsets.find((adset) => adset.adsetId === effectiveAdsetId)?.ads ?? [];
-  }, [allAds, effectiveAdsetId, effectiveCampaignId, hierarchy]);
+  const scopedAds = useMemo(
+    () => scopeAds(hierarchy, effectiveCampaignId, effectiveAdsetId),
+    [effectiveAdsetId, effectiveCampaignId, hierarchy]
+  );
 
   // Um card por CRIATIVO (soma dos `ad_id` de mesmo nome). Só assim "Meta
   // marcou" e "Cadastros" ficam comparáveis: o mesmo criativo roda em vários

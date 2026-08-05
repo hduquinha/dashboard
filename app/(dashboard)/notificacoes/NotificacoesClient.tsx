@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlarmClock, Bell, CheckCheck, Inbox, RefreshCw, UserPlus } from "lucide-react";
+import { AlarmClock, Bell, CheckCheck, Inbox, ListChecks, MessageSquare, RefreshCw, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AppNotification, AppNotificationFeed, AppNotificationKind } from "@/types/notifications";
 
@@ -27,6 +27,21 @@ const KIND_META: Record<
     icon: AlarmClock,
     label: "Sem distribuir",
     tone: "bg-rose-50 text-rose-700 border-rose-100",
+  },
+  task_assigned: {
+    icon: ListChecks,
+    label: "Tarefa atribuída",
+    tone: "bg-cyan-50 text-cyan-700 border-cyan-100",
+  },
+  task_mention: {
+    icon: MessageSquare,
+    label: "Citação em tarefa",
+    tone: "bg-violet-50 text-violet-700 border-violet-100",
+  },
+  task_due: {
+    icon: AlarmClock,
+    label: "Prazo de tarefa",
+    tone: "bg-amber-50 text-amber-700 border-amber-100",
   },
 };
 

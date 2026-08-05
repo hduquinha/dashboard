@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   MouseSensor,
@@ -14,37 +14,71 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
+  Archive,
   CalendarClock,
+  CalendarDays,
+  CheckCircle2,
+  CircleDot,
   Check,
+  Copy,
+  Filter,
   FolderKanban,
+  GanttChartSquare,
   Globe,
   GripVertical,
+  History,
+  Keyboard,
+  LayoutGrid,
+  Link2,
   Loader2,
+  ListTodo,
+  MessageSquare,
+  Paperclip,
+  PieChart,
   Pencil,
   Plus,
   Search,
+  Settings2,
+  Sparkles,
+  SlidersHorizontal,
+  Table2,
   Tag,
   Trash2,
   Users,
   X,
+  Zap,
 } from "lucide-react";
+import CardModal, { type Member } from "./CardModal";
+import {
+  CalendarView,
+  DashboardView,
+  GeneralView,
+  TableView,
+  TimelineView,
+  WorkspaceView,
+  type WorkspaceBoardItem,
+} from "./BoardViews";
+import {
+  ArchiveModal,
+  AutomationsModal,
+  CustomFieldsModal,
+  IntegrationsModal,
+  ShortcutsModal,
+  TemplatesModal,
+} from "./BoardModals";
+import type { TaskAutomation } from "@/lib/taskAutomations";
 import type {
   BoardData,
   TaskBoard,
   TaskCard,
   TaskColumn,
   TaskLabel,
+  TaskOverviewTask,
   TaskPriority,
   TaskSector,
   TaskTeam,
 } from "@/lib/tasks";
 
-interface Member {
-  id: number;
-  name: string;
-  email: string;
-  role?: string;
-}
 interface Props {
   initialSectors: TaskSector[];
   teams: TaskTeam[];
@@ -53,13 +87,53 @@ interface Props {
   isAdmin: boolean;
   /** Super master: único que monta setores/equipes e decide quem vê o quê. */
   isMaster: boolean;
+  /** Id do usuário logado em team_members (null se ele não estiver na lista). */
+  currentMemberId: number | null;
 }
+
+/** As visões do quadro. Kanban continua sendo a porta de entrada. */
+type BoardView = "geral" | "kanban" | "tabela" | "calendario" | "timeline" | "painel" | "workspace";
+
+const VIEWS: { key: BoardView; label: string; icon: typeof LayoutGrid }[] = [
+  { key: "geral", label: "Geral", icon: Globe },
+  { key: "kanban", label: "Kanban", icon: LayoutGrid },
+  { key: "tabela", label: "Tabela", icon: Table2 },
+  { key: "calendario", label: "Calendário", icon: CalendarDays },
+  { key: "timeline", label: "Timeline", icon: GanttChartSquare },
+  { key: "painel", label: "Painel", icon: PieChart },
+  { key: "workspace", label: "Workspace", icon: FolderKanban },
+];
+
+interface Filters {
+  text: string;
+  labelIds: number[];
+  memberIds: number[];
+  priorities: TaskPriority[];
+  status: "todos" | "abertas" | "concluidas" | "atrasadas" | "sem_prazo";
+  onlyMine: boolean;
+}
+
+const EMPTY_FILTERS: Filters = {
+  text: "",
+  labelIds: [],
+  memberIds: [],
+  priorities: [],
+  status: "todos",
+  onlyMine: false,
+};
 
 const PRIORITY: Record<TaskPriority, { label: string; dot: string; chip: string }> = {
   baixa: { label: "Baixa", dot: "bg-slate-400", chip: "bg-slate-100 text-slate-600" },
   media: { label: "Média", dot: "bg-blue-500", chip: "bg-blue-100 text-blue-700" },
   alta: { label: "Alta", dot: "bg-amber-500", chip: "bg-amber-100 text-amber-700" },
   urgente: { label: "Urgente", dot: "bg-rose-500", chip: "bg-rose-100 text-rose-700" },
+};
+
+const PRIORITY_CARD_ACCENT: Record<TaskPriority, string> = {
+  baixa: "from-slate-400 via-slate-300 to-transparent",
+  media: "from-blue-600 via-cyan-400 to-transparent",
+  alta: "from-amber-500 via-orange-300 to-transparent",
+  urgente: "from-rose-600 via-fuchsia-400 to-transparent",
 };
 
 function initials(name: string): string {
@@ -84,13 +158,31 @@ function dueLabel(due: string | null): { text: string; tone: "overdue" | "soon" 
   return { text, tone };
 }
 
+/**
+ * Selo de conclusão do card: "Concluída 31/07". A data é guardada ao meio-dia
+ * UTC justamente pra caber no dia certo em qualquer fuso do Brasil.
+ */
+function completedLabel(completedAt: string | null): string {
+  if (!completedAt) return "Concluída";
+  const d = new Date(completedAt);
+  if (Number.isNaN(d.getTime())) return "Concluída";
+  return `Concluída ${d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`;
+}
+
 const DUE_TONE: Record<"overdue" | "soon" | "normal", string> = {
   overdue: "bg-rose-50 text-rose-700",
   soon: "bg-amber-50 text-amber-700",
   normal: "text-slate-600",
 };
 
-export default function TarefasClient({ initialSectors, teams: initialTeams, members, isAdmin, isMaster }: Props) {
+export default function TarefasClient({
+  initialSectors,
+  teams: initialTeams,
+  members,
+  isAdmin,
+  isMaster,
+  currentMemberId,
+}: Props) {
   const [sectors, setSectors] = useState<TaskSector[]>(initialSectors);
   const [teams, setTeams] = useState<TaskTeam[]>(initialTeams);
   const [sectorId, setSectorId] = useState<number | null>(initialSectors[0]?.id ?? null);
@@ -99,7 +191,28 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
   const [board, setBoard] = useState<BoardData | null>(null);
   const [loadingBoard, setLoadingBoard] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskCard | null>(null);
-  const [modal, setModal] = useState<null | "sector" | "sector-edit" | "board" | "teams" | "labels">(null);
+  const [modal, setModal] = useState<
+    | null
+    | "sector"
+    | "sector-edit"
+    | "board"
+    | "teams"
+    | "labels"
+    | "automations"
+    | "fields"
+    | "templates"
+    | "integrations"
+    | "archive"
+    | "shortcuts"
+  >(null);
+  const [view, setView] = useState<BoardView>("kanban");
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [showFilters, setShowFilters] = useState(false);
+  const [automations, setAutomations] = useState<TaskAutomation[]>([]);
+  const [workspaceBoards, setWorkspaceBoards] = useState<WorkspaceBoardItem[]>([]);
+  const [generalTasks, setGeneralTasks] = useState<TaskOverviewTask[]>([]);
+  const [pendingTaskId, setPendingTaskId] = useState<number | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const memberById = useMemo(() => new Map(members.map((m) => [m.id, m])), [members]);
   // Mouse e toque separados: no celular o arraste só começa com pressão longa
@@ -155,7 +268,202 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
     void loadBoard();
   }, [loadBoard]);
 
+  // Automações do quadro — precisam vir junto porque os botões aparecem dentro
+  // de cada card.
+  useEffect(() => {
+    if (boardId === null) {
+      setAutomations([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/tasks/automations?boardId=${boardId}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setAutomations(d.automations ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [boardId]);
+
+  useEffect(() => {
+    if (view !== "workspace") return;
+    fetch("/api/tasks/workspace")
+      .then((r) => r.json())
+      .then((d) => setWorkspaceBoards(d.boards ?? []))
+      .catch(() => {});
+  }, [view]);
+
+  // A aba Geral traz somente os dados necessários para o panorama. O card
+  // completo continua sendo carregado sob demanda, ao abrir uma tarefa.
+  useEffect(() => {
+    if (view !== "geral") return;
+    let cancelled = false;
+    fetch("/api/tasks/overview")
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setWorkspaceBoards(data.boards ?? []);
+        setGeneralTasks(data.tasks ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWorkspaceBoards([]);
+          setGeneralTasks([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
+
+  // Primeiro troca para o quadro correto; só então abre o card. Assim um clique
+  // no Geral nunca mostra o detalhe da tarefa sobre o quadro que estava aberto.
+  useEffect(() => {
+    if (pendingTaskId === null || board?.board.id !== boardId) return;
+    let cancelled = false;
+    fetch(`/api/tasks/cards/${pendingTaskId}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data.task) setEditingTask(data.task);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setPendingTaskId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingTaskId, board?.board.id, boardId]);
+
+  // Link direto vindo da notificação (/tarefas?board=12&card=345).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const deepBoard = Number(params.get("board"));
+    if (Number.isFinite(deepBoard) && deepBoard > 0) setBoardId(deepBoard);
+    const deepCard = Number(params.get("card"));
+    if (Number.isFinite(deepCard) && deepCard > 0) {
+      fetch(`/api/tasks/cards/${deepCard}`)
+        .then((r) => r.json())
+        .then((d) => {
+          if (d.task) setEditingTask(d.task);
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const filteredTasks = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const term = filters.text.trim().toLowerCase();
+    return (board?.tasks ?? []).filter((task) => {
+      if (term && !`${task.title} ${task.description ?? ""}`.toLowerCase().includes(term)) return false;
+      if (filters.labelIds.length > 0 && !filters.labelIds.some((id) => task.labelIds.includes(id))) return false;
+      if (filters.memberIds.length > 0 && !filters.memberIds.some((id) => task.assigneeIds.includes(id))) return false;
+      if (filters.priorities.length > 0 && !filters.priorities.includes(task.priority)) return false;
+      if (filters.onlyMine && (currentMemberId === null || !task.assigneeIds.includes(currentMemberId))) return false;
+      switch (filters.status) {
+        case "abertas":
+          return !task.completedAt;
+        case "concluidas":
+          return Boolean(task.completedAt);
+        case "atrasadas":
+          return Boolean(task.dueDate && task.dueDate < today && !task.completedAt);
+        case "sem_prazo":
+          return !task.dueDate;
+        default:
+          return true;
+      }
+    });
+  }, [board, filters, currentMemberId]);
+
+  const filtersActive =
+    filters.text.trim() !== "" ||
+    filters.labelIds.length > 0 ||
+    filters.memberIds.length > 0 ||
+    filters.priorities.length > 0 ||
+    filters.status !== "todos" ||
+    filters.onlyMine;
+
+  async function quickAdd(columnId: number | null, title: string) {
+    if (!board) return;
+    const res = await fetch("/api/tasks/cards", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boardId: board.board.id, columnId, title }),
+    });
+    if (res.ok) void loadBoard();
+  }
+
+  // Atalhos de teclado (a lista completa fica no modal "?").
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (typing || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (editingTask || modal) return;
+
+      const viewByKey: Record<string, BoardView> = {
+        "1": "kanban",
+        "2": "tabela",
+        "3": "calendario",
+        "4": "timeline",
+        "5": "painel",
+        "6": "geral",
+        w: "workspace",
+      };
+      if (viewByKey[event.key]) {
+        setView(viewByKey[event.key]);
+        return;
+      }
+      switch (event.key) {
+        case "/":
+          event.preventDefault();
+          setShowFilters(true);
+          setTimeout(() => searchRef.current?.focus(), 0);
+          break;
+        case "n": {
+          const first = board?.columns[0];
+          if (!first) break;
+          const title = window.prompt("Título da nova tarefa:");
+          if (title?.trim()) void quickAdd(first.id, title.trim());
+          break;
+        }
+        case "f":
+          setShowFilters((value) => !value);
+          break;
+        case "m":
+          setFilters((cur) => ({ ...cur, onlyMine: !cur.onlyMine }));
+          break;
+        case "a":
+          if (board) setModal("archive");
+          break;
+        case "?":
+          setModal("shortcuts");
+          break;
+        default:
+          break;
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board, editingTask, modal]);
+
+  /** O que aparece na coluna (respeita os filtros do topo). */
   function tasksInColumn(columnId: number): TaskCard[] {
+    return filteredTasks
+      .filter((t) => t.columnId === columnId)
+      .sort((a, b) => a.position - b.position);
+  }
+
+  /**
+   * Ordem real da coluna, ignorando filtro. O arraste precisa desta: mandar pro
+   * servidor só os cards visíveis reescreveria as posições de uma parte da
+   * coluna e embaralharia o que estava escondido pelo filtro.
+   */
+  function allTasksInColumn(columnId: number): TaskCard[] {
     return (board?.tasks ?? [])
       .filter((t) => t.columnId === columnId)
       .sort((a, b) => a.position - b.position);
@@ -180,7 +488,7 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
     }
     if (targetColumnId === null) return;
 
-    const before = tasksInColumn(targetColumnId).map((t) => t.id);
+    const before = allTasksInColumn(targetColumnId).map((t) => t.id);
     const without = before.filter((id) => id !== taskId);
 
     let index = without.length;
@@ -228,27 +536,47 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
   }
 
   const currentSector = sectors.find((s) => s.id === sectorId) ?? null;
+  // As métricas seguem o que está na tela: com filtro ligado, contar o quadro
+  // inteiro faria os números discordarem das colunas logo abaixo.
+  const taskStats = useMemo(() => {
+    const tasks = filteredTasks;
+    const overdue = tasks.filter((task) => dueLabel(task.dueDate)?.tone === "overdue" && !task.completedAt).length;
+    const dueSoon = tasks.filter((task) => dueLabel(task.dueDate)?.tone === "soon" && !task.completedAt).length;
+    const completed = tasks.filter((task) => task.completedAt).length;
+    return { total: tasks.length, overdue, dueSoon, completed, open: Math.max(0, tasks.length - completed) };
+  }, [filteredTasks]);
+
+  function openWorkspaceBoard(targetBoardId: number, taskId?: number) {
+    const target = workspaceBoards.find((item) => item.id === targetBoardId);
+    if (target) setSectorId(target.sectorId);
+    setEditingTask(null);
+    setPendingTaskId(taskId ?? null);
+    setBoardId(targetBoardId);
+    setView("kanban");
+  }
 
   return (
     // Altura no padrão do CRM: no mobile desconta a barra de topo (3.5rem) e usa
     // dvh (100vh conta a barra de endereço do navegador e estoura a tela).
-    <main className="flex min-h-[calc(100dvh-3.5rem)] flex-col bg-slate-100 text-slate-900 lg:h-[calc(100vh-4rem)] lg:min-h-0">
+    <main className="flex min-h-[calc(100dvh-3.5rem)] flex-col bg-[radial-gradient(circle_at_top,#e0f5fb_0%,#f5f8fb_37%,#eef2f7_100%)] text-slate-900 lg:h-[calc(100vh-4rem)] lg:min-h-0">
       {/* Cabeçalho */}
-      <header className="flex flex-wrap items-center gap-3 border-b border-slate-200 bg-white px-5 py-3.5 shadow-sm">
+      <header className="relative overflow-hidden border-b border-slate-800 bg-[linear-gradient(120deg,#071a33_0%,#083b57_58%,#0b6074_100%)] px-5 py-4 text-white shadow-[0_12px_28px_rgba(2,19,37,0.2)]">
+        <div className="pointer-events-none absolute -right-12 -top-20 size-64 rounded-full bg-cyan-300/10 blur-3xl" />
+        <div className="relative flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2.5 pr-1">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--dashboard-navy)] text-cyan-400 shadow-sm">
-            <FolderKanban className="h-4.5 w-4.5" />
+          <span className="flex h-10 w-10 items-center justify-center rounded-2xl bg-white/10 text-cyan-200 ring-1 ring-white/15 shadow-lg">
+            <FolderKanban className="h-5 w-5" />
           </span>
           <div>
-            <h1 className="text-base font-bold tracking-tight text-slate-950">Quadro de tarefas</h1>
-            <p className="text-[11px] font-medium text-slate-500">Organize e acompanhe o trabalho da equipe</p>
+            <div className="flex items-center gap-1.5"><h1 className="text-lg font-black tracking-tight">Central de tarefas</h1><Sparkles className="size-3.5 text-cyan-200" /></div>
+            <p className="text-[11px] font-medium text-cyan-50/70">Priorize o agora. Visualize o que move a equipe.</p>
           </div>
         </div>
         {/* A cor do setor já existia no banco e não aparecia em lugar nenhum do
             quadro — aqui ela vira a identidade visual de onde você está. */}
         {currentSector && (
           <span
-            className="h-6 w-1.5 flex-shrink-0 rounded-full"
+            className="h-7 w-1.5 flex-shrink-0 rounded-full shadow-[0_0_16px_currentColor]"
             style={{ backgroundColor: currentSector.color }}
             aria-hidden
           />
@@ -256,26 +584,26 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
         <select
           value={sectorId ?? ""}
           onChange={(e) => setSectorId(e.target.value ? Number(e.target.value) : null)}
-          className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm font-semibold text-slate-800 shadow-sm outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
+          className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm font-bold text-white shadow-sm outline-none transition focus:border-cyan-300 focus:ring-2 focus:ring-cyan-100/30"
         >
-          {sectors.length === 0 && <option value="">Nenhum setor</option>}
+          {sectors.length === 0 && <option value="" className="bg-white text-slate-900">Nenhum setor</option>}
           {sectors.map((s) => (
-            <option key={s.id} value={s.id}>
+            <option key={s.id} value={s.id} className="bg-white text-slate-900">
               {s.name}
             </option>
           ))}
         </select>
 
         {/* Quadros do setor */}
-        <div className="flex flex-wrap items-center gap-1.5 border-l border-slate-200 pl-3">
+        <div className="flex flex-wrap items-center gap-1.5 border-l border-white/15 pl-3">
           {boards.map((b) => (
             <button
               key={b.id}
               onClick={() => setBoardId(b.id)}
               className={`rounded-lg px-3 py-1.5 text-sm font-semibold transition ${
                 boardId === b.id
-                  ? "bg-slate-900 text-white shadow-sm"
-                  : "border border-transparent bg-slate-100 text-slate-700 hover:border-slate-200 hover:bg-white hover:text-slate-950"
+                  ? "bg-white text-slate-950 shadow-lg"
+                  : "border border-white/10 bg-white/5 text-cyan-50/80 hover:border-white/25 hover:bg-white/10 hover:text-white"
               }`}
             >
               {b.name}
@@ -284,7 +612,7 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
           {isAdmin && sectorId !== null && (
             <button
               onClick={() => setModal("board")}
-              className="rounded-lg border border-dashed border-slate-400 px-2.5 py-1.5 text-sm font-semibold text-slate-600 transition hover:border-cyan-400 hover:bg-cyan-50 hover:text-cyan-700"
+              className="rounded-xl border border-dashed border-cyan-200/50 px-2.5 py-1.5 text-sm font-bold text-cyan-50 transition hover:border-cyan-100 hover:bg-white/10"
             >
               <Plus className="inline h-3.5 w-3.5" /> Quadro
             </button>
@@ -293,12 +621,24 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
             <button
               onClick={() => setModal("labels")}
               title="Criar e editar as etiquetas deste quadro"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-2.5 py-1.5 text-sm font-bold text-cyan-50 shadow-sm transition hover:bg-white/15"
             >
               <Tag className="h-3.5 w-3.5" /> Etiquetas
             </button>
           )}
         </div>
+
+        {/* Ferramentas do quadro */}
+        {board && (
+          <div className="flex flex-wrap items-center gap-1.5 border-l border-white/15 pl-3">
+            <HeaderTool icon={<Copy className="h-3.5 w-3.5" />} label="Modelos" onClick={() => setModal("templates")} />
+            <HeaderTool icon={<Zap className="h-3.5 w-3.5" />} label="Automações" onClick={() => setModal("automations")} />
+            <HeaderTool icon={<Settings2 className="h-3.5 w-3.5" />} label="Campos" onClick={() => setModal("fields")} />
+            <HeaderTool icon={<Link2 className="h-3.5 w-3.5" />} label="Integrações" onClick={() => setModal("integrations")} />
+            <HeaderTool icon={<Archive className="h-3.5 w-3.5" />} label="Arquivo" onClick={() => setModal("archive")} />
+            <HeaderTool icon={<Keyboard className="h-3.5 w-3.5" />} label="Atalhos" onClick={() => setModal("shortcuts")} />
+          </div>
+        )}
 
         {isMaster && (
           <div className="ml-auto flex items-center gap-2">
@@ -306,30 +646,127 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
               <button
                 onClick={() => setModal("sector-edit")}
                 title="Editar setor (nome, cor e quais equipes têm acesso)"
-                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-2.5 py-1.5 text-xs font-bold text-cyan-50 shadow-sm transition hover:bg-white/15"
               >
                 <Pencil className="h-3.5 w-3.5" /> Acesso
               </button>
             )}
             <button
               onClick={() => setModal("teams")}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm shadow-slate-300 transition hover:bg-slate-800"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white px-2.5 py-1.5 text-xs font-black text-slate-950 shadow-sm transition hover:bg-cyan-50"
             >
               <Users className="h-3.5 w-3.5" /> Equipes e usuários
             </button>
             <button
               onClick={() => setModal("sector")}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-700"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-cyan-300 px-2.5 py-1.5 text-xs font-black text-slate-950 shadow-sm transition hover:bg-cyan-200"
             >
               <Plus className="h-3.5 w-3.5" /> Setor
             </button>
           </div>
         )}
+        </div>
       </header>
+
+      {/* Barra de visões + busca + filtros */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200/80 bg-white/80 px-5 py-2 backdrop-blur">
+        <div className="flex flex-wrap items-center gap-1">
+          {VIEWS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                onClick={() => setView(item.key)}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black transition ${
+                  view === item.key
+                    ? "bg-slate-900 text-white shadow-sm"
+                    : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                <Icon className="size-3.5" /> {item.label}
+              </button>
+            );
+          })}
+          <a
+            href="/tarefas/auditoria"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-black text-violet-700 transition hover:bg-violet-100"
+          >
+            <History className="size-3.5" /> Auditoria
+          </a>
+        </div>
+
+        {view !== "workspace" && view !== "geral" && (
+          <>
+            <div className="relative ml-auto min-w-48 flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                ref={searchRef}
+                value={filters.text}
+                onChange={(event) => setFilters((cur) => ({ ...cur, text: event.target.value }))}
+                placeholder="Buscar tarefa…  (tecle /)"
+                className="w-full rounded-lg border border-slate-200 py-1.5 pl-8 pr-2 text-sm focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+              />
+            </div>
+            <button
+              onClick={() => setFilters((cur) => ({ ...cur, onlyMine: !cur.onlyMine }))}
+              disabled={currentMemberId === null}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black transition disabled:opacity-40 ${
+                filters.onlyMine ? "bg-cyan-600 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Users className="size-3.5" /> Minhas
+            </button>
+            <button
+              onClick={() => setShowFilters((value) => !value)}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-black transition ${
+                filtersActive ? "bg-amber-500 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <SlidersHorizontal className="size-3.5" /> Filtros
+              {filtersActive && <span className="rounded-full bg-white/30 px-1.5 text-[10px]">on</span>}
+            </button>
+            {filtersActive && (
+              <button
+                onClick={() => setFilters(EMPTY_FILTERS)}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-500 hover:bg-slate-50"
+              >
+                <X className="size-3" /> Limpar
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {showFilters && board && view !== "workspace" && view !== "geral" && (
+        <FilterPanel board={board} members={members} filters={filters} onChange={setFilters} />
+      )}
+
+      {board && view !== "workspace" && view !== "geral" ? (
+        <div className="grid gap-2 border-b border-slate-200/80 bg-white/75 px-5 py-3 backdrop-blur sm:grid-cols-2 lg:grid-cols-5">
+          <TaskMetric icon={<ListTodo />} label="Em aberto" value={taskStats.open} tone="slate" />
+          <TaskMetric icon={<CircleDot />} label={filtersActive ? "Filtradas" : "No quadro"} value={taskStats.total} tone="cyan" />
+          <TaskMetric icon={<CalendarClock />} label="Prazo próximo" value={taskStats.dueSoon} tone="amber" />
+          <TaskMetric icon={<CalendarClock />} label="Em atraso" value={taskStats.overdue} tone="rose" />
+          <TaskMetric icon={<CheckCircle2 />} label="Concluídas" value={taskStats.completed} tone="emerald" />
+        </div>
+      ) : null}
 
       {/* Corpo */}
       <div className="min-h-0 flex-1 overflow-hidden">
-        {sectors.length === 0 ? (
+        {view === "geral" ? (
+          <GeneralView
+            boards={workspaceBoards}
+            tasks={generalTasks}
+            memberById={memberById}
+            onOpenTask={(task) => openWorkspaceBoard(task.boardId, task.id)}
+            onOpenBoard={(id) => openWorkspaceBoard(id)}
+          />
+        ) : view === "workspace" ? (
+          <WorkspaceView
+            boards={workspaceBoards}
+            onOpenBoard={(id) => openWorkspaceBoard(id)}
+          />
+        ) : sectors.length === 0 ? (
           <EmptyState
             icon={<FolderKanban className="h-10 w-10 text-slate-300" />}
             title="Nenhum setor ainda"
@@ -347,6 +784,14 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
             hint={isAdmin && boards.length === 0 ? "Crie o primeiro quadro deste setor." : ""}
             action={isAdmin && boards.length === 0 ? { label: "Criar quadro", onClick: () => setModal("board") } : undefined}
           />
+        ) : view === "tabela" ? (
+          <TableView board={board} tasks={filteredTasks} memberById={memberById} onOpen={setEditingTask} />
+        ) : view === "calendario" ? (
+          <CalendarView board={board} tasks={filteredTasks} onOpen={setEditingTask} />
+        ) : view === "timeline" ? (
+          <TimelineView board={board} tasks={filteredTasks} memberById={memberById} onOpen={setEditingTask} />
+        ) : view === "painel" ? (
+          <DashboardView board={board} tasks={filteredTasks} memberById={memberById} />
         ) : (
           <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
             {/* snap-x: no celular cada coluna "encaixa" em vez de parar no meio. */}
@@ -356,16 +801,20 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
                   key={col.id}
                   column={col}
                   tasks={tasksInColumn(col.id)}
+                  totalInColumn={allTasksInColumn(col.id).length}
                   labels={board.labels}
+                  customFields={board.customFields}
                   memberById={memberById}
+                  canManage={isAdmin}
                   onOpenTask={setEditingTask}
-                  onQuickAdd={async (title) => {
-                    const res = await fetch("/api/tasks/cards", {
-                      method: "POST",
+                  onQuickAdd={(title) => quickAdd(col.id, title)}
+                  onUpdateColumn={async (changes) => {
+                    await fetch(`/api/tasks/columns/${col.id}`, {
+                      method: "PATCH",
                       headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ boardId: board.board.id, columnId: col.id, title }),
+                      body: JSON.stringify(changes),
                     });
-                    if (res.ok) loadBoard();
+                    void loadBoard();
                   }}
                 />
               ))}
@@ -386,16 +835,14 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
         )}
       </div>
 
-      {editingTask && (
-        <TaskModal
+      {editingTask && board && (
+        <CardModal
           task={editingTask}
-          labels={board?.labels ?? []}
+          board={board}
           members={members}
+          automations={automations}
           onClose={() => setEditingTask(null)}
-          onSaved={() => {
-            setEditingTask(null);
-            loadBoard();
-          }}
+          onChanged={loadBoard}
         />
       )}
 
@@ -449,45 +896,266 @@ export default function TarefasClient({ initialSectors, teams: initialTeams, mem
           onTeamsChange={setTeams}
         />
       )}
+      {modal === "automations" && board && (
+        <AutomationsModal board={board} members={members} canEdit={isAdmin} onClose={() => setModal(null)} />
+      )}
+      {modal === "fields" && board && (
+        <CustomFieldsModal board={board} onClose={() => setModal(null)} onChanged={loadBoard} />
+      )}
+      {modal === "templates" && board && (
+        <TemplatesModal board={board} onClose={() => setModal(null)} onCreated={loadBoard} />
+      )}
+      {modal === "integrations" && board && (
+        <IntegrationsModal
+          board={board}
+          sectorId={sectorId}
+          isMaster={isMaster}
+          onClose={() => setModal(null)}
+          onImported={() => {
+            // O quadro importado é novo: recarrega a lista de quadros do setor.
+            if (sectorId !== null) {
+              void fetch(`/api/tasks/boards?sectorId=${sectorId}`)
+                .then((r) => r.json())
+                .then((d) => setBoards(d.boards ?? []));
+            }
+          }}
+        />
+      )}
+      {modal === "archive" && board && (
+        <ArchiveModal boardId={board.board.id} onClose={() => setModal(null)} onChanged={loadBoard} />
+      )}
+      {modal === "shortcuts" && <ShortcutsModal onClose={() => setModal(null)} />}
     </main>
   );
+}
+
+/** Botão pequeno da barra de ferramentas do quadro (topo escuro). */
+function HeaderTool({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-white/10 px-2.5 py-1.5 text-xs font-bold text-cyan-50 shadow-sm transition hover:bg-white/15"
+    >
+      {icon} <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+
+/** Painel de filtros (etiqueta, responsável, prioridade e situação). */
+function FilterPanel({
+  board,
+  members,
+  filters,
+  onChange,
+}: {
+  board: BoardData;
+  members: Member[];
+  filters: Filters;
+  onChange: (updater: (cur: Filters) => Filters) => void;
+}) {
+  function toggle<T>(list: T[], value: T): T[] {
+    return list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
+  }
+
+  return (
+    <div className="flex flex-wrap gap-4 border-b border-slate-200/80 bg-white/90 px-5 py-3">
+      <div>
+        <p className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-slate-400">
+          <Tag className="size-3" /> Etiquetas
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {board.labels.length === 0 && <span className="text-xs text-slate-400">nenhuma</span>}
+          {board.labels.map((label) => {
+            const on = filters.labelIds.includes(label.id);
+            return (
+              <button
+                key={label.id}
+                onClick={() => onChange((cur) => ({ ...cur, labelIds: toggle(cur.labelIds, label.id) }))}
+                style={on ? { backgroundColor: label.color, color: "white" } : { color: label.color, borderColor: label.color }}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${on ? "" : "bg-white"}`}
+              >
+                {label.name}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-slate-400">
+          <Users className="size-3" /> Responsáveis
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {members.map((member) => {
+            const on = filters.memberIds.includes(member.id);
+            return (
+              <button
+                key={member.id}
+                onClick={() => onChange((cur) => ({ ...cur, memberIds: toggle(cur.memberIds, member.id) }))}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${
+                  on ? "border-cyan-400 bg-cyan-50 text-cyan-800" : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {member.name.split(" ")[0]}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 flex items-center gap-1 text-[10px] font-black uppercase tracking-wide text-slate-400">
+          <Filter className="size-3" /> Prioridade
+        </p>
+        <div className="flex flex-wrap gap-1">
+          {(Object.keys(PRIORITY) as TaskPriority[]).map((value) => {
+            const on = filters.priorities.includes(value);
+            return (
+              <button
+                key={value}
+                onClick={() => onChange((cur) => ({ ...cur, priorities: toggle(cur.priorities, value) }))}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${
+                  on ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {PRIORITY[value].label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <p className="mb-1 text-[10px] font-black uppercase tracking-wide text-slate-400">Situação</p>
+        <select
+          value={filters.status}
+          onChange={(event) => onChange((cur) => ({ ...cur, status: event.target.value as Filters["status"] }))}
+          className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold"
+        >
+          <option value="todos">Todas</option>
+          <option value="abertas">Em aberto</option>
+          <option value="concluidas">Concluídas</option>
+          <option value="atrasadas">Atrasadas</option>
+          <option value="sem_prazo">Sem prazo</option>
+        </select>
+      </div>
+    </div>
+  );
+}
+
+function TaskMetric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: number; tone: "slate" | "cyan" | "amber" | "rose" | "emerald" }) {
+  const styles = {
+    slate: "bg-slate-100 text-slate-600",
+    cyan: "bg-cyan-50 text-cyan-700",
+    amber: "bg-amber-50 text-amber-700",
+    rose: "bg-rose-50 text-rose-700",
+    emerald: "bg-emerald-50 text-emerald-700",
+  }[tone];
+  return <div className="flex min-w-0 items-center gap-2 rounded-xl border border-slate-100 bg-white px-3 py-2 shadow-sm"><span className={`grid size-8 place-content-center rounded-lg ${styles}`}>{icon}</span><div><p className="text-[10px] font-black uppercase tracking-[0.1em] text-slate-400">{label}</p><p className="text-lg font-black leading-5 text-slate-950">{value}</p></div></div>;
 }
 
 // ── Coluna ───────────────────────────────────────────────────────────────────
 function Column({
   column,
   tasks,
+  totalInColumn,
   labels,
+  customFields,
   memberById,
+  canManage,
   onOpenTask,
   onQuickAdd,
+  onUpdateColumn,
 }: {
   column: TaskColumn;
   tasks: TaskCard[];
+  /** Contagem real da coluna (sem filtro) — é ela que vale para o limite WIP. */
+  totalInColumn: number;
   labels: BoardData["labels"];
+  customFields: BoardData["customFields"];
   memberById: Map<number, Member>;
+  canManage: boolean;
   onOpenTask: (t: TaskCard) => void;
   onQuickAdd: (title: string) => void;
+  onUpdateColumn: (changes: Record<string, unknown>) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${column.id}` });
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(column.name);
   const taskIds = tasks.map((t) => `task-${t.id}`);
+  const overWip = column.wipLimit !== null && totalInColumn > column.wipLimit;
 
   return (
-    <div className="flex max-h-full w-72 flex-shrink-0 snap-start flex-col rounded-2xl border border-slate-200 bg-slate-200/65 shadow-sm">
-      <div className="flex items-center gap-2 px-3.5 py-3">
-        <span className="h-2.5 w-2.5 rounded-full ring-4 ring-white/70" style={{ backgroundColor: column.color ?? "#64748b" }} />
-        <h3 className="text-sm font-bold text-slate-800">{column.name}</h3>
-        <span className="ml-auto min-w-6 rounded-full bg-white px-2 py-0.5 text-center text-xs font-bold tabular-nums text-slate-600 shadow-sm">{tasks.length}</span>
+    <div className="flex max-h-full w-80 flex-shrink-0 snap-start flex-col overflow-hidden rounded-2xl border border-slate-200/90 bg-slate-100/80 shadow-[0_10px_28px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+      <div className="border-t-4 bg-white/80 px-3.5 py-3" style={{ borderTopColor: column.color ?? "#64748b" }}>
+        <div className="flex items-center gap-2">
+        <span className="h-2.5 w-2.5 rounded-full ring-4 ring-white" style={{ backgroundColor: column.color ?? "#64748b" }} />
+        {editing ? (
+          <input
+            autoFocus
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            onBlur={() => {
+              setEditing(false);
+              if (name.trim() && name !== column.name) onUpdateColumn({ name: name.trim() });
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") event.currentTarget.blur();
+              if (event.key === "Escape") {
+                setName(column.name);
+                setEditing(false);
+              }
+            }}
+            className="min-w-0 flex-1 rounded border border-slate-300 px-1 text-sm font-black text-slate-800"
+          />
+        ) : (
+          <h3
+            onDoubleClick={() => canManage && setEditing(true)}
+            title={canManage ? "Duplo clique para renomear" : undefined}
+            className="text-sm font-black text-slate-800"
+          >
+            {column.name}
+          </h3>
+        )}
+        {column.completesTask && (
+          <span title="Card que entra aqui vira concluído" className="text-emerald-600">
+            <CheckCircle2 className="size-3.5" />
+          </span>
+        )}
+        <span
+          className={`ml-auto min-w-6 rounded-full px-2 py-0.5 text-center text-xs font-black tabular-nums ${
+            overWip ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"
+          }`}
+          title={column.wipLimit !== null ? `Limite de ${column.wipLimit} card(s) em andamento` : undefined}
+        >
+          {tasks.length}
+          {column.wipLimit !== null ? `/${column.wipLimit}` : ""}
+        </span>
+        {canManage && (
+          <ColumnMenu column={column} onUpdateColumn={onUpdateColumn} />
+        )}
+        </div>
+        <p className={`mt-1 pl-4 text-[10px] font-semibold ${overWip ? "text-rose-600" : "text-slate-400"}`}>
+          {overWip ? "Acima do limite de WIP — termine antes de puxar mais." : "Arraste ou crie uma nova tarefa"}
+        </p>
       </div>
       <div
         ref={setNodeRef}
-        className={`min-h-[60px] flex-1 space-y-2 overflow-y-auto px-2.5 pb-2.5 transition-colors ${isOver ? "rounded-xl bg-cyan-100/80 ring-2 ring-inset ring-cyan-300" : ""}`}
+        className={`min-h-[60px] flex-1 space-y-2 overflow-y-auto px-2.5 pb-2.5 pt-2.5 transition-colors ${isOver ? "rounded-xl bg-cyan-100/80 ring-2 ring-inset ring-cyan-300" : ""}`}
       >
         <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
           {tasks.map((task) => (
-            <TaskCardView key={task.id} task={task} labels={labels} memberById={memberById} onClick={() => onOpenTask(task)} />
+            <TaskCardView
+              key={task.id}
+              task={task}
+              labels={labels}
+              customFields={customFields}
+              memberById={memberById}
+              onClick={() => onOpenTask(task)}
+            />
           ))}
         </SortableContext>
         {/* Coluna vazia precisa dizer que aceita algo — sem isso ninguém
@@ -539,7 +1207,7 @@ function Column({
         ) : (
           <button
             onClick={() => setAdding(true)}
-            className="flex w-full items-center gap-1.5 rounded-lg px-2 py-2 text-sm font-semibold text-slate-600 transition hover:bg-white hover:text-cyan-700"
+            className="flex w-full items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-2.5 py-2 text-sm font-bold text-slate-600 transition hover:border-cyan-300 hover:bg-white hover:text-cyan-700"
           >
             <Plus className="h-4 w-4" /> Adicionar tarefa
           </button>
@@ -550,14 +1218,87 @@ function Column({
 }
 
 // ── Card ─────────────────────────────────────────────────────────────────────
+/** Menu da coluna: cor, limite de WIP, coluna que conclui e arquivar. */
+function ColumnMenu({
+  column,
+  onUpdateColumn,
+}: {
+  column: TaskColumn;
+  onUpdateColumn: (changes: Record<string, unknown>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((value) => !value)}
+        title="Configurar coluna"
+        className="rounded p-0.5 text-slate-300 transition hover:bg-slate-100 hover:text-slate-600"
+      >
+        <Settings2 className="size-3.5" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-6 z-20 w-56 space-y-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl">
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400">Cor</label>
+              <input
+                type="color"
+                defaultValue={column.color ?? "#64748b"}
+                onBlur={(event) => onUpdateColumn({ color: event.target.value })}
+                className="h-7 w-full rounded border border-slate-200"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-400">Limite de WIP</label>
+              <input
+                type="number"
+                min={0}
+                defaultValue={column.wipLimit ?? ""}
+                placeholder="sem limite"
+                onBlur={(event) =>
+                  onUpdateColumn({ wipLimit: event.target.value === "" ? null : Number(event.target.value) })
+                }
+                className="w-full rounded border border-slate-200 px-2 py-1 text-xs"
+              />
+            </div>
+            <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600">
+              <input
+                type="checkbox"
+                defaultChecked={column.completesTask}
+                onChange={(event) => onUpdateColumn({ completesTask: event.target.checked })}
+                className="size-3.5"
+              />
+              Entrar aqui conclui a tarefa
+            </label>
+            <button
+              onClick={() => {
+                if (window.confirm(`Arquivar a coluna "${column.name}"? Os cards dela continuam no arquivo.`)) {
+                  onUpdateColumn({ archived: true });
+                  setOpen(false);
+                }
+              }}
+              className="flex w-full items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-600 hover:bg-slate-50"
+            >
+              <Archive className="size-3" /> Arquivar coluna
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function TaskCardView({
   task,
   labels,
+  customFields,
   memberById,
   onClick,
 }: {
   task: TaskCard;
   labels: BoardData["labels"];
+  customFields: BoardData["customFields"];
   memberById: Map<number, Member>;
   onClick: () => void;
 }) {
@@ -569,6 +1310,7 @@ function TaskCardView({
   const due = dueLabel(task.dueDate);
   const taskLabels = labels.filter((l) => task.labelIds.includes(l.id));
   const style = { transform: CSS.Transform.toString(transform), transition };
+  const priority = PRIORITY[task.priority];
 
   return (
     <div
@@ -587,65 +1329,147 @@ function TaskCardView({
           onClick();
         }
       }}
-      className={`cursor-grab rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition-[border,box-shadow,transform] hover:-translate-y-px hover:border-cyan-300 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 ${
-        isDragging ? "scale-[0.98] opacity-50" : ""
-      } ${task.completedAt ? "opacity-60" : ""}`}
+      aria-label={`Abrir tarefa: ${task.title}`}
+      className={`group relative cursor-grab overflow-hidden rounded-2xl border border-white/90 bg-white shadow-[0_3px_14px_rgba(15,23,42,0.1)] ring-1 ring-slate-200/80 transition-[border,box-shadow,transform] duration-200 hover:-translate-y-1 hover:border-cyan-200 hover:shadow-[0_16px_28px_rgba(8,145,178,0.16)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 focus-visible:ring-offset-2 active:cursor-grabbing ${
+        isDragging ? "scale-[0.98] rotate-[1deg] opacity-50 shadow-2xl" : ""
+      } ${task.completedAt ? "bg-slate-50/90" : ""}`}
     >
-      {taskLabels.length > 0 && (
-        <div className="mb-1.5 flex flex-wrap gap-1">
-          {/* Etiqueta com nome: tarja colorida sem texto só diz algo pra quem já
-              sabe o código de cores de cor. */}
-          {taskLabels.map((l) => (
-            <span
-              key={l.id}
-              className="rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight text-white"
-              style={{ backgroundColor: l.color }}
-            >
-              {l.name}
-            </span>
-          ))}
-        </div>
-      )}
-      <p className={`text-sm font-semibold leading-5 text-slate-900 ${task.completedAt ? "line-through" : ""}`}>{task.title}</p>
-      <div className="mt-2 flex items-center gap-2">
-        {/* "Média" é o padrão: mostrar em todo card vira ruído. Só destaca o que foge disso. */}
-        {task.priority !== "media" && (
-          <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold ${PRIORITY[task.priority].chip}`}>
-            <span className={`h-1.5 w-1.5 rounded-full ${PRIORITY[task.priority].dot}`} />
-            {PRIORITY[task.priority].label}
-          </span>
-        )}
-        {due && (
+      {/* Capa do card: imagem ou cor sólida. */}
+      {task.coverAttachmentId ? (
+        <div
+          className="h-20 w-full bg-cover bg-center"
+          style={{ backgroundImage: `url(/api/tasks/attachments/${task.coverAttachmentId})` }}
+        />
+      ) : task.coverColor ? (
+        <div className="h-8 w-full" style={{ backgroundColor: task.coverColor }} />
+      ) : null}
+      <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${PRIORITY_CARD_ACCENT[task.priority]}`} />
+      <div className="p-3.5 pt-4">
+        <div className="mb-2 flex items-center gap-1.5">
           <span
-            className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${DUE_TONE[due.tone]}`}
+            title="Arraste para mover"
+            className="-ml-1 flex size-5 items-center justify-center rounded-md text-slate-300 transition group-hover:bg-slate-100 group-hover:text-slate-500"
           >
-            <CalendarClock className="h-3 w-3" /> {due.text}
+            <GripVertical className="size-3.5" />
           </span>
+          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${priority.chip}`}>
+            <span className={`size-1.5 rounded-full ${priority.dot}`} />
+            {priority.label}
+          </span>
+          {task.completedAt && (
+            <span
+              title={`Concluída em ${new Date(task.completedAt).toLocaleDateString("pt-BR")}`}
+              className="ml-auto inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-extrabold text-emerald-700"
+            >
+              <CheckCircle2 className="size-3" /> {completedLabel(task.completedAt)}
+            </span>
+          )}
+        </div>
+        <p className={`text-[15px] font-extrabold leading-5 tracking-[-0.01em] text-slate-900 ${task.completedAt ? "text-slate-500 line-through" : ""}`}>{task.title}</p>
+        {task.description && (
+          <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-slate-500">{task.description}</p>
         )}
-        {task.assigneeIds.length > 0 && (
-          <div className="ml-auto flex -space-x-1.5">
-            {task.assigneeIds.slice(0, 3).map((id) => (
+        {taskLabels.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1">
+            {/* Etiquetas usam o nome e a cor: a informação não depende de memória visual. */}
+            {taskLabels.map((l) => (
               <span
-                key={id}
-                title={memberById.get(id)?.name}
-                className="flex h-5 w-5 items-center justify-center rounded-full bg-cyan-100 text-[9px] font-bold text-cyan-800 ring-2 ring-white"
+                key={l.id}
+                className="inline-flex items-center gap-1 rounded-md border border-black/5 bg-white px-1.5 py-1 text-[10px] font-bold text-slate-600 shadow-sm"
               >
-                {initials(memberById.get(id)?.name ?? "?")}
+                <span className="size-1.5 rounded-full" style={{ backgroundColor: l.color }} />
+                {l.name}
               </span>
             ))}
-            {task.assigneeIds.length > 3 && (
+          </div>
+        )}
+        {/* Campos personalizados marcados como "mostrar no card". */}
+        {customFields.some((field) => field.showOnCard && task.customValues?.[field.id]) && (
+          <div className="mt-2 flex flex-wrap gap-1">
+            {customFields
+              .filter((field) => field.showOnCard && task.customValues?.[field.id])
+              .map((field) => (
+                <span
+                  key={field.id}
+                  className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600"
+                >
+                  {field.name}: {field.type === "checkbox" ? "sim" : task.customValues[field.id]}
+                </span>
+              ))}
+          </div>
+        )}
+
+        {/* Selos de conteúdo: só aparecem quando existe conteúdo de verdade. */}
+        {(task.checklistTotal > 0 || task.commentCount > 0 || task.attachmentCount > 0 || task.startDate) && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold text-slate-500">
+            {task.checklistTotal > 0 && (
               <span
-                title={task.assigneeIds
-                  .slice(3)
-                  .map((id) => memberById.get(id)?.name ?? `#${id}`)
-                  .join(", ")}
-                className="flex h-5 w-5 items-center justify-center rounded-full bg-slate-200 text-[9px] font-bold text-slate-700 ring-2 ring-white"
+                className={`inline-flex items-center gap-1 rounded px-1 py-0.5 ${
+                  task.checklistDone === task.checklistTotal ? "bg-emerald-50 text-emerald-700" : "bg-slate-100"
+                }`}
               >
-                +{task.assigneeIds.length - 3}
+                <Check className="size-3" /> {task.checklistDone}/{task.checklistTotal}
+              </span>
+            )}
+            {task.commentCount > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <MessageSquare className="size-3" /> {task.commentCount}
+              </span>
+            )}
+            {task.attachmentCount > 0 && (
+              <span className="inline-flex items-center gap-1">
+                <Paperclip className="size-3" /> {task.attachmentCount}
+              </span>
+            )}
+            {task.startDate && (
+              <span className="inline-flex items-center gap-1" title="Data de início">
+                <CalendarDays className="size-3" /> {new Date(`${task.startDate}T00:00:00`).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}
               </span>
             )}
           </div>
         )}
+
+        <div className="mt-3 flex min-h-7 items-center gap-1.5 border-t border-slate-100 pt-2.5">
+          {due ? (
+            <span
+              className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-extrabold ${DUE_TONE[due.tone]}`}
+            >
+              <CalendarClock className="size-3" /> {due.tone === "overdue" ? `Atrasada · ${due.text}` : due.text}
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+              <CalendarClock className="size-3" /> Sem prazo
+            </span>
+          )}
+          {task.assigneeIds.length > 0 ? (
+            <div className="ml-auto flex -space-x-2">
+              {task.assigneeIds.slice(0, 3).map((id) => (
+                <span
+                  key={id}
+                  title={memberById.get(id)?.name}
+                  className="flex size-6 items-center justify-center rounded-full bg-gradient-to-br from-cyan-100 to-blue-100 text-[9px] font-black text-cyan-800 ring-2 ring-white shadow-sm"
+                >
+                  {initials(memberById.get(id)?.name ?? "?")}
+                </span>
+              ))}
+              {task.assigneeIds.length > 3 && (
+                <span
+                  title={task.assigneeIds
+                    .slice(3)
+                    .map((id) => memberById.get(id)?.name ?? `#${id}`)
+                    .join(", ")}
+                  className="flex size-6 items-center justify-center rounded-full bg-slate-200 text-[9px] font-black text-slate-700 ring-2 ring-white shadow-sm"
+                >
+                  +{task.assigneeIds.length - 3}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-semibold text-slate-400">
+              <Users className="size-3" /> Sem responsável
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -732,167 +1556,6 @@ function Overlay({
         {children}
       </div>
     </div>
-  );
-}
-
-function TaskModal({
-  task,
-  labels,
-  members,
-  onClose,
-  onSaved,
-}: {
-  task: TaskCard;
-  labels: BoardData["labels"];
-  members: Member[];
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [title, setTitle] = useState(task.title);
-  const [description, setDescription] = useState(task.description ?? "");
-  const [priority, setPriority] = useState<TaskPriority>(task.priority);
-  const [dueDate, setDueDate] = useState(task.dueDate ?? "");
-  const [assigneeIds, setAssigneeIds] = useState<number[]>(task.assigneeIds);
-  const [labelIds, setLabelIds] = useState<number[]>(task.labelIds);
-  const [completed, setCompleted] = useState(Boolean(task.completedAt));
-  const [saving, setSaving] = useState(false);
-
-  async function save() {
-    setSaving(true);
-    await fetch(`/api/tasks/cards/${task.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, description, priority, dueDate: dueDate || null, assigneeIds, labelIds, completed }),
-    });
-    setSaving(false);
-    onSaved();
-  }
-  async function remove() {
-    await fetch(`/api/tasks/cards/${task.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archived: true }),
-    });
-    onSaved();
-  }
-
-  return (
-    <Overlay onClose={onClose} size="lg">
-      <div className="flex items-center justify-between border-b border-slate-100 p-4">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          className="w-full text-base font-bold text-slate-800 focus:outline-none"
-        />
-        <button onClick={onClose} className="ml-2 text-slate-400 hover:text-slate-700">
-          <X className="h-5 w-5" />
-        </button>
-      </div>
-      <div className="max-h-[70vh] space-y-4 overflow-y-auto p-4">
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Descrição</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={5}
-            className="w-full rounded-lg border border-slate-200 p-2 text-sm"
-            placeholder="Detalhes da tarefa…"
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Prioridade</label>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as TaskPriority)}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-            >
-              {(Object.keys(PRIORITY) as TaskPriority[]).map((p) => (
-                <option key={p} value={p}>
-                  {PRIORITY[p].label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Prazo</label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-            />
-          </div>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Responsáveis</label>
-          <div className="flex flex-wrap gap-1.5">
-            {members.map((m) => {
-              const on = assigneeIds.includes(m.id);
-              return (
-                <button
-                  key={m.id}
-                  onClick={() => setAssigneeIds((cur) => (on ? cur.filter((x) => x !== m.id) : [...cur, m.id]))}
-                  className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-semibold ${
-                    on ? "border-cyan-400 bg-cyan-50 text-cyan-800" : "border-slate-200 text-slate-500 hover:bg-slate-50"
-                  }`}
-                >
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-cyan-100 text-[8px] font-bold text-cyan-800">
-                    {initials(m.name)}
-                  </span>
-                  {m.name.split(" ")[0]}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs font-semibold uppercase text-slate-500">Etiquetas</label>
-          {labels.length === 0 ? (
-            <p className="text-xs text-slate-400">
-              Nenhuma etiqueta neste quadro ainda — crie pelo botão <strong>Etiquetas</strong>, no topo.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {labels.map((l) => {
-                const on = labelIds.includes(l.id);
-                return (
-                  <button
-                    key={l.id}
-                    onClick={() => setLabelIds((cur) => (on ? cur.filter((x) => x !== l.id) : [...cur, l.id]))}
-                    style={on ? { backgroundColor: l.color, color: "white" } : { color: l.color, borderColor: l.color }}
-                    className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${on ? "" : "bg-white"}`}
-                  >
-                    {l.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </div>
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <input type="checkbox" checked={completed} onChange={(e) => setCompleted(e.target.checked)} className="h-4 w-4" />
-          Marcar como concluída
-        </label>
-      </div>
-      <div className="flex items-center justify-between border-t border-slate-100 p-4">
-        <button onClick={remove} className="text-sm font-semibold text-rose-600 hover:underline">
-          Arquivar
-        </button>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">
-            Cancelar
-          </button>
-          <button
-            onClick={save}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Salvar
-          </button>
-        </div>
-      </div>
-    </Overlay>
   );
 }
 

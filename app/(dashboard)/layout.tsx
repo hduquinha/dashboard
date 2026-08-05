@@ -5,6 +5,7 @@ import DashboardLayoutClient from "@/components/DashboardLayoutClient";
 import { assertToken, DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { listDuplicateSuspects } from "@/lib/db";
 import { ttlCache } from "@/lib/serverCache";
+import { getTeamMemberById } from "@/lib/teamAuth";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -43,6 +44,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   }
 
   const session = getDashboardSession(token);
+  const currentMember = session?.user ? await getTeamMemberById(session.user.id) : null;
 
   let duplicateCount = 0;
   try {
@@ -56,6 +58,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
     <DashboardLayoutClient
       currentUser={session?.user ?? null}
       duplicateCount={duplicateCount}
+      showPasswordResetPrompt={Boolean(currentMember && !currentMember.passwordResetPromptSeenAt)}
     >
       {children}
     </DashboardLayoutClient>
