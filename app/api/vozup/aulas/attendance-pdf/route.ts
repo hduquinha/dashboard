@@ -22,6 +22,13 @@ const ABSENT = "#be123c";
  */
 type ListMode = "assinatura" | "presencas";
 
+/**
+ * Linhas vazias no fim da lista de assinatura: sempre aparece gente no dia da
+ * aula sem ter se inscrito, e o nome/telefone dessas pessoas precisa caber no
+ * papel. Não vale para o modo `presencas`, que é o retrato do que está no CRM.
+ */
+const WALK_IN_ROWS = 5;
+
 function contentWidth(document: PDFKit.PDFDocument): number {
   return document.page.width - PAGE_MARGIN * 2;
 }
@@ -138,6 +145,59 @@ function drawTableHeader(document: PDFKit.PDFDocument, columns: Array<{ title: s
   document.y = y + 20;
 }
 
+/** Linhas em branco no fim da lista, para quem chega no dia sem inscrição. */
+function drawWalkInRows(
+  document: PDFKit.PDFDocument,
+  columns: Array<{ title: string; width: number; align?: "left" | "center" }>,
+  startNumber: number,
+  rowHeight: number
+): void {
+  const captionHeight = 20;
+
+  // As linhas em branco ficam sempre juntas: quem assina no dia nao deveria ter
+  // que virar a pagina no meio do bloco de visitantes.
+  if (document.y + captionHeight + rowHeight * WALK_IN_ROWS > pageBottom(document)) {
+    document.addPage();
+    drawTableHeader(document, columns);
+  }
+
+  const captionY = document.y;
+  document
+    .fillColor(MUTED)
+    .font("Helvetica-Bold")
+    .fontSize(7)
+    .text("SEM INSCRICAO PREVIA - PREENCHER NO DIA", PAGE_MARGIN + 6, captionY + 7, {
+      width: contentWidth(document) - 12,
+    });
+  document.y = captionY + captionHeight;
+
+  for (let offset = 0; offset < WALK_IN_ROWS; offset += 1) {
+    if (document.y + rowHeight > pageBottom(document)) {
+      document.addPage();
+      drawTableHeader(document, columns);
+    }
+
+    const y = document.y;
+    let x = PAGE_MARGIN;
+
+    columns.forEach((column) => {
+      document.save().rect(x, y, column.width, rowHeight).fillAndStroke("#ffffff", BORDER).restore();
+      x += column.width;
+    });
+
+    document
+      .fillColor(MUTED)
+      .font("Helvetica")
+      .fontSize(8.5)
+      .text(String(startNumber + offset + 1), PAGE_MARGIN + 6, y + 9, {
+        width: columns[0].width - 12,
+        align: "center",
+      });
+
+    document.y = y + rowHeight;
+  }
+}
+
 function fileName(title: string, mode: ListMode): string {
   const safe = title
     .normalize("NFD")
@@ -210,16 +270,17 @@ export async function GET(request: NextRequest) {
         : { title: "Assinatura", width: width * 0.3 },
     ];
 
+    const rowHeight = 26;
+    drawTableHeader(document, columns);
+
     if (leads.length === 0) {
-      drawTableHeader(document, columns);
       document
         .fillColor(MUTED)
         .font("Helvetica-Oblique")
         .fontSize(9)
         .text("Nenhum inscrito nesta aula.", PAGE_MARGIN, document.y + 8);
+      document.y += 12;
     } else {
-      drawTableHeader(document, columns);
-      const rowHeight = 26;
       leads.forEach((lead, index) => {
         if (document.y + rowHeight > pageBottom(document)) {
           document.addPage();
@@ -274,6 +335,10 @@ export async function GET(request: NextRequest) {
 
         document.y = y + rowHeight;
       });
+    }
+
+    if (mode === "assinatura") {
+      drawWalkInRows(document, columns, leads.length, rowHeight);
     }
 
     const pages = document.bufferedPageRange();
