@@ -4,13 +4,13 @@ import { useEffect, useState } from "react";
 import { Edit3, ExternalLink, Plus, Trash2, X } from "lucide-react";
 import type {
   EnrollmentPayment,
+  EnrollmentScheduleShift,
   FinanceCardBrand,
   FinanceEnrollment,
   FinanceRevenue,
   RevenuePaymentMethod,
 } from "@/types/finance";
 import {
-  DecimalInput,
   Field,
   IconButton,
   InvoiceFileInput,
@@ -25,11 +25,12 @@ import {
   formString,
   inputClass,
   money,
+  parseDecimal,
   percent,
   toInputDate,
 } from "./FinanceiroClient";
 
-const PAYMENT_METHOD_LABELS: Record<RevenuePaymentMethod, string> = {
+export const PAYMENT_METHOD_LABELS: Record<RevenuePaymentMethod, string> = {
   pix: "PIX",
   dinheiro: "Dinheiro",
   transferencia: "Transferência",
@@ -39,7 +40,7 @@ const PAYMENT_METHOD_LABELS: Record<RevenuePaymentMethod, string> = {
   outros: "Outros",
 };
 
-const PAYMENT_METHODS: RevenuePaymentMethod[] = ["pix", "dinheiro", "transferencia", "debito", "credito", "boleto", "outros"];
+export const PAYMENT_METHODS: RevenuePaymentMethod[] = ["pix", "dinheiro", "transferencia", "debito", "credito", "boleto", "outros"];
 
 async function apiJson(endpoint: string, method: "POST" | "PATCH" | "DELETE", body?: Record<string, unknown>) {
   const response = await fetch(endpoint, {
@@ -64,12 +65,17 @@ async function uploadInvoiceFile(endpoint: string, form: FormData) {
 
 function paymentPayload(form: FormData): Record<string, unknown> {
   const paymentMethod = formString(form, "paymentMethod");
+  const revenueIds = form
+    .getAll("revenueIds")
+    .map((value) => Number(value))
+    .filter((value) => Number.isInteger(value) && value > 0);
   const body: Record<string, unknown> = {
     amount: formNumber(form, "amount"),
     paymentDate: formString(form, "paymentDate"),
     paymentMethod,
     installments: formOptionalNumber(form, "installments") ?? 1,
-    revenueId: formOptionalNumber(form, "revenueId"),
+    revenueIds,
+    redistributeShortfall: form.get("redistributeShortfall") === "on",
     notes: formString(form, "notes") || null,
     asaasPaymentUrl: formString(form, "asaasPaymentUrl") || null,
   };
@@ -77,6 +83,77 @@ function paymentPayload(form: FormData): Record<string, unknown> {
     body.cardBrandId = formOptionalNumber(form, "cardBrandId");
   }
   return body;
+}
+
+function round2(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+/** Mesma divisão do servidor: centavos exatos, com a última parcela absorvendo o resto. */
+function splitCents(total: number, count: number): number[] {
+  const parts = Math.max(1, Math.trunc(count));
+  const cents = Math.round(total * 100);
+  const base = Math.floor(cents / parts);
+  const remainder = cents - base * parts;
+  return Array.from({ length: parts }, (_, index) => (base + (index === parts - 1 ? remainder : 0)) / 100);
+}
+
+interface RedistributionPreview {
+  shortfall: number;
+  settled: Array<{ revenue: FinanceRevenue; after: number }>;
+  absorbers: Array<{ revenue: FinanceRevenue; after: number }>;
+}
+
+/**
+ * Espelha `planShortfallRedistribution` do servidor para que a pessoa veja o
+ * cronograma novo ANTES de gravar. Só faz sentido num lançamento novo: numa
+ * edição, o saldo das parcelas já embute o rateio do próprio pagamento.
+ */
+function previewRedistribution(
+  revenues: FinanceRevenue[],
+  selectedRevenueIds: number[],
+  amount: number
+): RedistributionPreview | null {
+  if (selectedRevenueIds.length === 0 || !(amount > 0)) return null;
+  const selected = revenues
+    .filter((revenue) => selectedRevenueIds.includes(revenue.id) && revenue.status !== "cancelado")
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.installmentNumber ?? 0) - (b.installmentNumber ?? 0) || a.id - b.id);
+
+  let remaining = round2(amount);
+  const settled: RedistributionPreview["settled"] = [];
+  for (const revenue of selected) {
+    const available = Math.max(0, round2(revenue.balanceRemaining));
+    const allocated = Math.min(available, remaining);
+    if (allocated <= 0.005) continue;
+    remaining = round2(remaining - allocated);
+    if (available - allocated > 0.005) settled.push({ revenue, after: round2(revenue.paidAmount + allocated) });
+  }
+  const shortfall = round2(settled.reduce((total, item) => total + (item.revenue.amount - item.after), 0));
+  if (shortfall <= 0.005) return null;
+
+  const open = revenues.filter(
+    (revenue) =>
+      !selectedRevenueIds.includes(revenue.id) &&
+      revenue.status !== "cancelado" &&
+      (revenue.installmentNumber ?? 0) > 0 &&
+      revenue.paidAmount <= 0.005
+  );
+  const shares = splitCents(round2(open.reduce((total, revenue) => total + revenue.amount, 0) + shortfall), open.length);
+  return {
+    shortfall,
+    settled,
+    absorbers: open.map((revenue, index) => ({ revenue, after: shares[index] })),
+  };
+}
+
+/** Quanto saiu das parcelas quitadas e foi parar nas que continuaram abertas. */
+function shiftShortfall(shift: EnrollmentScheduleShift[]) {
+  return round2(shift.reduce((total, entry) => total + Math.max(0, entry.before - entry.after), 0));
+}
+
+function installmentLabel(revenue: FinanceRevenue) {
+  if (revenue.installmentNumber === 0) return "Entrada";
+  return revenue.installmentNumber ? `${revenue.installmentNumber}ª parcela` : "Parcela";
 }
 
 interface EnrollmentPaymentsPanelProps {
@@ -211,7 +288,7 @@ export default function EnrollmentPaymentsPanel({ enrollmentId, cardBrands, read
           <div className="mt-5 rounded-lg border border-slate-200">
             <div className="border-b border-slate-100 px-4 py-3">
               <p className="text-sm font-black text-slate-900">Parcelas previstas</p>
-              <p className="text-xs text-slate-500">Cada parcela soma somente os pagamentos vinculados a ela. Um pagamento sem referência é associado automaticamente à parcela do mês da sua data.</p>
+              <p className="text-xs text-slate-500">Um recebimento pode quitar uma ou mais parcelas. O caixa entra na data do pagamento, enquanto cada parcela selecionada fica marcada como quitada.</p>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full divide-y divide-slate-100 text-sm">
@@ -228,7 +305,7 @@ export default function EnrollmentPaymentsPanel({ enrollmentId, cardBrands, read
                   {!loading ? revenues.map((revenue) => (
                     <tr key={revenue.id}>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-700">{dateLabel(revenue.date)}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-slate-700">{revenue.installmentNumber ? `${revenue.installmentNumber}ª` : "-"}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-slate-700">{revenue.installmentNumber === 0 ? "Entrada" : revenue.installmentNumber ? `${revenue.installmentNumber}ª` : "-"}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-slate-700">{money(revenue.amount)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-semibold text-emerald-700">{money(revenue.paidAmount)}</td>
                       <td className="whitespace-nowrap px-3 py-2 font-semibold text-slate-900">{money(revenue.balanceRemaining)}</td>
@@ -266,7 +343,22 @@ export default function EnrollmentPaymentsPanel({ enrollmentId, cardBrands, read
                       <tr key={payment.id} className="hover:bg-cyan-50/40">
                         <td className="whitespace-nowrap px-3 py-2 text-slate-700">{dateLabel(payment.paymentDate)}</td>
                         <td className="px-3 py-2 text-xs text-slate-600">
-                          {payment.revenueDate ? <><span className="font-bold text-slate-800">{dateLabel(payment.revenueDate)}</span>{payment.installmentNumber ? ` · ${payment.installmentNumber}ª parcela` : ""}</> : "Não vinculada"}
+                          {payment.allocations.length > 0
+                            ? payment.allocations.map((allocation) => (
+                              <div key={allocation.revenueId}>
+                                <span className="font-bold text-slate-800">{dateLabel(allocation.revenueDate)}</span>
+                                {allocation.installmentNumber === 0 ? " · entrada" : allocation.installmentNumber ? ` · ${allocation.installmentNumber}ª parcela` : ""}
+                                {` · ${money(allocation.amount)}`}
+                              </div>
+                            ))
+                            : payment.revenueDate
+                              ? <><span className="font-bold text-slate-800">{dateLabel(payment.revenueDate)}</span>{payment.installmentNumber === 0 ? " · entrada" : payment.installmentNumber ? ` · ${payment.installmentNumber}ª parcela` : ""}</>
+                              : "Não vinculada"}
+                          {payment.scheduleShift.length > 0 ? (
+                            <span className="mt-1 block rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-bold text-amber-900">
+                              Quitou por menos: {money(shiftShortfall(payment.scheduleShift))} remanejados no cronograma
+                            </span>
+                          ) : null}
                         </td>
                         <td className="whitespace-nowrap px-3 py-2 text-slate-700">{PAYMENT_METHOD_LABELS[payment.paymentMethod]}</td>
                         <td className="whitespace-nowrap px-3 py-2 text-slate-700">
@@ -298,7 +390,7 @@ export default function EnrollmentPaymentsPanel({ enrollmentId, cardBrands, read
 
           {!readOnly ? <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
             <p className="mb-1 text-sm font-black text-slate-900">Registrar pagamento</p>
-            <p className="mb-3 text-xs text-slate-500">O valor é registrado como receita na data informada e fica vinculado à parcela escolhida. Sem escolha, o sistema usa a parcela prevista para o mesmo mês.</p>
+            <p className="mb-3 text-xs text-slate-500">Selecione uma ou mais parcelas para quitar. O valor recebido é contabilizado na data informada, inclusive quando houver antecipação de meses futuros.</p>
             <EnrollmentPaymentForm key={newPaymentFormKey} cardBrands={cardBrands} revenues={revenues} saving={saving} submitLabel="Registrar pagamento" methodOverride={newPaymentMethod} onMethodChange={setNewPaymentMethod} onSubmit={handleAdd} />
           </div> : null}
         </div>
@@ -350,25 +442,130 @@ function EnrollmentPaymentForm({
   onSubmit: (form: HTMLFormElement) => void;
 }) {
   const [method, setMethod] = useState<RevenuePaymentMethod>(methodOverride ?? defaultValues?.paymentMethod ?? "pix");
+  const [amount, setAmount] = useState(String(defaultValues?.amount ?? ""));
+  const initialRevenueIds = defaultValues?.allocations.length
+    ? defaultValues.allocations.map((allocation) => allocation.revenueId)
+    : defaultValues?.revenueId
+      ? [defaultValues.revenueId]
+      : [];
+  const [selectedRevenueIds, setSelectedRevenueIds] = useState<number[]>(initialRevenueIds);
+  const [redistribute, setRedistribute] = useState(true);
+  const selectedBalance = revenues
+    .filter((revenue) => selectedRevenueIds.includes(revenue.id))
+    .reduce((total, revenue) => total + Math.max(0, revenue.balanceRemaining), 0);
+  // Na edição os saldos já embutem o rateio do próprio pagamento, então a
+  // prévia mentiria; a opção continua disponível, só sem o comparativo.
+  const preview = defaultValues ? null : previewRedistribution(revenues, selectedRevenueIds, parseDecimal(amount));
+
+  function toggleRevenue(revenueId: number) {
+    setSelectedRevenueIds((current) =>
+      current.includes(revenueId) ? current.filter((id) => id !== revenueId) : [...current, revenueId]
+    );
+  }
+
+  function fillAmount(value: number) {
+    setAmount(Math.round(value * 100) / 100 === 0 ? "" : String(Math.round(value * 100) / 100));
+  }
+
+  function selectAllOpenInstallments() {
+    const open = revenues.filter((revenue) => revenue.balanceRemaining > 0.005);
+    setSelectedRevenueIds(open.map((revenue) => revenue.id));
+    fillAmount(open.reduce((total, revenue) => total + revenue.balanceRemaining, 0));
+  }
 
   return (
     <form onSubmit={(event) => { event.preventDefault(); onSubmit(event.currentTarget); }} className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      <DecimalInput label="Valor recebido agora" name="amount" required defaultValue={defaultValues?.amount} />
+      <Field label="Valor recebido agora">
+        <input name="amount" type="text" inputMode="decimal" required value={amount} onChange={(event) => setAmount(event.target.value)} className={inputClass} />
+      </Field>
       <TextInput label="Data" name="paymentDate" type="date" required defaultValue={toInputDate(defaultValues?.paymentDate) || new Date().toISOString().slice(0, 10)} />
-      <SelectInput label="Parcela de referência (opcional)" name="revenueId" defaultValue={defaultValues?.revenueId}>
-        <option value="">Sem parcela específica</option>
-        {revenues.map((revenue) => <option key={revenue.id} value={revenue.id}>{`${dateLabel(revenue.date)} · ${revenue.installmentNumber ? `${revenue.installmentNumber}ª parcela` : "parcela"} · saldo ${money(revenue.balanceRemaining)}`}</option>)}
-      </SelectInput>
+      <fieldset className="sm:col-span-2 xl:col-span-2">
+        <legend className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Parcelas quitadas neste recebimento</legend>
+        <div className="mt-1 max-h-32 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2">
+          {revenues.map((revenue) => {
+            const selected = selectedRevenueIds.includes(revenue.id);
+            const closed = revenue.balanceRemaining <= 0.005 && !selected;
+            const label = revenue.installmentNumber === 0
+              ? "Entrada"
+              : revenue.installmentNumber
+                ? `${revenue.installmentNumber}ª parcela`
+                : "Parcela";
+            return (
+              <label key={revenue.id} className={`flex cursor-pointer items-center justify-between gap-3 rounded px-2 py-1.5 text-xs ${closed ? "cursor-not-allowed text-slate-400" : "text-slate-700 hover:bg-slate-50"}`}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    name="revenueIds"
+                    value={revenue.id}
+                    checked={selected}
+                    disabled={closed}
+                    onChange={() => toggleRevenue(revenue.id)}
+                  />
+                  <span className="truncate">{dateLabel(revenue.date)} · {label}</span>
+                </span>
+                <span className="whitespace-nowrap font-bold">{money(revenue.balanceRemaining)}</span>
+              </label>
+            );
+          })}
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button type="button" onClick={() => fillAmount(selectedBalance)} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50">Usar saldo selecionado ({money(selectedBalance)})</button>
+          <button type="button" onClick={selectAllOpenInstallments} className="rounded-md bg-cyan-100 px-2 py-1 text-xs font-black text-cyan-900 hover:bg-cyan-200">Quitar saldo total agora</button>
+        </div>
+        <p className="mt-1 text-xs text-slate-500">Para antecipar, selecione as parcelas futuras e use o saldo selecionado. Para quitar a matrícula antes do prazo, use “Quitar saldo total agora”. Sem seleção, será usada a parcela do mês da data.</p>
+      </fieldset>
+
+      <div className="sm:col-span-2 xl:col-span-4">
+        <label className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+          <input type="checkbox" name="redistributeShortfall" checked={redistribute} onChange={(event) => setRedistribute(event.target.checked)} className="mt-0.5" />
+          <span>
+            <span className="font-black text-slate-900">Pagando menos que o saldo marcado, quitar as parcelas mesmo assim</span>
+            <span className="block text-slate-500">A diferença é remanejada em partes iguais para as parcelas ainda em aberto. O valor do contrato não muda — é adiamento, não desconto. Desmarcado, a última parcela marcada fica parcial.</span>
+          </span>
+        </label>
+        {preview ? (
+          redistribute ? (
+            preview.absorbers.length > 0 ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+                <p className="font-black">Diferença de {money(preview.shortfall)} será remanejada</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="font-bold uppercase tracking-wide text-[10px] text-amber-800">Ficam quitadas por menos</p>
+                    {preview.settled.map((item) => (
+                      <p key={item.revenue.id}>{installmentLabel(item.revenue)}: {money(item.revenue.amount)} → <strong>{money(item.after)}</strong></p>
+                    ))}
+                  </div>
+                  <div>
+                    <p className="font-bold uppercase tracking-wide text-[10px] text-amber-800">Absorvem a diferença</p>
+                    {preview.absorbers.map((item) => (
+                      <p key={item.revenue.id}>{installmentLabel(item.revenue)}: {money(item.revenue.amount)} → <strong>{money(item.after)}</strong></p>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs font-bold text-rose-800">
+                Não há parcela em aberto para absorver a diferença de {money(preview.shortfall)}. A última parcela marcada ficará parcial com esse saldo.
+              </p>
+            )
+          ) : (
+            <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs font-bold text-slate-600">
+              A última parcela marcada ficará parcial com {money(preview.shortfall)} em aberto.
+            </p>
+          )
+        ) : null}
+      </div>
       <SelectInput label="Forma de pagamento" name="paymentMethod" defaultValue={method} onChange={(value) => { const next = value as RevenuePaymentMethod; setMethod(next); onMethodChange?.(next); }}>
         {PAYMENT_METHODS.map((value) => <option key={value} value={value}>{PAYMENT_METHOD_LABELS[value]}</option>)}
       </SelectInput>
-      <Field label="Parcelas combinadas">
-        <select name="installments" defaultValue={defaultValues?.installments ?? 1} className={inputClass}>
-          {Array.from({ length: 24 }, (_, index) => index + 1).map((installment) => <option key={installment} value={installment}>{installment}x</option>)}
-        </select>
-      </Field>
       {method === "credito" ? (
         <>
+          <Field label="Parcelas no cartão">
+            <select name="installments" defaultValue={defaultValues?.installments ?? 1} className={inputClass}>
+              {Array.from({ length: 24 }, (_, index) => index + 1).map((installment) => <option key={installment} value={installment}>{installment}x</option>)}
+            </select>
+            <p className="text-xs text-slate-500">É a divisão deste pagamento pela operadora; não altera o cronograma da matrícula.</p>
+          </Field>
           <SelectInput label="Bandeira" name="cardBrandId" defaultValue={defaultValues?.cardBrandId}>
             <Options items={cardBrands} emptyLabel="Sem bandeira (taxa padrão)" />
           </SelectInput>

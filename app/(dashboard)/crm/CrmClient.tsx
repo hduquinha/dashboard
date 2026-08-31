@@ -2,7 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronDown, UserPlus, X } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ArrowUpAZ,
+  CalendarArrowDown,
+  CalendarArrowUp,
+  Check,
+  ChevronDown,
+  Columns3,
+  Flame,
+  GraduationCap,
+  History,
+  MapPin,
+  Mic,
+  Snowflake,
+  UserPlus,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { ExportMenu } from "@/components/ExportMenu";
 import type { CommercialStage, InscricaoItem, InscricaoStatus, OrderDirection, OrderableField } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
@@ -16,6 +33,7 @@ import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { MergeLeadsModal } from "@/components/MergeLeadsModal";
 import { CreateLeadModal } from "@/components/CreateLeadModal";
 import { CrmKanbanView } from "@/components/CrmKanbanView";
+import { AgendaPanel } from "@/components/AgendaPanel";
 import { buildStageBadgeMap, FALLBACK_STAGE_BADGE } from "@/lib/stageColors";
 
 /* ───────── Types ───────── */
@@ -74,21 +92,21 @@ interface LeadsClientProps {
 const SORT_OPTIONS: {
   field: OrderableField;
   dir: OrderDirection;
-  icon: string;
+  icon: LucideIcon;
   label: string;
   shortLabel: string;
   description?: string;
 }[] = [
-  { field: "criado_em", dir: "desc", icon: "🗓️", label: "Mais recente", shortLabel: "Mais recente", description: "Data de entrada, do mais novo ao mais antigo" },
-  { field: "criado_em", dir: "asc",  icon: "🗓️", label: "Mais antigo",  shortLabel: "Mais antigo",  description: "Data de entrada, do mais antigo ao mais novo" },
-  { field: "nome",      dir: "asc",  icon: "🔤", label: "Nome A → Z",   shortLabel: "Nome A→Z",     description: "Ordem alfabética crescente" },
-  { field: "nome",      dir: "desc", icon: "🔤", label: "Nome Z → A",   shortLabel: "Nome Z→A",     description: "Ordem alfabética decrescente" },
-  { field: "status_at", dir: "desc", icon: "🔄", label: "Última interação", shortLabel: "Interação", description: "Leads com atividade mais recente primeiro" },
-  { field: "stars",     dir: "desc", icon: "⭐", label: "Temperatura ↓", shortLabel: "Temperatura ↓", description: "Mais quentes primeiro" },
-  { field: "stars",     dir: "asc",  icon: "⭐", label: "Temperatura ↑", shortLabel: "Temperatura ↑", description: "Mais frios primeiro" },
-  { field: "commercial_stage", dir: "asc",  icon: "📋", label: "Etapa comercial", shortLabel: "Etapa", description: "Agrupa por etapa do funil" },
-  { field: "treinamento", dir: "asc", icon: "🎓", label: "Treinamento",  shortLabel: "Treinamento", description: "Agrupa por evento / treinamento" },
-  { field: "cidade",    dir: "asc",  icon: "📍", label: "Cidade A → Z", shortLabel: "Cidade",       description: "Ordem alfabética por cidade" },
+  { field: "criado_em", dir: "desc", icon: CalendarArrowDown, label: "Mais recente", shortLabel: "Mais recente", description: "Data de entrada, do mais novo ao mais antigo" },
+  { field: "criado_em", dir: "asc",  icon: CalendarArrowUp, label: "Mais antigo",  shortLabel: "Mais antigo",  description: "Data de entrada, do mais antigo ao mais novo" },
+  { field: "nome",      dir: "asc",  icon: ArrowDownAZ, label: "Nome A → Z",   shortLabel: "Nome A→Z",     description: "Ordem alfabética crescente" },
+  { field: "nome",      dir: "desc", icon: ArrowUpAZ, label: "Nome Z → A",   shortLabel: "Nome Z→A",     description: "Ordem alfabética decrescente" },
+  { field: "status_at", dir: "desc", icon: History, label: "Última interação", shortLabel: "Interação", description: "Leads com atividade mais recente primeiro" },
+  { field: "stars",     dir: "desc", icon: Flame, label: "Temperatura ↓", shortLabel: "Temperatura ↓", description: "Mais quentes primeiro" },
+  { field: "stars",     dir: "asc",  icon: Snowflake, label: "Temperatura ↑", shortLabel: "Temperatura ↑", description: "Mais frios primeiro" },
+  { field: "commercial_stage", dir: "asc",  icon: Columns3, label: "Etapa comercial", shortLabel: "Etapa", description: "Agrupa por etapa do funil" },
+  { field: "treinamento", dir: "asc", icon: GraduationCap, label: "Treinamento",  shortLabel: "Treinamento", description: "Agrupa por evento / treinamento" },
+  { field: "cidade",    dir: "asc",  icon: MapPin, label: "Cidade A → Z", shortLabel: "Cidade",       description: "Ordem alfabética por cidade" },
 ];
 
 /* ───────── Pipeline stages ───────── */
@@ -99,6 +117,21 @@ const PIPELINE: { key: string; label: string; color: string; bg: string; icon: s
   { key: "rejeitado", label: "Descartado", color: "text-rose-700", bg: "bg-rose-100", icon: "🚫" },
 ];
 
+
+/**
+ * Avatar de iniciais do lead. A COR continua contando o status (qualificado /
+ * descartado / novo) — isso já existia na tabela e é informação, não enfeite.
+ * O degradê e o anel são o mesmo acabamento das pastilhas de ícone do resto do
+ * painel; antes o card do celular usava cinza chapado e a tabela usava a cor do
+ * status, então o mesmo lead aparecia de dois jeitos.
+ */
+function avatarClassFor(statusKey: string): string {
+  if (statusKey === "aprovado")
+    return "bg-gradient-to-br from-emerald-50 to-emerald-100 text-emerald-700 ring-1 ring-inset ring-emerald-200";
+  if (statusKey === "rejeitado")
+    return "bg-gradient-to-br from-rose-50 to-rose-100 text-rose-700 ring-1 ring-inset ring-rose-200";
+  return "bg-gradient-to-br from-slate-50 to-slate-100 text-slate-600 ring-1 ring-inset ring-slate-200";
+}
 
 function pipelineFor(status?: InscricaoStatus) {
   return PIPELINE.find((p) => p.key === status) ?? PIPELINE[0];
@@ -157,6 +190,11 @@ export default function CrmClient({
   const [isPending, startTransition] = useTransition();
   const [records, setRecords] = useState(inscricoes);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Sobe quando a ficha do lead fecha: tarefa criada/concluída lá dentro tem
+  // que aparecer na agenda sem F5.
+  const [agendaRefresh, setAgendaRefresh] = useState(0);
+  // Idem para o board do Kanban, quando a agenda muda a etapa de um lead.
+  const [kanbanRefresh, setKanbanRefresh] = useState(0);
   const [searchText, setSearchText] = useState(filters.q || filters.nome);
   const [activePopover, setActivePopover] = useState<string | null>(null);
   const [showMergeModal, setShowMergeModal] = useState(false);
@@ -568,8 +606,8 @@ export default function CrmClient({
                                   : "text-neutral-700 hover:bg-neutral-50"
                               }`}
                             >
-                              <span className={`h-4 w-4 flex-shrink-0 rounded border text-center text-[10px] leading-4 ${active ? "border-cyan-500 bg-cyan-500 text-white" : "border-neutral-300"}`}>
-                                {active ? "✓" : ""}
+                              <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${active ? "border-cyan-500 bg-cyan-500 text-white" : "border-neutral-300"}`}>
+                                {active ? <Check size={11} strokeWidth={3} /> : null}
                               </span>
                               {t.label || formatTrainingDateLabel(t.id) || t.id}
                             </button>
@@ -610,8 +648,8 @@ export default function CrmClient({
                                   : "text-neutral-700 hover:bg-neutral-50"
                               }`}
                             >
-                              <span className={`h-4 w-4 flex-shrink-0 rounded border text-center text-[10px] leading-4 ${active ? "border-violet-500 bg-violet-500 text-white" : "border-neutral-300"}`}>
-                                {active ? "✓" : ""}
+                              <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${active ? "border-violet-500 bg-violet-500 text-white" : "border-neutral-300"}`}>
+                                {active ? <Check size={11} strokeWidth={3} /> : null}
                               </span>
                               {t.label || formatTrainingDateLabel(t.id) || t.id}
                             </button>
@@ -647,10 +685,10 @@ export default function CrmClient({
                   : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50"
               }`}
             >
-              {filters.tag === "recrutador" ? "🧑‍💼 Recrutador"
-                : filters.tag === "whatsapp" ? "💬 WhatsApp enviado"
-                  : filters.tag === "com-indicador" ? "🔗 Com indicador"
-                    : filters.tag === "com-dinamica" ? "🎯 Com dinâmica"
+              {filters.tag === "recrutador" ? "Recrutador"
+                : filters.tag === "whatsapp" ? "WhatsApp enviado"
+                  : filters.tag === "com-indicador" ? "Com indicador"
+                    : filters.tag === "com-dinamica" ? "Com dinâmica"
                       : "Etiqueta"}
               <ChevronDown className="h-3 w-3 opacity-60" />
             </button>
@@ -659,10 +697,10 @@ export default function CrmClient({
               <div className="absolute left-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xl">
                 {[
                   { value: "", label: "Qualquer" },
-                  { value: "recrutador", label: "🧑‍💼 Recrutador" },
-                  { value: "whatsapp", label: "💬 WhatsApp enviado" },
-                  { value: "com-indicador", label: "🔗 Com indicador" },
-                  { value: "com-dinamica", label: "🎯 Com dinâmica" },
+                  { value: "recrutador", label: "Recrutador" },
+                  { value: "whatsapp", label: "WhatsApp enviado" },
+                  { value: "com-indicador", label: "Com indicador" },
+                  { value: "com-dinamica", label: "Com dinâmica" },
                 ].map((opt) => (
                   <button
                     key={opt.value}
@@ -691,8 +729,8 @@ export default function CrmClient({
                   : "border-neutral-200 bg-white text-neutral-600 hover:border-neutral-300 hover:bg-neutral-50"
               }`}
             >
-              {filters.presenca === "aprovada" ? "✓ Presentes"
-                : filters.presenca === "reprovada" ? "~ Parcial"
+              {filters.presenca === "aprovada" ? "Presentes"
+                : filters.presenca === "reprovada" ? "Parcial"
                   : filters.presenca === "validada" ? "Com validação"
                     : filters.presenca === "nao-validada" ? "Sem validação"
                       : "Presença"}
@@ -703,8 +741,8 @@ export default function CrmClient({
               <div className="absolute left-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xl">
                 {[
                   { value: "", label: "Todas" },
-                  { value: "aprovada", label: "✓ Presente" },
-                  { value: "reprovada", label: "~ Parcial / reprovada" },
+                  { value: "aprovada", label: "Presente" },
+                  { value: "reprovada", label: "Parcial / reprovada" },
                   { value: "validada", label: "Com validação" },
                   { value: "nao-validada", label: "Sem validação" },
                 ].map((opt) => (
@@ -747,7 +785,7 @@ export default function CrmClient({
                   { value: "2", label: "Morna", stars: 2 },
                   { value: "3", label: "Quente", stars: 3 },
                   { value: "4", label: "Muito quente", stars: 4 },
-                  { value: "5", label: "Hot 🔥", stars: 5 },
+                  { value: "5", label: "Hot", stars: 5 },
                 ].map((opt) => (
                   <button
                     key={opt.value}
@@ -964,7 +1002,7 @@ export default function CrmClient({
                         active ? "bg-neutral-900 font-semibold text-white" : "text-neutral-700"
                       }`}
                     >
-                      <span className="text-base leading-none">{opt.icon}</span>
+                      <opt.icon size={16} className={active ? "text-white" : "text-[rgb(var(--blue-11))]"} />
                       <div className="min-w-0">
                         <p className="font-semibold">{opt.label}</p>
                         {opt.description && <p className={`text-[10px] ${active ? "text-neutral-300" : "text-neutral-400"}`}>{opt.description}</p>}
@@ -999,7 +1037,7 @@ export default function CrmClient({
         <div className="flex-shrink-0 border-b border-violet-100 bg-gradient-to-r from-violet-50 to-purple-50 px-5 py-2.5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-100 px-2.5 py-0.5 text-[11px] font-bold text-violet-700">
-              🎤 Voz UP
+              <Mic size={12} /> Voz UP
             </span>
             <span className="text-xs text-violet-600">
               Leads captados pelo Workshop e Landing Page da Voz UP. Novos leads da landing page devem ser distribuídos.
@@ -1019,7 +1057,21 @@ export default function CrmClient({
 
         {/* ── KANBAN VIEW ────────────────────────────────── */}
         {view === "kanban" && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            {/* Agenda do vendedor acima do board: é aqui que ele vê o
+                compromisso que venceu e registra o que aconteceu, sem ter que
+                abrir a ficha de cada lead em Agendado. */}
+            <div className="flex-shrink-0 px-4 pt-3">
+              <AgendaPanel
+                onSelectLead={setSelectedId}
+                refreshToken={agendaRefresh}
+                // Resultado registrado move o lead de etapa: o board precisa
+                // ser refeito, senão o card fica desenhado em Agendado.
+                onLeadChanged={() => setKanbanRefresh((value) => value + 1)}
+              />
+            </div>
           <CrmKanbanView
+            refreshToken={kanbanRefresh}
             selectedId={selectedId}
             onSelectLead={setSelectedId}
             produto={filters.produto ?? null}
@@ -1027,8 +1079,19 @@ export default function CrmClient({
             isSupervisor={commercial.isSupervisor}
             stages={activeFunnel?.stages ?? []}
             funnelId={activeFunnel?.id ?? null}
+            allowRegisterSale={!currentUser || hasPermission(currentUser, "crm.register_sale")}
             sellers={commercial.sellers}
+            // No funil de triagem o card precisa da mesma ação Aprovar que existe
+            // na pasta Triagem do Kanban — senão o lead fica sem saída por aqui.
+            approveFunnels={
+              activeFunnel?.isTriage
+                ? funnels
+                    .filter((funnel) => !funnel.isTriage)
+                    .map((funnel) => ({ id: funnel.id, name: funnel.name }))
+                : undefined
+            }
           />
+          </div>
         )}
 
         {/* ── TABLE PANE ─────────────────────────────────── */}
@@ -1054,7 +1117,7 @@ export default function CrmClient({
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-neutral-200 text-sm font-bold text-neutral-600">
+                    <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold ${avatarClassFor(pipe.key)}`}>
                       {(humanizeName(lead.nome) ?? "?")[0].toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -1123,7 +1186,7 @@ export default function CrmClient({
                   const isSelected = selectedId === lead.id;
                   const lastNote = lead.notes && lead.notes.length > 0 ? lead.notes[lead.notes.length - 1] : null;
                   const pipe = pipelineFor(lead.status);
-                  const avatarBg = pipe.key === "aprovado" ? "bg-emerald-100 text-emerald-700" : pipe.key === "rejeitado" ? "bg-rose-100 text-rose-600" : "bg-neutral-100 text-neutral-600";
+                  const avatarBg = avatarClassFor(pipe.key);
                   return (
                     <tr
                       key={lead.id}
@@ -1246,7 +1309,10 @@ export default function CrmClient({
       {/* ─ Perfil do lead (pop-up centralizado) ─ */}
       <LeadProfileModal
         leadId={selectedId}
-        onClose={() => setSelectedId(null)}
+        onClose={() => {
+          setSelectedId(null);
+          setAgendaRefresh((value) => value + 1);
+        }}
         onUpdate={syncRecord}
         onDelete={(id: number) => {
           setRecords((prev) => prev.filter((r) => r.id !== id));

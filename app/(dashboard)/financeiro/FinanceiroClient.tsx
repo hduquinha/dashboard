@@ -28,6 +28,7 @@ import {
   BellRing,
   Building2,
   CalendarDays,
+  CalendarRange,
   CheckCircle2,
   Download,
   Edit3,
@@ -36,20 +37,37 @@ import {
   FileSpreadsheet,
   FileUp,
   Filter,
+  Hammer,
+  HandCoins,
+  Hourglass,
+  Layers,
   LineChart as LineChartIcon,
   LockKeyhole,
+  Percent,
+  PiggyBank,
   Plus,
+  Receipt,
   ReceiptText,
   Search,
+  ShoppingCart,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Trash2,
+  TrendingUp,
   UnlockKeyhole,
+  Wallet,
   WalletCards,
   X,
+  type LucideIcon,
 } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import { cn } from "@/lib/utils";
+import {
+  FINANCE_BUSINESS_UNITS,
+  FINANCE_BUSINESS_UNIT_LABELS,
+  businessUnitLabel,
+} from "@/lib/financeBusinessUnits";
 import type {
   BranchItemPhase,
   CommissionStatus,
@@ -73,15 +91,36 @@ import type {
   FinanceMonthTotals,
   FinanceRevenue,
   FinanceVariableExpense,
+  PaymentMethodKind,
+  PendingInvoiceEnrollment,
   RevenueStatus,
 } from "@/types/finance";
+import {
+  MAX_ENROLLMENT_INSTALLMENTS,
+  installmentCap,
+  normalizeEnrollmentInstallments,
+} from "@/lib/enrollmentInstallments";
 import FinanceAuditPanel from "@/components/FinanceAuditPanel";
+import CobrancaTab from "./CobrancaTab";
+import EnrollmentEditor, {
+  loadEnrollmentForEditor,
+  type EnrollmentEditorState,
+} from "../matriculas/EnrollmentEditor";
+import EnrollmentInvoiceModal, {
+  InvoiceStatusBadge,
+  invoiceTargetFromEnrollment,
+  invoiceTargetFromPending,
+  type EnrollmentInvoiceTarget,
+} from "./EnrollmentInvoiceModal";
 import EnrollmentPaymentsPanel from "./EnrollmentPaymentsPanel";
+import RevenuePaymentsPanel from "./RevenuePaymentsPanel";
+import RevenueImportModal, { REVENUE_IMPORT_HREF } from "./RevenueImportModal";
 
 type TabKey =
   | "dashboard"
   | "fluxo"
   | "receitas"
+  | "cobranca"
   | "gastos"
   | "filiais"
   | "matriculas"
@@ -92,11 +131,12 @@ type TabKey =
   | "auditoria";
 
 type ModalState =
-  | { type: "revenue"; mode: "create" | "edit"; record?: FinanceRevenue }
+  // `defaultBusinessUnit` só existe na criação: a receita nasce na unidade que
+  // a pessoa está olhando, em vez de cair sempre no padrão VozUP.
+  | { type: "revenue"; mode: "create" | "edit"; record?: FinanceRevenue; defaultBusinessUnit?: string }
   | { type: "fixed"; mode: "create" | "edit"; record?: FinanceFixedExpense }
   | { type: "variable"; mode: "create" | "edit"; record?: FinanceVariableExpense }
   | { type: "branch"; mode: "create" | "edit"; record?: FinanceBranchItem }
-  | { type: "enrollment"; mode: "create" | "edit"; record?: FinanceEnrollment }
   | { type: "commission"; mode: "create" }
   | null;
 
@@ -121,8 +161,22 @@ interface FinanceiroClientProps {
   comissoesVisao: "mes" | "todos";
   allMonthlyTotals: FinanceMonthTotals[] | null;
   commissionsOverview: CommissionsOverview;
+  /** Matrículas com pagamento recebido e NF pendente — sempre o histórico todo. */
+  pendingInvoices: PendingInvoiceEnrollment[];
+  /** Parcelas de matrícula que vencem no período — recorte por vencimento. */
+  receivables: FinanceRevenue[];
+  /** Parcelas vencidas em aberto de qualquer mês (fora do filtro de período). */
+  overdueReceivables: FinanceRevenue[];
+  /** Pode declarar nota emitida/dispensada e anexar o arquivo (finance.invoices). */
+  canManageInvoices: boolean;
   /** Pode remover eventos do Registro de Auditoria (permissão admin.audit). */
   canDeleteAuditEvents: boolean;
+  /**
+   * Aba aberta ao entrar (`?aba=`). Existe para que um link externo — o aviso
+   * de parcela vencida, por exemplo — caia direto na tela que resolve o
+   * assunto, em vez de largar a pessoa no Dashboard para procurar.
+   */
+  initialTab?: string;
 }
 
 type VisaoKey = "receitasVisao" | "fluxoVisao" | "matriculasVisao" | "comissoesVisao";
@@ -152,6 +206,7 @@ const tabs: Array<{ key: TabKey; label: string; icon: typeof LineChartIcon }> = 
   { key: "dashboard", label: "Dashboard Financeiro", icon: LineChartIcon },
   { key: "fluxo", label: "Fluxo de Caixa", icon: WalletCards },
   { key: "receitas", label: "Receitas", icon: BadgeDollarSign },
+  { key: "cobranca", label: "Cobrança", icon: Wallet },
   { key: "gastos", label: "Despesas", icon: ReceiptText },
   { key: "filiais", label: "Unidade Tatuapé", icon: Building2 },
   { key: "matriculas", label: "Matrículas", icon: CalendarDays },
@@ -169,15 +224,7 @@ export const inputClass =
 export const labelClass = "text-[11px] font-black uppercase tracking-[0.14em] text-slate-500";
 
 /** Campos dos formulários de Configurações que são colunas numéricas no banco — precisam passar por parseDecimal antes de ir pra API. */
-const CATALOG_DECIMAL_FIELDS = new Set(["salary", "benefits", "defaultPrice", "defaultPct"]);
-
-function splitInstallmentsClient(total: number, count: number): number[] {
-  const n = Math.max(1, Math.trunc(count));
-  const cents = Math.round(total * 100);
-  const base = Math.floor(cents / n);
-  const remainder = cents - base * n;
-  return Array.from({ length: n }, (_, index) => (base + (index === n - 1 ? remainder : 0)) / 100);
-}
+const CATALOG_DECIMAL_FIELDS = new Set(["salary", "benefits", "defaultPrice", "defaultPct", "feePct"]);
 
 export function money(value: number | null | undefined): string {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(value ?? 0);
@@ -600,14 +647,41 @@ function useHydrated() {
   return useSyncExternalStore(subscribeHydration, () => true, () => false);
 }
 
+
+/**
+ * Ícone e tom de cada indicador do topo. Os cartões vinham só com texto —
+ * numa fileira de oito, todos idênticos, achar "Saldo em Caixa" no meio do
+ * bloco exigia ler um por um.
+ */
+const KPI_TILES: Record<string, { icon: LucideIcon; tone: IconTileTone }> = {
+  receita_mes: { icon: HandCoins, tone: "teal" },
+  receita_anual: { icon: CalendarRange, tone: "teal" },
+  receita_prevista: { icon: TrendingUp, tone: "brand" },
+  receita_pendente: { icon: Hourglass, tone: "amber" },
+  receita_bruta: { icon: HandCoins, tone: "teal" },
+  gastos_fixos: { icon: Receipt, tone: "ruby" },
+  gastos_variaveis: { icon: ShoppingCart, tone: "ruby" },
+  gastos_total_acumulado: { icon: Layers, tone: "slate" },
+  lucro: { icon: PiggyBank, tone: "teal" },
+  saldo: { icon: Wallet, tone: "brand" },
+  margem: { icon: Percent, tone: "amber" },
+  implantacao: { icon: Hammer, tone: "slate" },
+};
+
+const kpiTile = (key: string) => KPI_TILES[key] ?? { icon: Wallet, tone: "slate" as IconTileTone };
+
 function KpiCard({ kpi }: { kpi: FinanceKpi }) {
   const isExpense = kpi.key.includes("gastos") || kpi.key.includes("implantacao");
   const isPositive = kpi.deltaPct === null ? null : isExpense ? kpi.deltaPct <= 0 : kpi.deltaPct >= 0;
   const DeltaIcon = isPositive === false ? ArrowDownRight : ArrowUpRight;
+  const tile = kpiTile(kpi.key);
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-[var(--dashboard-card-shadow)]">
       <div className="flex items-start justify-between gap-2">
-        <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">{kpi.label}</p>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <IconTile icon={tile.icon} tone={tile.tone} size="sm" />
+          <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">{kpi.label}</p>
+        </div>
         <span
           className={cn(
             "inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-black",
@@ -1217,12 +1291,28 @@ export default function FinanceiroClient({
   comissoesVisao,
   allMonthlyTotals,
   commissionsOverview,
+  pendingInvoices,
+  receivables,
+  overdueReceivables,
+  canManageInvoices,
   canDeleteAuditEvents,
+  initialTab,
 }: FinanceiroClientProps) {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<TabKey>("dashboard");
+  const [activeTab, setActiveTab] = useState<TabKey>(() =>
+    tabs.some((tab) => tab.key === initialTab) ? (initialTab as TabKey) : "dashboard"
+  );
   const [modal, setModal] = useState<ModalState>(null);
   const [paymentsPanelEnrollment, setPaymentsPanelEnrollment] = useState<{ id: number; readOnly: boolean } | null>(null);
+  const [revenuePaymentsRow, setRevenuePaymentsRow] = useState<FinanceRevenue | null>(null);
+  // Importação de planilha: só existe para o Instituto UP (ver RevenueImportModal).
+  const [revenueImportOpen, setRevenueImportOpen] = useState(false);
+  // Cadastro e edição de matrícula usam o MESMO editor da tela /matriculas: o
+  // formulário simples que existia aqui não mandava `schedule`, e salvar por
+  // ele regenerava as parcelas em fatias iguais, apagando o cronograma
+  // combinado (ver resolveSchedule em lib/finance.ts).
+  const [enrollmentEditor, setEnrollmentEditor] = useState<EnrollmentEditorState | null>(null);
+  const [invoiceTarget, setInvoiceTarget] = useState<EnrollmentInvoiceTarget | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [localFilters, setLocalFilters] = useState({
@@ -1230,6 +1320,7 @@ export default function FinanceiroClient({
     month,
     from: filters.from ?? month,
     to: filters.to ?? month,
+    businessUnit: filters.businessUnit ?? "",
     branchId: filters.branchId ? String(filters.branchId) : "",
     courseId: filters.courseId ? String(filters.courseId) : "",
     categoryId: filters.categoryId ? String(filters.categoryId) : "",
@@ -1283,9 +1374,23 @@ export default function FinanceiroClient({
       const value = localFilters[key];
       if (value) params.set(key, value);
     }
+    if (localFilters.businessUnit) params.set("unidade", localFilters.businessUnit);
     for (const key of ["receitasVisao", "fluxoVisao", "matriculasVisao", "comissoesVisao"] as const) {
       if (localFilters[key] === "todos") params.set(key, "todos");
     }
+    router.push(`/financeiro?${params.toString()}`);
+  }
+
+  /**
+   * Troca a unidade de negócio na hora, sem passar pelo botão Filtrar: é uma
+   * chave de leitura ("estou olhando a VozUP ou o Instituto UP"), não um filtro
+   * fino que a pessoa monta antes de aplicar.
+   */
+  function setBusinessUnit(next: "" | "vozup" | "instituto") {
+    const params = new URLSearchParams(window.location.search);
+    if (next) params.set("unidade", next);
+    else params.delete("unidade");
+    setLocalFilters((current) => ({ ...current, businessUnit: next }));
     router.push(`/financeiro?${params.toString()}`);
   }
 
@@ -1358,6 +1463,7 @@ export default function FinanceiroClient({
               student: formString(form, "student") || null,
               courseId: formOptionalNumber(form, "courseId"),
               branchId: formOptionalNumber(form, "branchId"),
+              businessUnit: formString(form, "businessUnit") || "vozup",
               paymentMethodId: formOptionalNumber(form, "paymentMethodId"),
               sellerId: formOptionalNumber(form, "sellerId"),
               amount: formNumber(form, "amount"),
@@ -1372,6 +1478,7 @@ export default function FinanceiroClient({
               origin: formString(form, "origin") || null,
               courseId: formOptionalNumber(form, "courseId"),
               branchId: formOptionalNumber(form, "branchId"),
+              businessUnit: formString(form, "businessUnit") || "vozup",
               sellerId: formOptionalNumber(form, "sellerId"),
               commissionPct: formNumber(form, "commissionPct"),
               amount: formNumber(form, "amount"),
@@ -1392,6 +1499,7 @@ export default function FinanceiroClient({
           month: formString(form, "monthDisplay") || month,
           description: formString(form, "description"),
           categoryId: formOptionalNumber(form, "categoryId"),
+          businessUnit: formString(form, "businessUnit") || "vozup",
           dueDate: formOptionalDate(form, "dueDate"),
           amount: formNumber(form, "amount"),
           benefitsAmount: formOptionalNumber(form, "benefitsAmount"),
@@ -1412,6 +1520,7 @@ export default function FinanceiroClient({
           description: formString(form, "description"),
           categoryId: formOptionalNumber(form, "categoryId"),
           branchId: formOptionalNumber(form, "branchId"),
+          businessUnit: formString(form, "businessUnit") || "vozup",
           amount: formNumber(form, "amount"),
           notes: formString(form, "notes") || null,
           invoiceUrl: formString(form, "invoiceUrl") || null,
@@ -1437,24 +1546,6 @@ export default function FinanceiroClient({
         const result = await apiJson(modal.mode === "edit" ? `/api/finance/branch-items/${modal.record?.id}` : "/api/finance/branch-items", modal.mode === "edit" ? "PATCH" : "POST", body);
         const targetId = modal.mode === "edit" ? modal.record?.id : result.id;
         if (targetId) await uploadInvoiceFile(`/api/finance/branch-items/${targetId}/invoice`, form);
-      }
-
-      if (modal.type === "enrollment") {
-        const body = {
-          student: formString(form, "student"),
-          courseId: formOptionalNumber(form, "courseId"),
-          totalAmount: formNumber(form, "totalAmount"),
-          installments: formNumber(form, "installments"),
-          paymentMethodId: formOptionalNumber(form, "paymentMethodId"),
-          cardBrandId: formOptionalNumber(form, "cardBrandId"),
-          commissionPct: formNumber(form, "commissionPct"),
-          firstMonth: formString(form, "firstMonth"),
-          saleDate: formString(form, "saleDate"),
-          sellerId: formOptionalNumber(form, "sellerId"),
-          branchId: formOptionalNumber(form, "branchId"),
-          notes: formString(form, "notes") || null,
-        };
-        await apiJson(modal.mode === "edit" ? `/api/finance/enrollments/${modal.record?.id}` : "/api/finance/enrollments", modal.mode === "edit" ? "PATCH" : "POST", body);
       }
 
       if (modal.type === "commission") {
@@ -1662,6 +1753,8 @@ export default function FinanceiroClient({
           })}
         </div>
 
+        <BusinessUnitSwitch value={localFilters.businessUnit} onChange={setBusinessUnit} />
+
         {message ? (
           <div className="mb-4 flex items-center justify-between rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-3 text-sm font-bold text-cyan-800">
             <span>{message}</span>
@@ -1704,6 +1797,23 @@ export default function FinanceiroClient({
             receitasVisao={localFilters.receitasVisao}
             onChangeReceitasVisao={(next) => setVisao("receitasVisao", next)}
             onOpenEnrollment={(enrollmentId) => setPaymentsPanelEnrollment({ id: enrollmentId, readOnly: true })}
+            businessUnit={localFilters.businessUnit}
+            onAddRevenue={() => setModal({ type: "revenue", mode: "create", defaultBusinessUnit: localFilters.businessUnit || "vozup" })}
+            onImportRevenues={() => setRevenueImportOpen(true)}
+            onEditRevenue={(record) => setModal({ type: "revenue", mode: "edit", record })}
+            onOpenRevenuePayments={(record) => setRevenuePaymentsRow(record)}
+            onDeleteRevenue={(record) => destroy(`/api/finance/revenues/${record.id}`, `a receita "${record.description}"`)}
+          />
+        ) : null}
+
+        {activeTab === "cobranca" ? (
+          <CobrancaTab
+            rows={receivables}
+            overdue={overdueReceivables}
+            cardBrands={catalog.cardBrands}
+            periodLabel={periodLabel}
+            onOpenEnrollment={(enrollmentId) => setPaymentsPanelEnrollment({ id: enrollmentId, readOnly: false })}
+            onDone={(text) => refresh(text)}
           />
         ) : null}
 
@@ -1742,15 +1852,23 @@ export default function FinanceiroClient({
         {activeTab === "matriculas" ? (
           <MatriculasTab
             rows={enrollments}
-            catalog={catalog}
             periodLabel={periodLabel}
             showVisaoToggle={showVisaoToggle}
             matriculasVisao={localFilters.matriculasVisao}
+            pendingInvoices={pendingInvoices}
+            canManageInvoices={canManageInvoices}
             onChangeMatriculasVisao={(next) => setVisao("matriculasVisao", next)}
-            onAdd={() => setModal({ type: "enrollment", mode: "create" })}
-            onEdit={(record) => setModal({ type: "enrollment", mode: "edit", record })}
+            onAdd={() => setEnrollmentEditor({})}
+            onEdit={async (record) => {
+              try {
+                setEnrollmentEditor(await loadEnrollmentForEditor(record.id));
+              } catch (error) {
+                setMessage(error instanceof Error ? error.message : "Não foi possível abrir a matrícula.");
+              }
+            }}
             onDelete={(record) => destroy(`/api/finance/enrollments/${record.id}`, "matrícula")}
             onOpenPayments={(enrollmentId) => setPaymentsPanelEnrollment({ id: enrollmentId, readOnly: false })}
+            onOpenInvoice={(record) => setInvoiceTarget(record)}
           />
         ) : null}
 
@@ -1812,6 +1930,16 @@ export default function FinanceiroClient({
         {activeTab === "auditoria" ? <FinanceAuditPanel canDelete={canDeleteAuditEvents} /> : null}
       </div>
 
+      {revenueImportOpen ? (
+        <RevenueImportModal
+          onClose={() => setRevenueImportOpen(false)}
+          onDone={(text) => {
+            setRevenueImportOpen(false);
+            refresh(text);
+          }}
+        />
+      ) : null}
+
       {modal ? (
         <FinanceModal
           modal={modal}
@@ -1838,6 +1966,45 @@ export default function FinanceiroClient({
           readOnly={paymentsPanelEnrollment.readOnly}
           onClose={() => setPaymentsPanelEnrollment(null)}
           onChanged={() => refresh()}
+        />
+      ) : null}
+
+      {revenuePaymentsRow ? (
+        <RevenuePaymentsPanel
+          revenue={revenuePaymentsRow}
+          cardBrands={catalog.cardBrands.filter((brand) => brand.active)}
+          onClose={() => setRevenuePaymentsRow(null)}
+          onChanged={(updated) => {
+            // O painel devolve a receita já recalculada: manter o objeto local
+            // em dia evita que a próxima ação dentro dele use saldo velho.
+            setRevenuePaymentsRow(updated);
+            refresh();
+          }}
+        />
+      ) : null}
+
+      {enrollmentEditor ? (
+        <EnrollmentEditor
+          key={enrollmentEditor.record?.id ?? "new"}
+          catalog={catalog}
+          record={enrollmentEditor.record}
+          initialSchedule={enrollmentEditor.schedule}
+          onClose={() => setEnrollmentEditor(null)}
+          onSaved={async () => {
+            setEnrollmentEditor(null);
+            refresh("Matrícula e cronograma salvos.");
+          }}
+        />
+      ) : null}
+
+      {invoiceTarget ? (
+        <EnrollmentInvoiceModal
+          record={invoiceTarget}
+          onClose={() => setInvoiceTarget(null)}
+          onSaved={(text) => {
+            setInvoiceTarget(null);
+            refresh(text);
+          }}
         />
       ) : null}
     </div>
@@ -2231,11 +2398,12 @@ function FluxoTab({
   );
 }
 
-export function KpiMini({ label, value }: { label: string; value: string }) {
+export function KpiMini({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-[var(--dashboard-card-shadow)]">
       <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">{label}</p>
       <p className="mt-2 text-lg font-black text-slate-950">{value}</p>
+      {hint ? <p className="mt-1 text-[11px] font-semibold text-slate-400">{hint}</p> : null}
     </div>
   );
 }
@@ -2253,6 +2421,12 @@ function ReceitasTab({
   receitasVisao,
   onChangeReceitasVisao,
   onOpenEnrollment,
+  businessUnit,
+  onAddRevenue,
+  onImportRevenues,
+  onEditRevenue,
+  onOpenRevenuePayments,
+  onDeleteRevenue,
 }: {
   rows: FinanceRevenue[];
   periodLabel: string;
@@ -2262,8 +2436,22 @@ function ReceitasTab({
   receitasVisao: "mes" | "todos";
   onChangeReceitasVisao: (next: "mes" | "todos") => void;
   onOpenEnrollment: (enrollmentId: number) => void;
+  /** Unidade escolhida no topo da tela ("" = Tudo). */
+  businessUnit: string;
+  onAddRevenue: () => void;
+  /** Abre a importação por planilha (só chamada no Instituto UP). */
+  onImportRevenues: () => void;
+  onEditRevenue: (record: FinanceRevenue) => void;
+  onOpenRevenuePayments: (record: FinanceRevenue) => void;
+  onDeleteRevenue: (record: FinanceRevenue) => void;
 }) {
   const [scope, setScope] = useState<"todas" | "avulsas" | "parcelas">("todas");
+  // A VozUP vende por matrícula, e é lá que a receita nasce — por isso esta aba
+  // continua só de leitura para ela. O Instituto UP não tem matrícula: se não
+  // for possível lançar a receita aqui, ela não entra em lugar nenhum.
+  const isInstituto = businessUnit === "instituto";
+  const podeLancar = (item: FinanceRevenue) =>
+    isInstituto && item.enrollmentId === null && item.businessUnit === "instituto";
   const visibleRows = rows.filter((item) => scope === "todas" || (scope === "avulsas" ? item.revenueMode === "avulso" : item.enrollmentId !== null));
   const activeRows = visibleRows.filter((item) => item.status !== "cancelado");
   // Mesmo com a lista em "todos os meses", os indicadores acima sempre
@@ -2297,10 +2485,42 @@ function ReceitasTab({
   return (
     <div className="space-y-5">
       {showVisaoToggle ? <VisaoToggle visao={receitasVisao} periodLabel={periodLabel} onChange={onChangeReceitasVisao} itemsLabel="Lista" /> : null}
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
-        <span className="font-black">Leitura financeira:</span>
-        <span>Esta aba é somente para acompanhamento. Cadastre e receba valores em Matrículas; aqui cada parcela mostra o que foi previsto, recebido e ainda pode ser recebido.</span>
-      </div>
+      {isInstituto ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
+          <div className="min-w-[16rem] flex-1">
+            <span className="font-black">Receitas do Instituto UP: </span>
+            <span>lance aqui a entrada (Encontro Online, UP Day Plus, etc.) uma a uma ou por planilha, e depois registre o recebimento em &ldquo;Receber&rdquo; — é o recebimento que faz o valor entrar no caixa.</span>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <a
+              href={REVENUE_IMPORT_HREF}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-white px-4 text-sm font-black text-cyan-800 hover:bg-cyan-50"
+              title="Planilha modelo com listas de categoria, origem, curso, unidade e vendedor"
+            >
+              <Download size={16} /> Baixar modelo
+            </a>
+            <button
+              type="button"
+              onClick={onImportRevenues}
+              className="inline-flex h-10 items-center gap-2 rounded-lg border border-cyan-200 bg-white px-4 text-sm font-black text-cyan-800 hover:bg-cyan-50"
+            >
+              <FileUp size={16} /> Importar planilha
+            </button>
+            <button
+              type="button"
+              onClick={onAddRevenue}
+              className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"
+            >
+              <Plus size={16} /> Nova receita
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-cyan-100 bg-cyan-50 p-3 text-sm text-cyan-950">
+          <span className="font-black">Leitura financeira:</span>
+          <span>Esta aba é somente para acompanhamento. Cadastre e receba valores em Matrículas; aqui cada parcela mostra o que foi previsto, recebido e ainda pode ser recebido.</span>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {(["todas", "avulsas", "parcelas"] as const).map((item) => (
           <button key={item} type="button" onClick={() => setScope(item)} className={cn("rounded-lg border px-3 py-2 text-xs font-black", scope === item ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-cyan-300") }>
@@ -2329,6 +2549,7 @@ function ReceitasTab({
             columns={[
               { key: "date", label: "Data", render: (r) => r.date, value: (r) => r.date },
               { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => r.description },
+              { key: "businessUnit", label: "Empresa", render: (r) => businessUnitLabel(r.businessUnit), value: (r) => businessUnitLabel(r.businessUnit) },
               { key: "category", label: "Categoria", render: (r) => r.categoryName ?? "Sem categoria", value: (r) => r.categoryName },
               { key: "dueDate", label: "Vencimento", render: (r) => (r.dueDate ? dateLabel(r.dueDate) : "-"), value: (r) => r.dueDate },
               { key: "student", label: "Aluno/Lead", render: (r) => r.leadName ?? r.student ?? "-", value: (r) => r.leadName ?? r.student },
@@ -2363,7 +2584,17 @@ function ReceitasTab({
             ]}
             actions={(record) => (
               <RowActions>
-                {record.enrollmentId !== null ? <IconButton title="Ver matrícula e recebimentos" onClick={() => onOpenEnrollment(record.enrollmentId!)}><WalletCards size={15} /></IconButton> : <span className="text-xs font-semibold text-slate-400">Somente leitura</span>}
+                {record.enrollmentId !== null ? (
+                  <IconButton title="Ver matrícula e recebimentos" onClick={() => onOpenEnrollment(record.enrollmentId!)}><WalletCards size={15} /></IconButton>
+                ) : podeLancar(record) ? (
+                  <>
+                    <IconButton title="Registrar recebimento" onClick={() => onOpenRevenuePayments(record)}><WalletCards size={15} /></IconButton>
+                    <IconButton title="Editar receita" onClick={() => onEditRevenue(record)}><Edit3 size={15} /></IconButton>
+                    <IconButton title="Excluir receita" danger onClick={() => onDeleteRevenue(record)}><Trash2 size={15} /></IconButton>
+                  </>
+                ) : (
+                  <span className="text-xs font-semibold text-slate-400">Somente leitura</span>
+                )}
               </RowActions>
             )}
           />
@@ -2404,6 +2635,60 @@ function fixedExpenseSortKey(row: FinanceFixedExpense): string {
 }
 
 /** Addon "ver todos os meses" — reaproveitado nas abas Despesas, Receitas, Fluxo, Matrículas e Comissões. */
+/**
+ * Chave Voz UP × Instituto UP.
+ *
+ * As duas empresas lançam receita e despesa na mesma base; esta é a chave que
+ * separa a leitura. "Tudo" é a soma — a operação continua sendo uma só, o que
+ * muda é o recorte de quem está olhando.
+ */
+/** Campo de unidade de negócio dos formulários de receita e despesa. */
+function BusinessUnitInput({ defaultValue }: { defaultValue?: string | null }) {
+  return (
+    <SelectInput label="Unidade de negócio" name="businessUnit" required defaultValue={defaultValue ?? "vozup"}>
+      {FINANCE_BUSINESS_UNITS.map((unit) => (
+        <option key={unit} value={unit}>{FINANCE_BUSINESS_UNIT_LABELS[unit]}</option>
+      ))}
+    </SelectInput>
+  );
+}
+
+function BusinessUnitSwitch({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: "" | "vozup" | "instituto") => void;
+}) {
+  const opcoes: Array<{ key: "" | "vozup" | "instituto"; label: string }> = [
+    { key: "", label: "Tudo" },
+    ...FINANCE_BUSINESS_UNITS.map((unit) => ({ key: unit, label: FINANCE_BUSINESS_UNIT_LABELS[unit] })),
+  ];
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2">
+      <span className="px-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Unidade de negócio</span>
+      {opcoes.map((opcao) => (
+        <button
+          key={opcao.key || "tudo"}
+          type="button"
+          onClick={() => onChange(opcao.key)}
+          className={cn(
+            "rounded-lg px-3 py-2 text-xs font-black transition",
+            value === opcao.key ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
+          )}
+        >
+          {opcao.label}
+        </button>
+      ))}
+      {value ? (
+        <span className="ml-auto pr-2 text-xs font-semibold text-slate-500">
+          Receitas, despesas, fluxo e lucro mostram apenas {FINANCE_BUSINESS_UNIT_LABELS[value as "vozup" | "instituto"]}.
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 function VisaoToggle({
   visao,
   periodLabel,
@@ -2452,6 +2737,68 @@ function VisaoToggle({
   );
 }
 
+/**
+ * Despesa fixa e variável na MESMA lista.
+ *
+ * A separação existe por causa de como cada uma nasce — fixa é provisionada
+ * mês a mês e tem trava de recorrência, variável é lançamento pontual — mas
+ * quem olha o mês quer ver o dinheiro que saiu, sem precisar somar duas
+ * tabelas de cabeça. As duas continuam sendo editadas pelo formulário certo.
+ */
+type DespesaGeral = {
+  id: string;
+  tipo: "Fixa" | "Variável";
+  data: string;
+  descricao: string;
+  categoria: string | null;
+  empresa: string;
+  valor: number;
+  status: ExpenseStatus | null;
+  notaHref: string | null;
+  notaUrl: string | null;
+  notaNome: string | null;
+  fixa?: FinanceFixedExpense;
+  variavel?: FinanceVariableExpense;
+};
+
+function normalizarDespesas(
+  fixed: FinanceFixedExpense[],
+  variable: FinanceVariableExpense[]
+): DespesaGeral[] {
+  const daFixa: DespesaGeral[] = fixed.map((item) => ({
+    id: `f-${item.id}`,
+    tipo: "Fixa",
+    // Fixa não tem dia de lançamento: o que existe é o mês de competência e,
+    // quando informado, o vencimento — é ele que a pessoa procura na lista.
+    data: item.dueDate ?? `${item.month}-01`,
+    descricao: item.description,
+    categoria: item.categoryName,
+    empresa: businessUnitLabel(item.businessUnit),
+    valor: item.amount + (item.benefitsAmount ?? 0),
+    status: item.status,
+    notaHref: item.hasInvoiceFile ? `/api/finance/fixed-expenses/${item.id}/invoice` : null,
+    notaUrl: item.invoiceUrl,
+    notaNome: item.invoiceFilename,
+    fixa: item,
+  }));
+  const daVariavel: DespesaGeral[] = variable.map((item) => ({
+    id: `v-${item.id}`,
+    tipo: "Variável",
+    data: item.date,
+    descricao: item.description,
+    categoria: item.categoryName,
+    empresa: businessUnitLabel(item.businessUnit),
+    valor: item.amount,
+    // Variável é gasto já realizado: não existe pendente/atrasado nela.
+    status: null,
+    notaHref: item.hasInvoiceFile ? `/api/finance/variable-expenses/${item.id}/invoice` : null,
+    notaUrl: item.invoiceUrl,
+    notaNome: item.invoiceFilename,
+    variavel: item,
+  }));
+  return [...daFixa, ...daVariavel];
+}
+
 function GastosTab({
   fixed,
   fixedExpensesLocked,
@@ -2475,6 +2822,8 @@ function GastosTab({
   onEditVariable: (record: FinanceVariableExpense) => void;
   onDeleteVariable: (record: FinanceVariableExpense) => void;
 }) {
+  const [visao, setVisao] = useState<"geral" | "fixas" | "variaveis">("geral");
+  const despesasGerais = normalizarDespesas(fixed, variable);
   const dueSoon = fixed
     .map((item) => ({ item, days: daysUntil(item.dueDate) }))
     .filter((entry): entry is { item: FinanceFixedExpense; days: number } =>
@@ -2529,6 +2878,84 @@ function GastosTab({
         </div>
       </Section>
 
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-white p-2">
+        <span className="px-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-500">Ver</span>
+        {([
+          ["geral", "Despesas gerais"],
+          ["fixas", "Só fixas"],
+          ["variaveis", "Só variáveis"],
+        ] as const).map(([chave, rotulo]) => (
+          <button
+            key={chave}
+            type="button"
+            onClick={() => setVisao(chave)}
+            className={cn(
+              "rounded-lg px-3 py-2 text-xs font-black transition",
+              visao === chave ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-100"
+            )}
+          >
+            {rotulo}
+          </button>
+        ))}
+      </div>
+
+      {visao === "geral" ? (
+        <Section>
+          <SectionHeader
+            title="Despesas gerais"
+            subtitle={`Fixas e variáveis na mesma lista · ${despesasGerais.length} lançamento(s) · ${money(despesasGerais.reduce((soma, item) => soma + item.valor, 0))}`}
+            action={
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={onAddFixed} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-4 text-sm font-black text-slate-700 hover:bg-slate-50"><Plus size={16} />Fixa</button>
+                <button type="button" onClick={onAddVariable} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Variável</button>
+              </div>
+            }
+          />
+          <div className="p-5">
+            <SmartTable
+              rows={despesasGerais}
+              defaultSortKey="data"
+              defaultSortDir="asc"
+              searchPlaceholder="Pesquisar descrição, categoria ou empresa"
+              columns={[
+                { key: "data", label: "Data", render: (r) => dateLabel(r.data), value: (r) => r.data },
+                { key: "descricao", label: "Descrição", render: (r) => r.descricao, value: (r) => r.descricao },
+                {
+                  key: "tipo",
+                  label: "Tipo",
+                  render: (r) => (
+                    <span className={cn(
+                      "inline-flex rounded-md px-2 py-1 text-xs font-bold ring-1",
+                      r.tipo === "Fixa" ? "bg-slate-100 text-slate-700 ring-slate-200" : "bg-cyan-50 text-cyan-700 ring-cyan-100"
+                    )}>{r.tipo}</span>
+                  ),
+                  value: (r) => r.tipo,
+                },
+                { key: "empresa", label: "Empresa", render: (r) => r.empresa, value: (r) => r.empresa },
+                { key: "categoria", label: "Categoria", render: (r) => r.categoria ?? "-", value: (r) => r.categoria },
+                { key: "valor", label: "Valor", render: (r) => money(r.valor), value: (r) => r.valor },
+                { key: "status", label: "Status", render: (r) => r.status ? <StatusBadge status={r.status} /> : <span className="text-xs font-bold text-slate-400">Realizada</span>, value: (r) => r.status ?? "realizada" },
+                { key: "nota", label: "Nota", render: (r) => <InvoiceLinks fileHref={r.notaHref} invoiceUrl={r.notaUrl} filename={r.notaNome} />, value: (r) => r.notaNome ?? r.notaUrl },
+              ]}
+              actions={(record) => (
+                <RowActions>
+                  <IconButton
+                    title={record.fixa ? "Editar despesa fixa" : "Editar despesa variável"}
+                    onClick={() => (record.fixa ? onEditFixed(record.fixa) : record.variavel && onEditVariable(record.variavel))}
+                  ><Edit3 size={15} /></IconButton>
+                  <IconButton
+                    title={record.fixa ? "Excluir despesa fixa" : "Excluir despesa variável"}
+                    onClick={() => (record.fixa ? onDeleteFixed(record.fixa) : record.variavel && onDeleteVariable(record.variavel))}
+                    danger
+                  ><Trash2 size={15} /></IconButton>
+                </RowActions>
+              )}
+            />
+          </div>
+        </Section>
+      ) : null}
+
+      {visao === "fixas" ? (
       <Section>
         <SectionHeader title="Despesas Fixas" subtitle="Ordenadas por categoria — logística primeiro, depois folha de pagamento, depois as demais — e alfabeticamente dentro de cada categoria." action={<button type="button" onClick={onAddFixed} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar fixa</button>} />
         <div className="p-5">
@@ -2543,6 +2970,7 @@ function GastosTab({
             defaultSortKey={undefined}
             columns={[
               { key: "description", label: "Descrição", render: (r) => r.description, value: (r) => fixedExpenseSortKey(r) },
+              { key: "businessUnit", label: "Empresa", render: (r) => businessUnitLabel(r.businessUnit), value: (r) => businessUnitLabel(r.businessUnit) },
               {
                 key: "category",
                 label: "Categoria",
@@ -2568,6 +2996,9 @@ function GastosTab({
         </div>
       </Section>
 
+      ) : null}
+
+      {visao === "variaveis" ? (
       <Section>
         <SectionHeader title="Despesas Variáveis" subtitle="Categorias personalizadas e controle por unidade." action={<button type="button" onClick={onAddVariable} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Adicionar variável</button>} />
         <div className="p-5">
@@ -2586,7 +3017,8 @@ function GastosTab({
                 // categoria, ordem alfabética pela descrição) — fora isso a lista é plana.
                 value: (r) => `${(r.categoryName ?? "Sem categoria").toLowerCase()}|${r.description.toLowerCase()}`,
               },
-              { key: "branch", label: "Unidade", render: (r) => r.branchName ?? "-", value: (r) => r.branchName },
+              { key: "businessUnit", label: "Empresa", render: (r) => businessUnitLabel(r.businessUnit), value: (r) => businessUnitLabel(r.businessUnit) },
+            { key: "branch", label: "Unidade", render: (r) => r.branchName ?? "-", value: (r) => r.branchName },
               { key: "amount", label: "Valor", render: (r) => money(r.amount), value: (r) => r.amount },
               { key: "invoice", label: "Nota", render: (r) => <InvoiceLinks fileHref={r.hasInvoiceFile ? `/api/finance/variable-expenses/${r.id}/invoice` : null} invoiceUrl={r.invoiceUrl} filename={r.invoiceFilename} />, value: (r) => r.invoiceFilename ?? r.invoiceUrl },
               { key: "notes", label: "Observação", render: (r) => r.notes ?? "-", value: (r) => r.notes },
@@ -2600,6 +3032,7 @@ function GastosTab({
           />
         </div>
       </Section>
+      ) : null}
     </div>
   );
 }
@@ -3135,84 +3568,126 @@ function AgendaTab({
   );
 }
 
+/**
+ * Fila de cobrança da NF: matrícula com dinheiro recebido e nota não emitida.
+ *
+ * Deliberadamente fora do filtro de período do topo — uma venda de março com
+ * nota pendente continua devendo nota em agosto. Some da tela só quando a NF é
+ * emitida ou explicitamente dispensada.
+ */
+function NotasPendentesPanel({
+  rows,
+  canManage,
+  onOpenInvoice,
+}: {
+  rows: PendingInvoiceEnrollment[];
+  canManage: boolean;
+  onOpenInvoice: (target: EnrollmentInvoiceTarget) => void;
+}) {
+  const totalPending = rows.reduce((sum, row) => sum + row.paidAmount, 0);
+  const oldest = rows.reduce((max, row) => Math.max(max, row.daysWaiting), 0);
+
+  if (rows.length === 0) {
+    return (
+      <Section>
+        <SectionHeader
+          title="Notas fiscais pendentes"
+          subtitle="Nenhuma matrícula com pagamento recebido está sem nota emitida ou dispensada."
+        />
+      </Section>
+    );
+  }
+
+  return (
+    <Section>
+      <SectionHeader
+        title="Notas fiscais pendentes"
+        subtitle="Matrículas que já receberam pagamento e continuam sem NF. Independe do período selecionado no topo — a pendência não expira com a virada do mês."
+      />
+      <div className="grid gap-3 p-5 pb-0 sm:grid-cols-3">
+        <KpiMini label="Matrículas sem NF" value={String(rows.length)} />
+        <KpiMini label="Recebido sem NF" value={money(totalPending)} />
+        <KpiMini label="Pendência mais antiga" value={`${oldest} ${oldest === 1 ? "dia" : "dias"}`} />
+      </div>
+      <div className="p-5">
+        <SmartTable
+          rows={rows}
+          defaultSortKey="days"
+          defaultSortDir="desc"
+          searchPlaceholder="Pesquisar aluno, curso ou vendedor"
+          columns={[
+            { key: "student", label: "Aluno", render: (r) => r.student, value: (r) => r.student },
+            { key: "course", label: "Curso", render: (r) => r.courseName ?? "-", value: (r) => r.courseName },
+            { key: "seller", label: "Vendedor", render: (r) => r.sellerName ?? "-", value: (r) => r.sellerName },
+            { key: "paid", label: "Recebido", render: (r) => money(r.paidAmount), value: (r) => r.paidAmount },
+            { key: "total", label: "Valor da matrícula", render: (r) => money(r.totalAmount), value: (r) => r.totalAmount },
+            { key: "firstPayment", label: "1º pagamento", render: (r) => dateLabel(r.firstPaymentDate), value: (r) => r.firstPaymentDate },
+            {
+              key: "days",
+              label: "Esperando",
+              render: (r) => (
+                <span className={cn("inline-flex items-center gap-1 text-xs font-black", r.daysWaiting >= 30 ? "text-rose-600" : "text-amber-700")}>
+                  <Hourglass size={13} />
+                  {r.daysWaiting} {r.daysWaiting === 1 ? "dia" : "dias"}
+                </span>
+              ),
+              value: (r) => r.daysWaiting,
+            },
+          ]}
+          actions={
+            canManage
+              ? (record) => (
+                  <RowActions>
+                    <IconButton title="Registrar nota fiscal" onClick={() => onOpenInvoice(invoiceTargetFromPending(record))}>
+                      <Receipt size={15} />
+                    </IconButton>
+                  </RowActions>
+                )
+              : undefined
+          }
+        />
+      </div>
+    </Section>
+  );
+}
+
 function MatriculasTab({
   rows,
-  catalog,
   periodLabel,
   showVisaoToggle,
   matriculasVisao,
+  pendingInvoices,
+  canManageInvoices,
   onChangeMatriculasVisao,
   onAdd,
   onEdit,
   onDelete,
   onOpenPayments,
+  onOpenInvoice,
 }: {
   rows: FinanceEnrollment[];
-  catalog: FinanceCatalog;
   periodLabel: string;
   showVisaoToggle: boolean;
   matriculasVisao: "mes" | "todos";
+  pendingInvoices: PendingInvoiceEnrollment[];
+  canManageInvoices: boolean;
   onChangeMatriculasVisao: (next: "mes" | "todos") => void;
   onAdd: () => void;
   onEdit: (record: FinanceEnrollment) => void;
   onDelete: (record: FinanceEnrollment) => void;
   onOpenPayments: (enrollmentId: number) => void;
+  onOpenInvoice: (target: EnrollmentInvoiceTarget) => void;
 }) {
-  const [amount, setAmount] = useState(3000);
-  const [installments, setInstallments] = useState(4);
-  const [brandId, setBrandId] = useState<number | null>(null);
-  const parts = splitInstallmentsClient(amount, installments);
-  const rate = catalog.installmentRates.find((item) => item.installments === installments && item.brandId === brandId)?.ratePct ?? 0;
   return (
     <div className="space-y-5">
       <Section>
-        <SectionHeader title="Simulador inteligente" subtitle="Parcelas, taxas de cartão, receita líquida e projeção mensal." action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Cadastrar matrícula</button>} />
-        <div className="grid gap-5 p-5 lg:grid-cols-[320px_1fr]">
-          <div className="grid gap-3">
-            <Field label="Valor do Curso">
-              <input
-                defaultValue={amount}
-                onChange={(event) => setAmount(parseDecimal(event.target.value))}
-                type="text"
-                inputMode="decimal"
-                className={inputClass}
-              />
-            </Field>
-            <Field label="Bandeira do Cartão">
-              <select
-                value={brandId ?? ""}
-                onChange={(event) => setBrandId(event.target.value ? Number(event.target.value) : null)}
-                className={inputClass}
-              >
-                <option value="">Padrão (sem bandeira)</option>
-                {catalog.cardBrands.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-              </select>
-            </Field>
-            <input type="range" min={1} max={12} value={installments} onChange={(event) => setInstallments(Number(event.target.value))} />
-            <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700">
-              <span>{installments} parcelas</span>
-              <span>Taxa {percent(rate)}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button type="button" onClick={() => setAmount((value) => Math.max(0, value - 500))} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
-                − R$ 500
-              </button>
-              <button type="button" onClick={() => setAmount((value) => value + 500)} className="h-10 rounded-lg border border-slate-200 text-sm font-bold text-slate-700 hover:bg-slate-50">
-                + R$ 500
-              </button>
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            {parts.map((part, index) => (
-              <div key={index} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-500">Parcela {index + 1}</p>
-                <p className="mt-2 text-xl font-black text-slate-950">{money(part)}</p>
-                <p className="mt-1 text-xs text-slate-500">Líquido {money(part - (part * rate) / 100)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+        <SectionHeader
+          title="Matrículas"
+          subtitle="Cadastro e edição abrem o editor de cronograma — o mesmo da tela Matrículas do menu."
+          action={<button type="button" onClick={onAdd} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white hover:bg-slate-800"><Plus size={16} />Cadastrar matrícula</button>}
+        />
       </Section>
+      <NotasPendentesPanel rows={pendingInvoices} canManage={canManageInvoices} onOpenInvoice={onOpenInvoice} />
       {showVisaoToggle ? <VisaoToggle visao={matriculasVisao} periodLabel={periodLabel} onChange={onChangeMatriculasVisao} itemsLabel="Lista" /> : null}
       <Section>
         <SectionHeader title="Matrículas" subtitle="As parcelas mostram a previsão original; o botão de carteira registra os pagamentos reais e atualiza o saldo total." />
@@ -3225,17 +3700,33 @@ function MatriculasTab({
               { key: "amount", label: "Valor", render: (r) => money(r.totalAmount), value: (r) => r.totalAmount },
               { key: "paid", label: "Recebido", render: (r) => money(r.paidAmount), value: (r) => r.paidAmount },
               { key: "balance", label: "Saldo restante", render: (r) => money(r.balanceRemaining), value: (r) => r.balanceRemaining },
-              { key: "installments", label: "Parcelas", render: (r) => `${r.installments}x`, value: (r) => r.installments },
+              {
+                key: "installments",
+                label: "Parcelas",
+                render: (r) => r.downPaymentAmount > 0 ? `${money(r.downPaymentAmount)} + ${r.regularInstallments}x` : `${r.regularInstallments}x`,
+                value: (r) => r.regularInstallments,
+              },
               { key: "payment", label: "Pagamento", render: (r) => r.paymentMethodName ?? "-", value: (r) => r.paymentMethodName },
               { key: "brand", label: "Bandeira", render: (r) => r.cardBrandName ?? "-", value: (r) => r.cardBrandName },
               { key: "first", label: "Mês inicial", render: (r) => r.firstMonth, value: (r) => r.firstMonth },
               { key: "seller", label: "Vendedor", render: (r) => r.sellerName ?? "-", value: (r) => r.sellerName },
               { key: "commissionPct", label: "Comissão", render: (r) => r.sellerName ? percent(r.commissionPct) : "-", value: (r) => r.commissionPct },
               { key: "net", label: "Receita líquida", render: (r) => money(r.netTotal), value: (r) => r.netTotal },
+              {
+                key: "invoice",
+                label: "Nota fiscal",
+                render: (r) => <InvoiceStatusBadge record={r} />,
+                // Ordena pendente → emitida → dispensada: quem abre a coluna
+                // está procurando o que falta emitir, não o que já foi.
+                value: (r) => `${r.invoiceStatus === "pendente" ? 0 : r.invoiceStatus === "emitida" ? 1 : 2}-${r.invoiceNumber ?? ""}`,
+              },
             ]}
             actions={(record) => (
               <RowActions>
                 <IconButton title="Histórico de pagamentos" onClick={() => onOpenPayments(record.id)}><WalletCards size={15} /></IconButton>
+                {canManageInvoices ? (
+                  <IconButton title="Nota fiscal" onClick={() => onOpenInvoice(invoiceTargetFromEnrollment(record))}><Receipt size={15} /></IconButton>
+                ) : null}
                 <IconButton title="Editar matrícula" onClick={() => onEdit(record)}><Edit3 size={15} /></IconButton>
                 <IconButton title="Excluir matrícula" onClick={() => onDelete(record)} danger><Trash2 size={15} /></IconButton>
               </RowActions>
@@ -3637,12 +4128,12 @@ function ConfiguracoesTab({
         </div>
       </Section>
 
-      <SettingsCatalogSection title="Funcionários" entity="employees" onSubmit={submitCatalog}>
-        <TextInput label="Nome" name="name" required />
-        <TextInput label="Cargo" name="role" />
-        <DecimalInput label="Salário" name="salary" />
-        <DecimalInput label="Benefícios" name="benefits" />
-      </SettingsCatalogSection>
+      <EmployeesSettingsSection
+        employees={catalog.employees}
+        onSubmit={submitCatalog}
+        onSaved={onSaved}
+        apiJson={apiJson}
+      />
 
       <SettingsCatalogSection title="Vendedores" entity="sellers" onSubmit={submitCatalog}>
         <TextInput label="Nome" name="name" required />
@@ -3659,13 +4150,12 @@ function ConfiguracoesTab({
         <TextInput label="Cidade" name="city" />
       </SettingsCatalogSection>
 
-      <SettingsCatalogSection title="Formas de Pagamento" entity="payment-methods" onSubmit={submitCatalog}>
-        <TextInput label="Nome" name="name" required />
-        <SelectInput label="Tipo" name="kind" defaultValue="avista">
-          <option value="avista">À vista</option>
-          <option value="parcelado">Parcelado</option>
-        </SelectInput>
-      </SettingsCatalogSection>
+      <PaymentMethodsSettingsSection
+        paymentMethods={catalog.paymentMethods}
+        onSubmit={submitCatalog}
+        onSaved={onSaved}
+        apiJson={apiJson}
+      />
 
       <Section>
         <SectionHeader title="Saldo em Caixa" action={<button type="button" onClick={saveInitialBalance} className="inline-flex h-10 items-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-black text-white">Salvar</button>} />
@@ -3685,6 +4175,433 @@ function ConfiguracoesTab({
         </div>
       </Section>
     </div>
+  );
+}
+
+/**
+ * Cadastro de funcionários: só nome e cargo, mais a lista do que já existe com
+ * editar e excluir.
+ *
+ * Salário e benefícios saíram daqui de propósito — quem manda no valor é a
+ * Folha de Pagamento: editar a linha do mês já grava o salário-base do
+ * funcionário para os meses seguintes (ver updateFixedExpense em lib/finance.ts).
+ * Ter os dois lugares pedindo o mesmo número só criava divergência.
+ *
+ * Excluir: se o funcionário já tem lançamento de folha, o banco não deixa
+ * apagar e a rota desativa em vez de excluir — por isso os inativos continuam
+ * listados, marcados, com a opção de reativar.
+ */
+function EmployeesSettingsSection({
+  employees,
+  onSubmit,
+  onSaved,
+  apiJson,
+}: {
+  employees: FinanceCatalog["employees"];
+  onSubmit: (event: FormEvent<HTMLFormElement>, entity: string) => Promise<void>;
+  onSaved: () => void;
+  apiJson: (endpoint: string, method: "POST" | "PATCH" | "DELETE", body?: Record<string, unknown>) => Promise<{ id?: number; ok?: boolean }>;
+}) {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editRole, setEditRole] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const actives = employees.filter((item) => item.active);
+  const inactives = employees.filter((item) => !item.active);
+
+  function startEdit(employee: FinanceCatalog["employees"][number]) {
+    setEditingId(employee.id);
+    setEditName(employee.name);
+    setEditRole(employee.role ?? "");
+    setError(null);
+  }
+
+  async function saveEdit(id: number) {
+    const name = editName.trim();
+    if (!name) {
+      setError("O nome não pode ficar em branco.");
+      return;
+    }
+    setBusyId(id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/employees/${id}`, "PATCH", { name, role: editRole.trim() });
+      setEditingId(null);
+      onSaved();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Falha ao salvar o funcionário.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(employee: FinanceCatalog["employees"][number]) {
+    if (!window.confirm(`Excluir ${employee.name}? Se houver folha lançada, ele será apenas desativado.`)) return;
+    setBusyId(employee.id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/employees/${employee.id}`, "DELETE");
+      onSaved();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Falha ao excluir o funcionário.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function reactivate(id: number) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/employees/${id}`, "PATCH", { active: true });
+      onSaved();
+    } catch (patchError) {
+      setError(patchError instanceof Error ? patchError.message : "Falha ao reativar o funcionário.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function row(employee: FinanceCatalog["employees"][number]) {
+    const editing = editingId === employee.id;
+    const busy = busyId === employee.id;
+
+    return (
+      <li key={employee.id} className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-5 py-3 first:border-t-0">
+        {editing ? (
+          <>
+            <input
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+              placeholder="Nome"
+              className={`${inputClass} min-w-40 flex-1`}
+            />
+            <input
+              value={editRole}
+              onChange={(event) => setEditRole(event.target.value)}
+              placeholder="Cargo"
+              className={`${inputClass} min-w-32 flex-1`}
+            />
+            <button
+              type="button"
+              onClick={() => saveEdit(employee.id)}
+              disabled={busy}
+              className="h-10 rounded-lg bg-slate-950 px-4 text-sm font-black text-white disabled:opacity-50"
+            >
+              {busy ? "Salvando..." : "Salvar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditingId(null)}
+              className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-black text-slate-900">
+                {employee.name}
+                {!employee.active ? (
+                  <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                    inativo
+                  </span>
+                ) : null}
+              </p>
+              <p className="truncate text-xs font-semibold text-slate-500">{employee.role?.trim() || "Sem cargo"}</p>
+            </div>
+            {employee.active ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => startEdit(employee)}
+                  className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(employee)}
+                  disabled={busy}
+                  className="h-9 rounded-lg border border-rose-200 px-3 text-xs font-black text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {busy ? "..." : "Excluir"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => reactivate(employee.id)}
+                disabled={busy}
+                className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {busy ? "..." : "Reativar"}
+              </button>
+            )}
+          </>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <Section>
+      <SectionHeader
+        title="Funcionários"
+        subtitle={`${actives.length} ativo(s)${inactives.length ? ` · ${inactives.length} inativo(s)` : ""} · salário e benefícios são definidos na Folha de Pagamento`}
+      />
+      <form onSubmit={(event) => onSubmit(event, "employees")} className="grid gap-3 p-5 sm:grid-cols-[1fr_1fr_auto]">
+        <TextInput label="Nome" name="name" required />
+        <TextInput label="Cargo" name="role" />
+        <button className="mt-6 inline-flex h-10 items-center justify-center rounded-lg bg-slate-950 px-4 text-sm font-black text-white">
+          Adicionar
+        </button>
+      </form>
+      {error ? <p className="px-5 pb-2 text-xs font-bold text-rose-600">{error}</p> : null}
+      {employees.length === 0 ? (
+        <p className="px-5 pb-5 text-sm text-slate-500">Nenhum funcionário cadastrado ainda.</p>
+      ) : (
+        <ul className="border-t border-slate-100 pb-2">{[...actives, ...inactives].map(row)}</ul>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Cadastro das formas de pagamento: nome, tipo, taxa percentual e o teto de
+ * parcelas DA FORMA — é ele que define quantas vezes o seletor do fechamento e
+ * do contrato oferece. Carnê em 48x, cartão em 12x, Pix em 1x: cada um com o
+ * número dele, em vez do teto único de 48 que valia para todo mundo.
+ *
+ * Deixar o teto em branco mantém o comportamento antigo (vale o teto do
+ * sistema, 48x) — as formas que já existiam ficaram assim.
+ *
+ * Excluir: se a forma já tem lançamento, o banco não deixa apagar e a rota
+ * desativa em vez de excluir — por isso as inativas continuam listadas,
+ * marcadas, com a opção de reativar. Mesmo comportamento de Funcionários.
+ */
+function PaymentMethodsSettingsSection({
+  paymentMethods,
+  onSubmit,
+  onSaved,
+  apiJson,
+}: {
+  paymentMethods: FinanceCatalog["paymentMethods"];
+  onSubmit: (event: FormEvent<HTMLFormElement>, entity: string) => Promise<void>;
+  onSaved: () => void;
+  apiJson: (endpoint: string, method: "POST" | "PATCH" | "DELETE", body?: Record<string, unknown>) => Promise<{ id?: number; ok?: boolean }>;
+}) {
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editKind, setEditKind] = useState<PaymentMethodKind>("avista");
+  const [editFeePct, setEditFeePct] = useState("0");
+  const [editMax, setEditMax] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const actives = paymentMethods.filter((item) => item.active);
+  const inactives = paymentMethods.filter((item) => !item.active);
+
+  function startEdit(method: FinanceCatalog["paymentMethods"][number]) {
+    setEditingId(method.id);
+    setEditName(method.name);
+    setEditKind(method.kind);
+    setEditFeePct(String(method.feePct));
+    setEditMax(method.maxInstallments ? String(method.maxInstallments) : "");
+    setError(null);
+  }
+
+  async function saveEdit(id: number) {
+    const name = editName.trim();
+    if (!name) {
+      setError("O nome não pode ficar em branco.");
+      return;
+    }
+    const max = editMax.trim() === "" ? null : normalizeEnrollmentInstallments(editMax);
+    setBusyId(id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/payment-methods/${id}`, "PATCH", {
+        name,
+        kind: editKind,
+        feePct: parseDecimal(editFeePct),
+        // Em branco não limpa o teto: o CRUD de catálogo ignora campo vazio.
+        // Quem quer "sem teto próprio" grava o teto do sistema.
+        maxInstallments: max ?? MAX_ENROLLMENT_INSTALLMENTS,
+      });
+      setEditingId(null);
+      onSaved();
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Falha ao salvar a forma de pagamento.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function remove(method: FinanceCatalog["paymentMethods"][number]) {
+    if (!window.confirm(`Excluir ${method.name}? Se já houver lançamento com ela, será apenas desativada.`)) return;
+    setBusyId(method.id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/payment-methods/${method.id}`, "DELETE");
+      onSaved();
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Falha ao excluir a forma de pagamento.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function reactivate(id: number) {
+    setBusyId(id);
+    setError(null);
+    try {
+      await apiJson(`/api/finance/catalog/payment-methods/${id}`, "PATCH", { active: true });
+      onSaved();
+    } catch (patchError) {
+      setError(patchError instanceof Error ? patchError.message : "Falha ao reativar a forma de pagamento.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function row(method: FinanceCatalog["paymentMethods"][number]) {
+    const editing = editingId === method.id;
+    const busy = busyId === method.id;
+    const cap = installmentCap(method.maxInstallments);
+
+    return (
+      <li key={method.id} className="flex flex-wrap items-center gap-2 border-t border-slate-100 px-5 py-3 first:border-t-0">
+        {editing ? (
+          <>
+            <input
+              value={editName}
+              onChange={(event) => setEditName(event.target.value)}
+              placeholder="Nome"
+              className={`${inputClass} min-w-40 flex-1`}
+            />
+            <select
+              value={editKind}
+              onChange={(event) => setEditKind(event.target.value as PaymentMethodKind)}
+              className={`${inputClass} min-w-32 flex-1`}
+            >
+              <option value="avista">À vista</option>
+              <option value="parcelado">Parcelado</option>
+            </select>
+            <input
+              value={editFeePct}
+              onChange={(event) => setEditFeePct(event.target.value)}
+              type="text"
+              inputMode="decimal"
+              min={0}
+              max={100}
+              aria-label="Taxa percentual"
+              placeholder="Taxa (%)"
+              className={`${inputClass} w-28 flex-none`}
+            />
+            <input
+              value={editMax}
+              onChange={(event) => setEditMax(event.target.value)}
+              type="number"
+              min={1}
+              max={MAX_ENROLLMENT_INSTALLMENTS}
+              placeholder="Máx. parcelas"
+              className={`${inputClass} w-32 flex-none`}
+            />
+            <button
+              type="button"
+              onClick={() => saveEdit(method.id)}
+              disabled={busy}
+              className="h-10 rounded-lg bg-slate-950 px-4 text-sm font-black text-white disabled:opacity-50"
+            >
+              {busy ? "Salvando..." : "Salvar"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditingId(null)}
+              className="h-10 rounded-lg border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+            >
+              Cancelar
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-black text-slate-900">
+                {method.name}
+                {!method.active ? (
+                  <span className="ml-2 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                    inativa
+                  </span>
+                ) : null}
+              </p>
+              <p className="truncate text-xs font-semibold text-slate-500">
+                {method.kind === "parcelado" ? "Parcelado" : "À vista"} · até {cap}x
+                {method.maxInstallments ? "" : " (teto do sistema)"} · taxa {percent(method.feePct)}
+              </p>
+            </div>
+            {method.active ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => startEdit(method)}
+                  className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => remove(method)}
+                  disabled={busy}
+                  className="h-9 rounded-lg border border-rose-200 px-3 text-xs font-black text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                >
+                  {busy ? "..." : "Excluir"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => reactivate(method.id)}
+                disabled={busy}
+                className="h-9 rounded-lg border border-slate-200 px-3 text-xs font-black text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {busy ? "..." : "Reativar"}
+              </button>
+            )}
+          </>
+        )}
+      </li>
+    );
+  }
+
+  return (
+    <Section>
+      <SectionHeader
+        title="Formas de Pagamento"
+        subtitle={`${actives.length} ativa(s)${inactives.length ? ` · ${inactives.length} inativa(s)` : ""} · o máximo de parcelas é o que o fechamento e o contrato oferecem nessa forma`}
+      />
+      <form onSubmit={(event) => onSubmit(event, "payment-methods")} className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-5">
+        <TextInput label="Nome" name="name" required />
+        <SelectInput label="Tipo" name="kind" defaultValue="avista">
+          <option value="avista">À vista</option>
+          <option value="parcelado">Parcelado</option>
+        </SelectInput>
+        <DecimalInput label="Taxa (%)" name="feePct" defaultValue={0} />
+        <TextInput label={`Máximo de parcelas (até ${MAX_ENROLLMENT_INSTALLMENTS})`} name="maxInstallments" type="number" />
+        <button className="mt-6 inline-flex h-10 items-center justify-center rounded-lg bg-slate-950 px-4 text-sm font-black text-white">
+          Adicionar
+        </button>
+      </form>
+      {error ? <p className="px-5 pb-2 text-xs font-bold text-rose-600">{error}</p> : null}
+      {paymentMethods.length === 0 ? (
+        <p className="px-5 pb-5 text-sm text-slate-500">Nenhuma forma de pagamento cadastrada ainda.</p>
+      ) : (
+        <ul className="border-t border-slate-100 pb-2">{[...actives, ...inactives].map(row)}</ul>
+      )}
+    </Section>
   );
 }
 
@@ -3748,7 +4665,6 @@ function FinanceModal({
     fixed: "Despesa Fixa",
     variable: "Despesa Variável",
     branch: "Item da Unidade",
-    enrollment: "Matrícula",
     commission: "Comissão",
   };
   const title = `${modal.mode === "edit" ? "Editar" : "Adicionar"} ${titleByType[modal.type]}`;
@@ -3764,11 +4680,10 @@ function FinanceModal({
         </div>
         <form onSubmit={onSubmit} className="overflow-y-auto p-5">
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {modal.type === "revenue" ? <RevenueForm record={modal.record} categories={revenueCategories} courses={courses} branches={branches} sellers={sellers} paymentMethods={paymentMethods} onCreateCategory={onCreateCategory} /> : null}
+            {modal.type === "revenue" ? <RevenueForm record={modal.record} defaultBusinessUnit={modal.defaultBusinessUnit} categories={revenueCategories} courses={courses} branches={branches} sellers={sellers} paymentMethods={paymentMethods} onCreateCategory={onCreateCategory} /> : null}
             {modal.type === "fixed" ? <FixedForm record={modal.record} categories={fixedCategories} month={month} onCreateCategory={onCreateCategory} /> : null}
             {modal.type === "variable" ? <VariableForm record={modal.record} categories={variableCategories} branches={branches} month={month} onCreateCategory={onCreateCategory} /> : null}
             {modal.type === "branch" ? <BranchForm record={modal.record} branches={branches} /> : null}
-            {modal.type === "enrollment" ? <EnrollmentForm catalog={catalog} month={month} record={modal.record} /> : null}
             {modal.type === "commission" ? <CommissionForm catalog={catalog} /> : null}
           </div>
           <div className="mt-5 flex justify-end gap-2 border-t border-slate-100 pt-4">
@@ -3981,6 +4896,7 @@ function LeadAutocompleteField({
 
 function RevenueForm({
   record,
+  defaultBusinessUnit,
   categories,
   courses,
   branches,
@@ -3989,6 +4905,8 @@ function RevenueForm({
   onCreateCategory,
 }: {
   record?: FinanceRevenue;
+  /** Unidade sugerida na criação — vem da chave Voz UP × Instituto UP da tela. */
+  defaultBusinessUnit?: string;
   categories: FinanceCatalog["categories"];
   courses: FinanceCatalog["courses"];
   branches: FinanceCatalog["branches"];
@@ -4012,6 +4930,7 @@ function RevenueForm({
         <TextInput label="Origem" name="origin" defaultValue={record?.origin} />
         <TextInput label="Aluno" name="student" defaultValue={record?.student} />
         <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={courses} emptyLabel="Sem curso" /></SelectInput>
+        <BusinessUnitInput defaultValue={record?.businessUnit} />
         <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
         <SelectInput label="Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId}><Options items={paymentMethods} emptyLabel="Sem forma" /></SelectInput>
         <SelectInput label="Vendedor" name="sellerId" defaultValue={record?.sellerId}><Options items={sellers} emptyLabel="Sem vendedor" /></SelectInput>
@@ -4040,6 +4959,7 @@ function RevenueForm({
       <CategorySelectInput label="Categoria" name="categoryId" kind="receita" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
       <TextInput label="Origem" name="origin" defaultValue={record?.origin} />
       <TextInput label="Vencimento" name="dueDate" type="date" defaultValue={toInputDate(record?.dueDate)} />
+      <BusinessUnitInput defaultValue={record?.businessUnit ?? defaultBusinessUnit} />
       <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={courses} emptyLabel="Sem curso" /></SelectInput>
       <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
       <SelectInput
@@ -4100,6 +5020,7 @@ function FixedForm({
       <TextInput label="Mês" name="monthDisplay" type="month" defaultValue={record?.month ?? month} />
       <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
       <CategorySelectInput label="Categoria" name="categoryId" kind="gasto_fixo" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
+      <BusinessUnitInput defaultValue={record?.businessUnit} />
       <TextInput label="Vencimento" name="dueDate" type="date" defaultValue={toInputDate(record?.dueDate)} />
       <DecimalInput label="Salário / Valor" name="amount" required defaultValue={record?.amount} />
       <DecimalInput label="Benefícios" name="benefitsAmount" defaultValue={record?.benefitsAmount} />
@@ -4137,6 +5058,7 @@ function VariableForm({
       <TextInput label="Data" name="date" type="date" required defaultValue={toInputDate(record?.date) || `${month}-01`} />
       <TextInput label="Descrição" name="description" required defaultValue={record?.description} />
       <CategorySelectInput label="Categoria" name="categoryId" kind="gasto_variavel" categories={categories} defaultValue={record?.categoryId} onCreateCategory={onCreateCategory} />
+      <BusinessUnitInput defaultValue={record?.businessUnit} />
       <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={branches} emptyLabel="Sem unidade" /></SelectInput>
       <DecimalInput label="Valor" name="amount" required defaultValue={record?.amount} />
       <TextInput label="Link da Nota Fiscal" name="invoiceUrl" defaultValue={record?.invoiceUrl} />
@@ -4171,53 +5093,11 @@ function BranchForm({ record, branches }: { record?: FinanceBranchItem; branches
   );
 }
 
-function EnrollmentForm({ catalog, month, record }: { catalog: FinanceCatalog; month: string; record?: FinanceEnrollment }) {
-  const [paymentMethodId, setPaymentMethodId] = useState(record?.paymentMethodId ? String(record.paymentMethodId) : "");
-  const [sellerId, setSellerId] = useState(record?.sellerId ? String(record.sellerId) : "");
-  const initialSeller = catalog.sellers.find((item) => String(item.id) === sellerId);
-  const [commissionPct, setCommissionPct] = useState(String(record?.commissionPct ?? initialSeller?.defaultPct ?? 0));
-  const selectedPaymentMethod = catalog.paymentMethods.find((item) => String(item.id) === paymentMethodId);
-  const hasCardInstallmentFee = selectedPaymentMethod?.kind === "parcelado";
-
-  return (
-    <>
-      <TextInput label="Aluno" name="student" required defaultValue={record?.student} />
-      <SelectInput label="Curso" name="courseId" defaultValue={record?.courseId}><Options items={catalog.courses.filter((item) => item.active)} /></SelectInput>
-      <DecimalInput label="Valor do Curso" name="totalAmount" required defaultValue={record?.totalAmount ?? 3000} />
-      <TextInput label="Parcelas previstas" name="installments" type="number" required defaultValue={record?.installments ?? 1} />
-      <SelectInput label="Forma de Pagamento" name="paymentMethodId" defaultValue={record?.paymentMethodId} onChange={setPaymentMethodId}><Options items={catalog.paymentMethods.filter((item) => item.active)} /></SelectInput>
-      {hasCardInstallmentFee ? <SelectInput label="Bandeira do Cartão" name="cardBrandId" defaultValue={record?.cardBrandId}><Options items={catalog.cardBrands.filter((item) => item.active)} emptyLabel="Padrão (sem bandeira)" /></SelectInput> : <input type="hidden" name="cardBrandId" value="" />}
-      <p className="md:col-span-2 xl:col-span-3 -mt-2 text-xs font-semibold text-slate-500">A previsão pode ser parcelada em qualquer forma de pagamento. Taxas por parcela são aplicadas apenas quando a forma cadastrada for cartão.</p>
-      <TextInput label="Mês Inicial" name="firstMonth" type="month" required defaultValue={record?.firstMonth ?? month} />
-      <TextInput label="Data" name="saleDate" type="date" required defaultValue={toInputDate(record?.saleDate) || new Date().toISOString().slice(0, 10)} />
-      <SelectInput
-        label="Vendedor"
-        name="sellerId"
-        defaultValue={record?.sellerId}
-        onChange={(value) => {
-          setSellerId(value);
-          const seller = catalog.sellers.find((item) => String(item.id) === value);
-          setCommissionPct(String(seller?.defaultPct ?? 0));
-        }}
-      >
-        <Options items={catalog.sellers.filter((item) => item.active)} />
-      </SelectInput>
-      <Field label="Comissão do vendedor (%)">
-        <input
-          name="commissionPct"
-          type="text"
-          inputMode="decimal"
-          value={commissionPct}
-          onChange={(event) => setCommissionPct(event.target.value)}
-          disabled={!sellerId}
-          className={inputClass}
-        />
-      </Field>
-      <SelectInput label="Unidade" name="branchId" defaultValue={record?.branchId}><Options items={catalog.branches.filter((item) => item.active)} /></SelectInput>
-      <div className="md:col-span-2 xl:col-span-3"><TextAreaInput label="Observações" name="notes" defaultValue={record?.notes} /></div>
-    </>
-  );
-}
+/**
+ * Controle manual da NF da matrícula. Os campos exigidos mudam com o status
+ * escolhido — as mesmas regras valem no servidor (`updateEnrollmentInvoice`),
+ * aqui é só para a pessoa ver o que falta antes de salvar.
+ */
 
 function CommissionForm({ catalog }: { catalog: FinanceCatalog }) {
   return (

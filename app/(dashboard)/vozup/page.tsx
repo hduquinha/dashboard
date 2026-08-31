@@ -9,14 +9,25 @@ import {
   ChevronDown,
   Command,
   Download,
+  Building2,
+  FileText,
   Folder,
   FolderOpen,
+  Globe,
   Map as MapIcon,
+  Megaphone,
+  MessageCircle,
+  Mic,
+  PartyPopper,
   Search,
+  Target,
+  TestTube,
   Users,
+  type LucideIcon,
 } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import { listRecruitersWithDbNames, listTrainingFilterOptions } from "@/lib/db";
-import { listCommercialSellers } from "@/lib/commercial";
+import { getCommercialWorkspace } from "@/lib/commercial";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { hasPermission } from "@/lib/permissions";
 import {
@@ -36,6 +47,27 @@ import type { CreateLeadContext } from "@/components/CreateLeadModal";
 import VozupLeadsTable from "./VozupLeadsTable";
 
 export type { VozupLead } from "@/lib/vozupFolders";
+
+/**
+ * Ícone de cada pasta VozUP. O `emoji` do lib continua servindo aos textos
+ * corridos (relatório em PDF, rótulo de vínculo), mas nas telas o desenho
+ * vem daqui — emoji renderiza diferente em cada sistema e destoa do resto
+ * do painel.
+ */
+const FOLDER_ICONS: Record<string, LucideIcon> = {
+  panfletos: FileText,
+  "aula-experimental": TestTube,
+  "landing-pages": Globe,
+  meta: Megaphone,
+  "google-ads": Target,
+  "chat-ads": MessageCircle,
+  workshop: Mic,
+  inauguracao: PartyPopper,
+  instituto: Building2,
+  outros: Folder,
+};
+
+const folderIcon = (key: string): LucideIcon => FOLDER_ICONS[key] ?? Folder;
 
 export const metadata: Metadata = {
   title: "VozUP — Leads",
@@ -129,9 +161,7 @@ function FolderCard({
     <div className="group rounded-[20px] border border-[#dce8f2] bg-white p-6 shadow-[var(--dashboard-card-shadow)] transition hover:-translate-y-0.5 hover:border-[#54c4ed]">
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
-          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e5f8ff] text-xl">
-            {folder.emoji}
-          </div>
+          <IconTile icon={folderIcon(folder.key)} tone="brand" size="lg" />
           <div>
             <h3 className="text-base font-bold text-slate-950">{folder.label}</h3>
             <p className="text-xs font-medium text-slate-400">{folder.description}</p>
@@ -163,8 +193,11 @@ function FolderCard({
   );
 }
 
-function subfolderLabel(grupo: string): string {
-  return `Página de ${grupo}`;
+function subfolderLabel(grupo: string, folder?: VozupFolderDef): string {
+  // Pasta cuja subpasta não é um tema (Chat Ads: "Pago (anúncio)") passa
+  // prefixo vazio — "Página de Pago (anúncio)" não quer dizer nada.
+  const prefixo = folder?.subfolderLabelPrefix ?? "Página de ";
+  return `${prefixo}${grupo}`;
 }
 
 function SubfolderCard({
@@ -193,7 +226,7 @@ function SubfolderCard({
             <Folder size={20} className="text-[#0086b8]" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-slate-950">{subfolderLabel(grupo)}</h3>
+            <h3 className="text-base font-bold text-slate-950">{subfolderLabel(grupo, folder)}</h3>
             <p className="text-xs font-medium text-slate-400">
               Última conversão: {dateLabel(lastConversao)}
             </p>
@@ -308,7 +341,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
 
   // ── Nível 3: listagem de leads de um bloco (formulário) ──────────────────
   if (folder && bloco) {
-    const [{ leads, total }, trainingOptions, recruiterOptions, sellers, creativeOptions] =
+    const [{ leads, total }, trainingOptions, recruiterOptions, commercial, creativeOptions] =
       await Promise.all([
         listVozupLeadsByBlock(folder.key, bloco, {
           search,
@@ -319,7 +352,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
         }),
         listTrainingFilterOptions(),
         listRecruitersWithDbNames(),
-        listCommercialSellers(),
+        getCommercialWorkspace(session?.user ?? null),
         folder.blockKind === "meta-form" ? listMetaCreativeOptions(bloco) : Promise.resolve([]),
       ]);
     const visibleLeads = leads.map((lead) => ({
@@ -363,7 +396,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
               <h1 className="truncate text-2xl font-black text-slate-950">{bloco}</h1>
               <p className="truncate text-xs font-semibold text-slate-500">
                 VozUP · Leads · {folder.label}
-                {subpastaParam ? ` · ${subfolderLabel(subpastaParam)}` : ""} · {total} leads
+                {subpastaParam ? ` · ${subfolderLabel(subpastaParam, folder)}` : ""} · {total} leads
               </p>
             </div>
           </div>
@@ -464,7 +497,8 @@ export default async function VozupPage({ searchParams }: PageProps) {
             sourceLabel={bloco}
             criativo={folder.blockKind === "meta-form" ? activeCriativo : undefined}
             isAulaExclusiva={folder.blockKind === "aula"}
-            sellers={sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
+            sellers={commercial.sellers.map((s) => ({ id: s.chatwootUserId, name: s.name, email: s.email ?? "" }))}
+            commercial={commercial}
             currentUser={
               session
                 ? {
@@ -507,7 +541,7 @@ export default async function VozupPage({ searchParams }: PageProps) {
       : [];
 
     const backHref = subpastaParam ? `/vozup?pasta=${encodeURIComponent(folder.key)}` : "/vozup";
-    const title = subpastaParam ? subfolderLabel(subpastaParam) : folder.label;
+    const title = subpastaParam ? subfolderLabel(subpastaParam, folder) : folder.label;
     const description = subpastaParam
       ? `Formulários da ${subfolderLabel(subpastaParam)}. Escolha um formulário para ver os leads.`
       : `${folder.description} Escolha ${
@@ -530,8 +564,9 @@ export default async function VozupPage({ searchParams }: PageProps) {
               VozUP · Leads{subpastaParam ? ` · ${folder.label}` : ""}
             </div>
           </div>
-          <h1 className="mt-3 text-3xl font-bold text-slate-950">
-            {folder.emoji} {title}
+          <h1 className="mt-3 flex items-center gap-2.5 text-3xl font-bold text-slate-950">
+            <IconTile icon={folderIcon(folder.key)} tone="brand" size="md" />
+            {title}
           </h1>
           <p className="mt-1 text-sm font-medium text-slate-500">{description}</p>
         </header>

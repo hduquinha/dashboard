@@ -584,6 +584,14 @@ export default function ProductivityClient({
   const [selectedDate, setSelectedDate] = useState(todayDate());
   const [rangeFrom, setRangeFrom] = useState(initialWorkspace.dateFrom);
   const [rangeTo, setRangeTo] = useState(initialWorkspace.dateTo);
+
+  // O layout sincroniza a sessão e chama `router.refresh()` quando um usuário
+  // é alterado. Como este componente mantém o workspace em estado local, ele
+  // também precisa aceitar o snapshot novo para refletir vendedores, acesso e
+  // permissões sem logout/login.
+  useEffect(() => {
+    setWorkspace(initialWorkspace);
+  }, [initialWorkspace]);
   const [dailyMetrics, setDailyMetrics] = useState<MetricMatrix>(emptyDaily);
   const [noShowMetrics, setNoShowMetrics] = useState<MetricMatrix>(emptyNoShow);
   const [productionMetrics, setProductionMetrics] = useState<MetricMatrix>(emptyProduction);

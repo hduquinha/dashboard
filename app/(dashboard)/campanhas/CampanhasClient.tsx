@@ -2,8 +2,11 @@
 
 import { useEffect, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { RefreshCw, SlidersHorizontal } from "lucide-react";
+import { MapPin, RefreshCw, SlidersHorizontal } from "lucide-react";
 import CampaignAdsGallery from "@/components/CampaignAdsGallery";
+import GoogleAdsTab from "@/components/GoogleAdsTab";
+import type { GoogleAdsReport } from "@/lib/googleAdsReport";
+import type { ReportSegmentsData } from "@/lib/reportSegments";
 import CampaignCompareTab from "@/components/CampaignCompareTab";
 import CampaignDailyTab from "@/components/CampaignDailyTab";
 import CampaignGroupsTab from "@/components/CampaignGroupsTab";
@@ -22,6 +25,7 @@ import MetaReconciliationPanel from "@/components/MetaReconciliationPanel";
 import { PURPOSE_LABELS, type CampaignPurposeFilter } from "@/lib/campaignObjectives";
 import type { MonthlyReport } from "@/lib/monthlyReport";
 import type { InstagramProfileSeries } from "@/lib/instagramProfiles";
+import type { LeadLocationOption } from "@/lib/leadLocation";
 import type { TrainingOption } from "@/types/training";
 import CampaignTableTab from "@/components/CampaignTableTab";
 import RecentLeadsTab from "@/components/RecentLeadsTab";
@@ -45,6 +49,8 @@ import type {
 } from "@/types/metaAds";
 
 interface CampanhasClientProps {
+  googleReport: GoogleAdsReport | null;
+  reportSegments: ReportSegmentsData | null;
   filters: MetaAdsFilters;
   preset: "hoje" | "7d" | "14d" | "30d" | "custom";
   tab: CampanhasTab;
@@ -71,10 +77,16 @@ interface CampanhasClientProps {
   adLeads: AdLeadDetail[];
   /** Série de seguidores do Instagram; só vem na aba Alcance. */
   instagramProfiles: InstagramProfileSeries[];
-  /** Relatório do mês; só vem na aba Relatório mensal. */
+  /** Localização escolhida (chave de lib/leadLocation), ou null para todas. */
+  location: string | null;
+  /** Localizações com lead no período; vem vazio fora das abas de lead. */
+  locationOptions: LeadLocationOption[];
+  /** Relatório do período; só vem na aba Relatórios. */
   monthlyReport: MonthlyReport | null;
-  /** Meses com entrega registrada, para o seletor do relatório. */
-  reportMonths: string[];
+  /** Campanhas disponíveis no recorte atual, para incluir/excluir no relatório. */
+  reportCampaigns: Array<{ campaignId: string; campaignName: string }>;
+  /** Vazio significa que todas as campanhas disponíveis entram. */
+  reportIncludedCampaignIds: string[];
   /** Ticket médio salvo pela pessoa, usado para estimar o retorno. */
   reportTicket: number | null;
   /** Etapa do funil que a operação considera venda fechada. */
@@ -152,12 +164,17 @@ export default function CampanhasClient({
   dailyRows,
   adLeads,
   instagramProfiles,
+  location,
+  locationOptions,
   monthlyReport,
-  reportMonths,
+  reportCampaigns,
+  reportIncludedCampaignIds,
   reportTicket,
   reportSaleStage,
   purposeFilter,
   purposeCounts,
+  googleReport,
+  reportSegments,
   trainingOptions,
   recruiterOptions,
 }: CampanhasClientProps) {
@@ -165,6 +182,23 @@ export default function CampanhasClient({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  // Aba clicada mas ainda não confirmada pelo servidor. As páginas são
+  // `force-dynamic` e a troca de aba é uma navegação de verdade: o
+  // `startTransition` mantém a tela ANTIGA no ar durante todo o render do
+  // servidor (é o comportamento pretendido dele), e sem retorno visual isso
+  // lê como travamento — foi a queixa da equipe nesta tela.
+  const [pendingTab, setPendingTab] = useState<CampanhasTab | null>(null);
+  // A aba a destacar: a pedida enquanto a navegação corre, a real quando chega.
+  const displayTab = isPending && pendingTab ? pendingTab : tab;
+  // Quando o servidor confirma a aba, a pedida deixa de ser necessária. Ajuste
+  // durante a renderização (padrão do React) — `setState` em `useEffect` é erro
+  // de lint neste repo.
+  const [lastTab, setLastTab] = useState(tab);
+  if (tab !== lastTab) {
+    setLastTab(tab);
+    setPendingTab(null);
+  }
+  const locatedLeads = locationOptions.reduce((total, option) => total + option.leads, 0);
   const [search, setSearch] = useState(filters.search ?? "");
   const [customFrom, setCustomFrom] = useState(filters.from);
   const [customTo, setCustomTo] = useState(filters.to);
@@ -230,6 +264,10 @@ export default function CampanhasClient({
   }
 
   function handleTabChange(key: CampanhasTab) {
+    // Marca a aba escolhida na hora. Sem isto o destaque só mudava quando o
+    // servidor devolvia a página inteira — o clique parecia não ter registrado
+    // e a pessoa clicava de novo, enfileirando mais uma navegação.
+    setPendingTab(key);
     updateQuery({ aba: key === "inteligencia" ? null : key });
   }
 
@@ -339,6 +377,37 @@ export default function CampanhasClient({
             </div>
           ) : null}
 
+          {/* Localização só aparece nas abas em que cada linha é uma pessoa.
+              Nas outras não haveria o que cortar: a Meta não publica gasto nem
+              alcance por cidade, então o recorte pararia no meio do caminho e
+              a tela mostraria número de lead de um lugar com investimento de
+              todos. */}
+          {locationOptions.length > 0 ? (
+            <div className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 text-[rgb(var(--slate-9))]" aria-hidden />
+              <label htmlFor="campaign-location" className="sr-only">
+                Localização do lead
+              </label>
+              <select
+                id="campaign-location"
+                value={location ?? ""}
+                onChange={(event) => updateQuery({ local: event.target.value || null })}
+                title="Cidade quando o cadastro tem; senão, a região do DDD do telefone. Corta as listas de leads — gasto e alcance continuam sendo os do período inteiro."
+                className="rounded-md border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] px-2 py-1.5 text-xs"
+              >
+                <option value="">Toda localização ({locatedLeads})</option>
+                {locationOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label} · {option.leads}
+                  </option>
+                ))}
+              </select>
+              {location ? (
+                <span className="text-[11px] text-[rgb(var(--slate-9))]">só as listas de leads</span>
+              ) : null}
+            </div>
+          ) : null}
+
           <form onSubmit={handleSearchSubmit} className="ml-auto flex min-w-[15rem] flex-1 items-center gap-2 sm:max-w-md">
             <label htmlFor="campaign-search" className="sr-only">
               Buscar campanha, conjunto ou anúncio
@@ -432,7 +501,28 @@ export default function CampanhasClient({
 
       <MetaReconciliationPanel data={reconciliation} />
 
-      <CampaignSectionNavigation tab={tab} hiddenTabs={hiddenTabs} onChange={handleTabChange} />
+      <CampaignSectionNavigation tab={displayTab} hiddenTabs={hiddenTabs} onChange={handleTabChange} />
+
+      {/* Enquanto o servidor monta a aba nova, o conteúdo antigo continua no ar
+          (comportamento do `startTransition`). Escurecer e bloquear o clique
+          deixa explícito que a tela está carregando, em vez de parecer travada
+          — e impede clique em dado que está prestes a ser substituído. */}
+      <div
+        className={
+          isPending
+            ? "pointer-events-none relative opacity-40 transition-opacity duration-150"
+            : "relative transition-opacity duration-150"
+        }
+        aria-busy={isPending}
+      >
+        {isPending ? (
+          <div className="pointer-events-none sticky top-2 z-10 flex justify-center">
+            <span className="flex items-center gap-2 rounded-full bg-[rgb(var(--slate-12))] px-3 py-1.5 text-xs font-semibold text-white shadow-lg">
+              <span className="size-3 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+              Carregando…
+            </span>
+          </div>
+        ) : null}
 
       {tab === "geral" && (
         <CampaignOverviewTab
@@ -461,12 +551,21 @@ export default function CampanhasClient({
 
       {tab === "relatorio" && monthlyReport && (
         <CampaignMonthlyReportTab
+          segments={reportSegments}
+          googleReport={googleReport}
+          key={`${monthlyReport.from}:${monthlyReport.to}:${reportIncludedCampaignIds.join(",")}:${reportCampaigns.map((item) => item.campaignId).join(",")}`}
           report={monthlyReport}
-          months={reportMonths}
+          campaigns={reportCampaigns}
+          includedCampaignIds={reportIncludedCampaignIds}
           stageDefs={stageDefs}
           ticketMedio={reportTicket}
           saleStageKey={reportSaleStage}
-          onMonthChange={(month) => updateQuery({ mes: month })}
+          onPeriodChange={(from, to) => updateQuery({ periodo: "custom", from, to, mes: null })}
+          onCampaignsChange={(campaignIds) =>
+            updateQuery({
+              relatorioCampanhas: campaignIds.length === reportCampaigns.length ? null : campaignIds.join(","),
+            })
+          }
         />
       )}
 
@@ -553,6 +652,11 @@ export default function CampanhasClient({
       {tab === "vendedores" && (
         <SellerPerformanceTab sellers={sellerPerformance} scoped={Boolean(selectedCampaignId || selectedAdsetId)} />
       )}
+
+      {tab === "google" && googleReport && (
+        <GoogleAdsTab report={googleReport} from={filters.from} to={filters.to} />
+      )}
+      </div>
     </div>
     </LeadProfileLauncher>
   );

@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import {
   BriefcaseBusiness,
   Building2,
   CalendarDays,
   Clock3,
+  ExternalLink,
   FileText,
   Flag,
   Globe2,
@@ -14,6 +15,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  Receipt,
   Route,
   UserRound,
 } from "lucide-react";
@@ -22,8 +24,13 @@ import { TagBadge } from "@/components/TagBadge";
 import { LeadEditForm } from "@/components/LeadEditForm";
 import { FormTrackingFields, hasFormTrackingFields, leadFormAnswerFields } from "@/components/FormHistoryView";
 import { LeadTimeline } from "@/components/LeadTimeline";
+import { LeadTasksSection } from "@/components/LeadTasksSection";
 import { LeadVinculosSection } from "@/components/LeadVinculosSection";
 import { EncontroChatView } from "@/components/EncontroChatView";
+import { RegisterSaleModal } from "@/components/RegisterSaleModal";
+import type { LeadSale } from "@/lib/leadSales";
+import type { ContractSummary } from "@/lib/contracts";
+import { CONTRACT_STATUS_LABELS, contractLinkPath, contractWhatsAppMessage } from "@/lib/contractRules";
 import type { CommercialStage, InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 import type { TrainingOption } from "@/types/training";
 import type { CommercialWorkspace } from "@/types/commercial";
@@ -77,6 +84,18 @@ function formatDateOnly(value: string | null | undefined): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+/** "2026-08-03" → "03/08/2026". Data pura não passa por `new Date`: no fuso do
+ *  Brasil ela seria lida como meia-noite UTC e exibida um dia antes. */
+function formatIsoDate(value: string | null | undefined): string {
+  if (!value) return "—";
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
+function formatMoney(value: number | null | undefined): string {
+  return (value ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
 function formatTimeOnly(value: string | null | undefined): string {
@@ -137,6 +156,39 @@ export function LeadProfileModal({
   const [savingSuggestion, setSavingSuggestion] = useState<"nome" | "email" | null>(null);
   const [commercialSaving, setCommercialSaving] = useState(false);
   const [commercialMessage, setCommercialMessage] = useState<string | null>(null);
+  const [sale, setSale] = useState<LeadSale | null>(null);
+  const [contract, setContract] = useState<ContractSummary | null>(null);
+  const [saleLoading, setSaleLoading] = useState(false);
+  const [saleEditing, setSaleEditing] = useState(false);
+  const [saleAllowed, setSaleAllowed] = useState(true);
+
+  // Campanha de mídia deste lead, resolvida no servidor (ver
+  // lib/leadCampaignLink): é o que transforma o nome da campanha na ficha em
+  // um link direto para ela na Métricas de Campanha.
+  const [leadCampaign, setLeadCampaign] = useState<{
+    campaignId: string;
+    campaignName: string;
+    via: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setLeadCampaign(null);
+    if (leadId === null) return;
+
+    let cancelled = false;
+    fetch(`/api/commercial/leads/${leadId}/campaign`)
+      .then((res) => (res.ok ? (res.json() as Promise<{ campaign: typeof leadCampaign }>) : null))
+      .then((data) => {
+        if (!cancelled && data?.campaign) setLeadCampaign(data.campaign);
+      })
+      .catch(() => {
+        // Sem o link, a ficha apenas mostra o nome da campanha como antes.
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId]);
 
   // Busca os dados do lead quando o modal abre / o leadId muda.
   useEffect(() => {
@@ -208,6 +260,76 @@ export function LeadProfileModal({
     };
   }, [inscricao?.codigoProprio]);
 
+  const canRegisterSale = !currentUser || hasPermission(currentUser, "crm.register_sale");
+
+  /** Venda registrada deste lead — a matrícula que o Financeiro cobra. Vem sem
+   *  as opções do catálogo: a ficha só exibe, e quem for corrigir abre o modal,
+   *  que carrega o que precisa. */
+  const fetchSale = useCallback(async (): Promise<{
+    sale: LeadSale | null;
+    contract: ContractSummary | null;
+  }> => {
+    if (leadId === null || !canRegisterSale) return { sale: null, contract: null };
+    const response = await fetch(`/api/commercial/leads/${leadId}/sale?options=0`);
+    if (!response.ok) {
+      // Nem toda tela que abre a ficha sabe as permissões do usuário; quem não
+      // pode registrar venda perde a seção inteira em vez de ver um botão que
+      // o servidor vai recusar.
+      if (response.status === 401 || response.status === 403) setSaleAllowed(false);
+      return { sale: null, contract: null };
+    }
+    const data = (await response.json().catch(() => ({}))) as {
+      sale?: LeadSale | null;
+      contract?: ContractSummary | null;
+    };
+    return { sale: data.sale ?? null, contract: data.contract ?? null };
+  }, [leadId, canRegisterSale]);
+
+  useEffect(() => {
+    setSale(null);
+    setContract(null);
+    setSaleEditing(false);
+    setSaleAllowed(true);
+    if (leadId === null || !canRegisterSale) return;
+
+    let cancelled = false;
+    setSaleLoading(true);
+    fetchSale()
+      .then((result) => {
+        if (cancelled) return;
+        setSale(result.sale);
+        setContract(result.contract);
+      })
+      .catch(() => {
+        if (!cancelled) setSale(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSaleLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [leadId, canRegisterSale, fetchSale]);
+
+  /** Depois de corrigir a venda, recarrega o lead junto: o valor fechado é
+   *  espelhado no card do Kanban e nas listas que abriram esta ficha. */
+  const handleSaleSaved = useCallback(async () => {
+    setSaleEditing(false);
+    const [next, leadResponse] = await Promise.all([
+      fetchSale().catch(() => ({ sale: null, contract: null })),
+      leadId === null ? null : fetch(`/api/inscricoes/${leadId}`).catch(() => null),
+    ]);
+    setSale(next.sale);
+    setContract(next.contract);
+    if (leadResponse?.ok) {
+      const data = (await leadResponse.json().catch(() => ({}))) as { inscricao?: InscricaoItem };
+      if (data.inscricao) {
+        setInscricao(data.inscricao);
+        onUpdate?.(data.inscricao);
+      }
+    }
+  }, [fetchSale, leadId, onUpdate]);
+
   const stageBadgeMap = useMemo(() => buildStageBadgeMap(commercial?.funnels ?? []), [commercial]);
   function stageBadge(key: CommercialStage | null | undefined) {
     return (key ? stageBadgeMap.get(key) : null) ?? FALLBACK_STAGE_BADGE;
@@ -223,6 +345,9 @@ export function LeadProfileModal({
   }, [commercial, inscricao?.commercial?.funnelId]);
   const leadStageOptions = leadFunnel?.stages ?? commercial?.stages ?? [];
   const hasFechamentoStage = leadStageOptions.some((stage) => stage.key === "fechamento");
+  const canAssignCommercial = Boolean(
+    commercial && (commercial.isSupervisor || hasPermission(currentUser, "crm.assign_leads"))
+  );
 
   const trainingOptionsById = useMemo(() => {
     return trainingOptions.reduce<Record<string, TrainingOption>>((acc, o) => {
@@ -488,10 +613,17 @@ export function LeadProfileModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sellerId: removing ? null : Number(sellerId) }),
       });
-      const data = (await res.json().catch(() => null)) as { error?: string } | null;
+      const data = (await res.json().catch(() => null)) as {
+        error?: string;
+        seller?: { name?: string | null } | null;
+      } | null;
       if (!res.ok) throw new Error(data?.error ?? "Falha ao repassar lead.");
       await refreshLead();
-      setCommercialMessage(removing ? "Atribuição removida. Lead sem vendedor responsável." : "Lead repassado.");
+      setCommercialMessage(
+        removing
+          ? "Atribuição removida. O lead saiu do Kanban individual."
+          : `Vendedor atribuído. Lead adicionado ao Kanban de ${data?.seller?.name ?? "vendas"}.`
+      );
     } catch (error) {
       setCommercialMessage(error instanceof Error ? error.message : "Falha ao repassar lead.");
     } finally {
@@ -534,6 +666,7 @@ export function LeadProfileModal({
     : [];
 
   return (
+    <>
     <div
       className={isPanel ? "h-full" : "fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-0 backdrop-blur-[3px] sm:p-5"}
       role={isPanel ? undefined : "dialog"}
@@ -776,12 +909,113 @@ export function LeadProfileModal({
                     </div>
                   </Section>
 
+                  {/* ── FECHAR CONTRATO ──────────────────── */}
+                  {/* Atalho logo depois das informações do lead. A seção "Venda"
+                      lá embaixo continua sendo o lugar do detalhe (parcelas,
+                      correção, PDF); o que estava faltando era o CAMINHO: ela é a
+                      oitava seção do modal, e quem abria a ficha não descobria
+                      que dava para fechar a venda sem sair dali.
+
+                      Registrar a venda já cria a matrícula E o contrato
+                      (syncContractOnSale) — por isso um botão só resolve o
+                      "fechar contrato", e depois este bloco vira o estado do
+                      contrato. */}
+                  {canRegisterSale && saleAllowed && !saleLoading && (
+                    <div className="mx-3 mt-4 sm:mx-7 sm:mt-5">
+                      {!sale ? (
+                        <button
+                          type="button"
+                          onClick={() => setSaleEditing(true)}
+                          className="flex w-full items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-left transition hover:bg-emerald-100"
+                        >
+                          <span className="min-w-0">
+                            <span className="block text-sm font-bold text-emerald-800">
+                              Fechar contrato
+                            </span>
+                            <span className="block text-[11px] text-emerald-700">
+                              Registra a venda e gera a matrícula e o contrato deste lead.
+                            </span>
+                          </span>
+                          <span aria-hidden="true" className="text-lg font-bold text-emerald-700">
+                            →
+                          </span>
+                        </button>
+                      ) : contract ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-slate-800">
+                              Contrato nº {contract.id} ·{" "}
+                              <span
+                                className={
+                                  contract.status === "assinado"
+                                    ? "text-emerald-700"
+                                    : contract.status === "pendente"
+                                      ? "text-amber-700"
+                                      : "text-slate-500"
+                                }
+                              >
+                                {CONTRACT_STATUS_LABELS[contract.status]}
+                              </span>
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              {sale.courseName ?? "Venda registrada"} · {formatMoney(sale.amount)}
+                            </p>
+                          </div>
+                          {contract.status === "pendente" && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(
+                                  `${window.location.origin}${contractLinkPath(contract.token)}`
+                                );
+                              }}
+                              className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Copiar link
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        /* Venda registrada mas sem contrato: acontece quando a
+                           geração automática falhou. Dizer isso é melhor do que
+                           mostrar um bloco vazio. */
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                          <p className="text-sm font-bold text-amber-800">
+                            Venda registrada, contrato ainda não gerado
+                          </p>
+                          <p className="text-[11px] text-amber-700">
+                            Gere o contrato desta matrícula em Contratos.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* ── LINHA DO TEMPO ───────────────────── */}
                   {/* Logo abaixo do contato: o vendedor registra "mandei
                       mensagem"/"liguei" na hora, e quem pegar o lead depois vê
                       todo o histórico (contatos + edições) sem procurar. */}
                   <Section label="Linha do tempo · contatos e alterações">
                     <LeadTimeline leadId={inscricao.id} canLog={canManageNotes} />
+                  </Section>
+
+                  {/* ── TAREFAS ──────────────────────────── */}
+                  {/* São tarefas do módulo /tarefas com este lead vinculado:
+                      o que nasce aqui aparece no quadro escolhido e na agenda
+                      do responsável, e vice-versa. */}
+                  <Section label="Tarefas e compromissos">
+                    <LeadTasksSection
+                      leadId={inscricao.id}
+                      canManage={canManageNotes}
+                      leadName={inscricao.nome}
+                      leadStage={inscricao.commercial?.stage ?? null}
+                      // Resultado do compromisso mudou a etapa: recarrega a
+                      // ficha e, se foi "Fechou", abre o registro da venda.
+                      onLeadChanged={({ opensSale }) => {
+                        void refreshLead();
+                        if (opensSale) setSaleEditing(true);
+                      }}
+                    />
                   </Section>
 
                   {/* ── ORIGEM DO LEAD ───────────────────── */}
@@ -808,7 +1042,17 @@ export function LeadProfileModal({
                           ) : null}
                           <InfoCard label="Nome do formulário" value={source.formName || "—"} />
                           <InfoCard label="Rota de origem" value={source.paginaOrigem || "—"} />
-                          <InfoCard label="Campanha" value={source.campanha || "—"} sub={source.fonte ?? undefined} />
+                          <InfoCard
+                            label="Campanha"
+                            value={leadCampaign?.campaignName || source.campanha || "—"}
+                            sub={source.fonte ?? undefined}
+                            href={leadCampaign ? campaignHref(leadCampaign.campaignId, inscricao.criadoEm) : undefined}
+                            hrefTitle={
+                              leadCampaign
+                                ? `Abrir esta campanha na Métricas de Campanha (${CAMPANHA_VIA_LABEL[leadCampaign.via] ?? leadCampaign.via})`
+                                : undefined
+                            }
+                          />
                           <InfoCard label="Indicador" value={source.indicador || "—"} />
                           <InfoCard label="Data/hora de conversão" value={formatDateTime(inscricao.criadoEm)} />
                           {source.extras.length > 0 && (
@@ -934,18 +1178,26 @@ export function LeadProfileModal({
                             >
                               {leadStageOptions.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
                             </select>
-                            {commercial.isSupervisor && (
-                              <select
-                                value={inscricao.commercial.assignedSellerId ?? ""}
-                                onChange={(e) => handleCommercialAssign(e.target.value)}
-                                disabled={commercialSaving}
-                                className="w-full rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-                              >
-                                <option value="">Repassar para vendedor</option>
-                                {commercial.sellers.map((s) => (
-                                  <option key={s.chatwootUserId} value={s.chatwootUserId}>{s.name}{s.isSupervisor ? " (supervisor)" : ""}</option>
-                                ))}
-                              </select>
+                            {canAssignCommercial && (
+                              <label className="block rounded-lg border border-cyan-100 bg-cyan-50/60 p-3">
+                                <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wide text-cyan-700">
+                                  Vendedor responsável
+                                </span>
+                                <select
+                                  value={inscricao.commercial.assignedSellerId ?? ""}
+                                  onChange={(e) => handleCommercialAssign(e.target.value)}
+                                  disabled={commercialSaving}
+                                  className="w-full rounded-lg border border-cyan-200 bg-white px-3 py-2 text-xs font-semibold text-neutral-800 focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100 disabled:opacity-60"
+                                >
+                                  <option value="">Sem responsável</option>
+                                  {commercial.sellers.map((s) => (
+                                    <option key={s.chatwootUserId} value={s.chatwootUserId}>{s.name}{s.isSupervisor ? " (supervisor)" : ""}</option>
+                                  ))}
+                                </select>
+                                <span className="mt-1.5 block text-[10px] leading-4 text-cyan-700">
+                                  Ao atribuir, o lead entra automaticamente no Kanban desse vendedor.
+                                </span>
+                              </label>
                             )}
                             {commercial.isSupervisor && commercial.funnels.length > 1 && (
                               <select
@@ -983,9 +1235,33 @@ export function LeadProfileModal({
                           </span>
                         </div>
                       )}
+                      {/* Repique: aviso de que este lead já disse não antes, com
+                          a última objeção. Sem isso o vendedor reabre a conversa
+                          sem saber que já esbarrou na mesma pedra. */}
+                      {inscricao.commercial.repiqueCount > 0 && (
+                        <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+                          <p className="text-xs font-bold text-rose-800">
+                            Já foi para o repique {inscricao.commercial.repiqueCount}x
+                          </p>
+                          {inscricao.commercial.lastObjection && (
+                            <p className="mt-0.5 text-[11px] text-rose-700">
+                              Última objeção: {inscricao.commercial.lastObjection}
+                            </p>
+                          )}
+                        </div>
+                      )}
+
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                        <InfoCard label="Vendedor" value={inscricao.commercial.assignedSellerName ?? "Sem responsável"} />
-                        <InfoCard label="Campanha" value={inscricao.commercial.campaignSource || "—"} sub={inscricao.commercial.campaignName ?? undefined} />
+                        {!canAssignCommercial && (
+                          <InfoCard label="Vendedor" value={inscricao.commercial.assignedSellerName ?? "Sem responsável"} />
+                        )}
+                        <InfoCard
+                          label="Campanha"
+                          value={inscricao.commercial.campaignSource || "—"}
+                          sub={leadCampaign?.campaignName ?? inscricao.commercial.campaignName ?? undefined}
+                          href={leadCampaign ? campaignHref(leadCampaign.campaignId, inscricao.criadoEm) : undefined}
+                          hrefTitle={leadCampaign ? "Abrir esta campanha na Métricas de Campanha" : undefined}
+                        />
                         {inscricao.commercial.campaignTerm && (
                           <div className="col-span-2">
                             <InfoCard label="Criativo" value={inscricao.commercial.campaignTerm} />
@@ -995,6 +1271,223 @@ export function LeadProfileModal({
                           <InfoCard label="Última atualização" value={formatDateTime(inscricao.statusUpdatedAt ?? inscricao.commercial.assignedAt)} />
                         </div>
                       </div>
+                    </Section>
+                  )}
+
+                  {/* ── VENDA ────────────────────────────── */}
+                  {/* O que foi vendido fica aqui, na ficha, e não só no card da
+                      coluna Fechado: quem descobre o erro depois costuma chegar
+                      ao lead pela busca, não pelo Kanban.
+                      A seção não depende mais de o lead ter card no funil: o
+                      treinamento do Instituto UP é vendido para gente que nunca
+                      passou pelo Kanban da VozUP, e exigir o card ali escondia o
+                      único caminho para gerar a matrícula e o contrato dessa
+                      venda. */}
+                  {canRegisterSale && saleAllowed && (
+                    <Section label="Venda">
+                      {saleLoading && !sale ? (
+                        <p className="text-xs text-slate-400">Carregando venda…</p>
+                      ) : sale ? (
+                        <>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <InfoCard label="Treinamento vendido" value={sale.courseName ?? "—"} />
+                            <InfoCard
+                              label="Valor fechado"
+                              value={formatMoney(sale.amount)}
+                              sub={
+                                sale.discountAmount > 0
+                                  ? `Tabela ${formatMoney(sale.listPrice)} · desconto ${formatMoney(sale.discountAmount)}`
+                                  : undefined
+                              }
+                            />
+                            <InfoCard label="Data da venda" value={formatIsoDate(sale.saleDate)} />
+                            <InfoCard label="Vendedor (comissão)" value={sale.sellerName ?? "Sem vendedor"} />
+                            <InfoCard
+                              label="Recebido"
+                              value={formatMoney(sale.paid)}
+                              sub={`Em aberto ${formatMoney(sale.balance)}`}
+                            />
+                            <InfoCard label="Parcelas" value={`${sale.schedule.length}x`} />
+                          </div>
+
+                          {sale.discountReason && (
+                            <p className="mt-2 text-[11px] text-slate-500">
+                              Motivo do desconto: {sale.discountReason}
+                            </p>
+                          )}
+
+                          {sale.schedule.length > 0 && (
+                            <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+                              <table className="w-full text-xs">
+                                <thead className="bg-slate-50 text-[9px] uppercase tracking-wide text-slate-400">
+                                  <tr>
+                                    <th className="px-2 py-1.5 text-left font-semibold">#</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold">Valor</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold">Vencimento</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold">Forma</th>
+                                    <th className="px-2 py-1.5 text-left font-semibold">Status</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {sale.schedule.map((item) => (
+                                    <tr key={item.number}>
+                                      <td className="px-2 py-1.5 text-slate-400">{item.number}</td>
+                                      <td className="px-2 py-1.5 font-semibold text-slate-800">
+                                        {formatMoney(item.amount)}
+                                      </td>
+                                      <td className="px-2 py-1.5 text-slate-600">{formatIsoDate(item.dueDate)}</td>
+                                      <td className="px-2 py-1.5 text-slate-600">
+                                        {item.paymentMethodName ?? "—"}
+                                        {item.cardBrandName ? ` · ${item.cardBrandName}` : ""}
+                                      </td>
+                                      <td className="px-2 py-1.5">
+                                        <span
+                                          className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                                            item.status === "recebido"
+                                              ? "bg-emerald-50 text-emerald-700"
+                                              : item.status === "atrasado"
+                                                ? "bg-rose-50 text-rose-700"
+                                                : "bg-slate-100 text-slate-600"
+                                          }`}
+                                        >
+                                          {item.status}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+
+                          {/* Contrato digital desta matrícula. Fica aqui porque é
+                              aqui que o vendedor está quando o aluno pede o link de
+                              novo — obrigá-lo a abrir /contratos para copiar um link
+                              seria trocar dois cliques por uma tela. */}
+                          {contract && (
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-700">
+                                    Contrato nº {contract.id} ·{" "}
+                                    <span
+                                      className={
+                                        contract.status === "assinado"
+                                          ? "text-emerald-700"
+                                          : contract.status === "pendente"
+                                            ? "text-amber-700"
+                                            : "text-slate-500"
+                                      }
+                                    >
+                                      {CONTRACT_STATUS_LABELS[contract.status]}
+                                    </span>
+                                  </p>
+                                  <p className="text-[11px] text-slate-500">
+                                    {contract.status === "assinado"
+                                      ? `Assinado em ${formatDateTime(contract.signedAt)}${
+                                          contract.cpfVerified ? " · CPF conferido" : " · CPF declarado no ato"
+                                        }`
+                                      : contract.status === "pendente"
+                                        ? contract.firstOpenedAt
+                                          ? `Aberto pelo aluno em ${formatDateTime(contract.firstOpenedAt)}`
+                                          : "Link ainda não aberto pelo aluno"
+                                        : (contract.canceledReason ?? "Cancelado")}
+                                  </p>
+                                  {contract.outdated && (
+                                    <p className="mt-0.5 text-[11px] font-semibold text-amber-700">
+                                      A venda mudou depois da assinatura — gere um contrato novo se o combinado
+                                      mudou de verdade.
+                                    </p>
+                                  )}
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {contract.status === "pendente" && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          void navigator.clipboard.writeText(
+                                            `${window.location.origin}${contractLinkPath(contract.token)}`
+                                          );
+                                        }}
+                                        className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                      >
+                                        Copiar link
+                                      </button>
+                                      {contract.signerPhone && (
+                                        <a
+                                          href={`${buildWhatsAppWebUrl(contract.signerPhone)}&text=${encodeURIComponent(
+                                            contractWhatsAppMessage({
+                                              signerName: contract.signerName,
+                                              courseName: contract.courseName ?? "VozUP",
+                                              link:
+                                                typeof window === "undefined"
+                                                  ? contractLinkPath(contract.token)
+                                                  : `${window.location.origin}${contractLinkPath(contract.token)}`,
+                                              companyName: "",
+                                            })
+                                          )}`}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          onClick={(event) => openWhatsAppOnMobile(event, contract.signerPhone)}
+                                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                                        >
+                                          Enviar no WhatsApp
+                                        </a>
+                                      )}
+                                    </>
+                                  )}
+                                  <a
+                                    href={`/api/contracts/${contract.id}/pdf`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                  >
+                                    Ver PDF
+                                  </a>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSaleEditing(true)}
+                              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Corrigir venda
+                            </button>
+                            {sale.paid > 0 && (
+                              <span className="text-[11px] text-amber-700">
+                                Já tem pagamento recebido — ajuste os pagamentos no Financeiro antes de mudar
+                                valor ou parcelas.
+                              </span>
+                            )}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-xs text-slate-500">
+                              Nenhuma venda registrada para este lead.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setSaleEditing(true)}
+                              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Registrar venda
+                            </button>
+                          </div>
+                          {!inscricao.commercial && (
+                            <p className="text-[11px] text-slate-400">
+                              Este lead não está no Kanban. A venda gera matrícula, parcelas e
+                              contrato do mesmo jeito — só não haverá card para mover para Fechado.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </Section>
                   )}
 
@@ -1142,6 +1635,19 @@ export function LeadProfileModal({
         )}
       </div>
     </div>
+
+    {/* Irmão da ficha, não filho: dentro dela o overlay ficaria preso ao
+        contêiner com backdrop-blur e ao scroll do corpo. */}
+    {saleEditing && inscricao && (
+      <RegisterSaleModal
+        lead={{ id: inscricao.id, nome: inscricao.nome }}
+        onCancel={() => setSaleEditing(false)}
+        onSaved={() => {
+          void handleSaleSaved();
+        }}
+      />
+    )}
+    </>
   );
 }
 
@@ -1150,6 +1656,7 @@ export function LeadProfileModal({
 function renderIconForLabel(label: string, size: number) {
   const normalized = label.toLowerCase();
   if (normalized.includes("linha do tempo")) return <History size={size} />;
+  if (normalized.includes("venda")) return <Receipt size={size} />;
   if (normalized.includes("origem")) return <Globe2 size={size} />;
   if (normalized.includes("nome") || normalized.includes("lead") || normalized.includes("vendedor")) return <UserRound size={size} />;
   if (normalized.includes("e-mail") || normalized.includes("email")) return <Mail size={size} />;
@@ -1197,15 +1704,73 @@ function Collapsible({ label, badge, children }: { label: string; badge?: string
   );
 }
 
-function InfoCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+/**
+ * Link da campanha na Métricas de Campanha.
+ *
+ * A janela acompanha o lead: para lead recente, os últimos 30 dias; para lead
+ * antigo, a semana em que ele entrou. Sem isso, clicar num lead de três meses
+ * atrás abriria a campanha num período em que ela nem rodava — tela vazia, e a
+ * impressão de que o link está quebrado.
+ */
+function campaignHref(campaignId: string, leadCreatedAt: string | null | undefined): string {
+  const base = `/campanhas?campanha=${encodeURIComponent(campaignId)}`;
+  const criado = leadCreatedAt ? new Date(leadCreatedAt) : null;
+  if (!criado || Number.isNaN(criado.getTime())) return `${base}&periodo=30d`;
+
+  const diasAtras = (Date.now() - criado.getTime()) / 86_400_000;
+  if (diasAtras <= 30) return `${base}&periodo=30d`;
+
+  const dia = (date: Date) => date.toISOString().slice(0, 10);
+  const inicio = new Date(criado.getTime() - 7 * 86_400_000);
+  return `${base}&periodo=custom&from=${dia(inicio)}&to=${dia(criado)}`;
+}
+
+const CAMPANHA_VIA_LABEL: Record<string, string> = {
+  atribuicao: "vínculo congelado com o anúncio",
+  campaign_id: "id da campanha gravado no lead",
+  ad_id: "id do anúncio gravado no lead",
+  nome: "nome da campanha no UTM",
+};
+
+function InfoCard({
+  label,
+  value,
+  sub,
+  href,
+  hrefTitle,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  /** Com href, o VALOR do card vira link (o card inteiro não: dentro do modal,
+   *  clique em área grande dispara navegação sem querer). */
+  href?: string;
+  hrefTitle?: string;
+}) {
   return (
     <div className="flex min-w-0 gap-3 rounded-xl bg-white p-3 ring-1 ring-[#e5eef6]">
-      <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-[#e5f8ff] text-[#0086b8]">
+      {/* Mesmo acabamento do IconTile (degradê + anel), mas montado à mão: o
+          ícone aqui vem de renderIconForLabel como JSX pronto, não como
+          componente, então não dá para passar pelo IconTile. */}
+      <span className="flex size-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[rgb(var(--blue-3))] to-[rgb(var(--blue-5))] text-[rgb(var(--blue-11))] ring-1 ring-inset ring-[rgb(var(--blue-6))]">
         {renderIconForLabel(label, 18)}
       </span>
       <div className="min-w-0">
         <p className="text-xs font-semibold text-slate-500">{label}</p>
-        <p className="mt-1 whitespace-pre-wrap break-words text-sm font-bold leading-snug text-slate-950">{value}</p>
+        {href ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={hrefTitle}
+            className="group mt-1 inline-flex items-start gap-1.5 text-sm font-bold leading-snug text-[rgb(var(--blue-11))] hover:underline"
+          >
+            <span className="whitespace-pre-wrap break-words">{value}</span>
+            <ExternalLink size={13} className="mt-0.5 flex-shrink-0 opacity-70 group-hover:opacity-100" />
+          </a>
+        ) : (
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm font-bold leading-snug text-slate-950">{value}</p>
+        )}
         {sub && <p className="mt-0.5 whitespace-pre-wrap break-words text-xs font-medium leading-snug text-slate-400">{sub}</p>}
       </div>
     </div>

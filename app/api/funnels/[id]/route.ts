@@ -30,6 +30,8 @@ function parseStages(value: unknown): FunnelStageInput[] {
       label: typeof raw.label === "string" ? raw.label : "",
       kind: STAGE_KINDS.includes(raw.kind as CommercialStageKind) ? (raw.kind as CommercialStageKind) : "normal",
       color: typeof raw.color === "string" ? raw.color : undefined,
+      // Quadro em que a coluna aparece; lib/funnels normaliza o que nao conhece.
+      board: typeof raw.board === "string" ? raw.board : undefined,
     };
   });
 }

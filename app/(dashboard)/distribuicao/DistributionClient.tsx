@@ -27,7 +27,8 @@ import type {
   ManualDistributionStrategy,
 } from "@/lib/manualDistribution";
 import type { PermissionUser } from "@/lib/permissions";
-import type { CommercialSeller } from "@/types/commercial";
+import type { CommercialSeller, CommercialWorkspace } from "@/types/commercial";
+import { SellerWorkloadPanel, type SellerInsight } from "@/components/SellerWorkloadPanel";
 import type { TrainingOption } from "@/types/training";
 
 interface RecruiterOption {
@@ -39,9 +40,14 @@ interface DistributionClientProps {
   candidates: ManualDistributionCandidate[];
   total: number;
   limit: number;
+  exclusiveClassCandidates: ManualDistributionCandidate[];
+  exclusiveClassTotal: number;
+  exclusiveClassStartsAt: string;
   filters: ManualDistributionFilters;
   folderOptions: ManualDistributionFolderOption[];
   sellers: CommercialSeller[];
+  commercial: CommercialWorkspace;
+  sellerInsights: SellerInsight[];
   trainingOptions: TrainingOption[];
   recruiterOptions: RecruiterOption[];
   isSupervisor: boolean;
@@ -85,6 +91,24 @@ function dateLabel(value: string | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+/** Só a hora — vai embaixo da data, para a linha não ficar comprida demais. */
+function timeLabel(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Data e hora na mesma linha. A hora importa aqui: numa fila de distribuição,
+ * saber que o lead chegou às 9h ou às 22h muda quando (e se) vale ligar.
+ */
+function dateTimeLabel(value: string | null): string {
+  const dia = dateLabel(value);
+  const hora = timeLabel(value);
+  return hora ? `${dia} · ${hora}` : dia;
 }
 
 function sellerStatusLabel(seller: CommercialSeller): string {
@@ -183,14 +207,20 @@ function buildGroups(rows: ManualDistributionCandidate[]): LeadGroup[] {
 
 const ALL_GROUPS_KEY = "__all__";
 const FOLDER_CANDIDATE_LIMIT = 500;
+type ArrivalQueue = "general" | "exclusive_class";
 
 export default function DistributionClient({
   candidates,
   total,
   limit,
+  exclusiveClassCandidates,
+  exclusiveClassTotal,
+  exclusiveClassStartsAt,
   filters,
   folderOptions,
   sellers,
+  commercial,
+  sellerInsights,
   trainingOptions,
   recruiterOptions,
   isSupervisor,
@@ -198,7 +228,9 @@ export default function DistributionClient({
   currentUser,
   profileUser,
 }: DistributionClientProps) {
-  const [rows, setRows] = useState(candidates);
+  const [arrivalQueue, setArrivalQueue] = useState<ArrivalQueue>("general");
+  const [generalRows, setGeneralRows] = useState(candidates);
+  const [exclusiveClassRows, setExclusiveClassRows] = useState(exclusiveClassCandidates);
   const [profileLeadId, setProfileLeadId] = useState<number | null>(null);
   const [showArrivalModal, setShowArrivalModal] = useState(false);
   const [activeGroupKey, setActiveGroupKey] = useState(ALL_GROUPS_KEY);
@@ -221,6 +253,12 @@ export default function DistributionClient({
   const [folderLoading, setFolderLoading] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
 
+  const rows = arrivalQueue === "exclusive_class" ? exclusiveClassRows : generalRows;
+  const queueTotal = arrivalQueue === "exclusive_class" ? exclusiveClassTotal : total;
+  const queueLabel = arrivalQueue === "exclusive_class" ? "Aula Exclusiva / Experimental" : "Chegada geral";
+  const queueDescription = arrivalQueue === "exclusive_class"
+    ? `Somente leads recebidos após a ativação da fila em ${dateLabel(exclusiveClassStartsAt)}.`
+    : "Novos leads do Meta e das landing pages (Google).";
   const groups = useMemo(() => buildGroups(rows), [rows]);
 
   // Rows visíveis: todos os grupos ou grupo específico, depois filtro client-side
@@ -267,6 +305,8 @@ export default function DistributionClient({
   const activeFolderBlocks = activeFolder?.blocks ?? [];
   const activeFolderBlock =
     activeFolderBlocks.find((block) => block.bloco === folderBlock) ?? activeFolderBlocks[0] ?? null;
+  const activeFolderKey = activeFolder?.key;
+  const activeFolderBlockName = activeFolderBlock?.bloco;
   const visibleFolderRows = useMemo(() => {
     const q = folderSearch.trim().toLowerCase();
     if (!q) return folderRows;
@@ -287,7 +327,7 @@ export default function DistributionClient({
 
   useEffect(() => {
     if (!showFolderModal) return;
-    if (!activeFolder || !activeFolderBlock) {
+    if (!activeFolderKey || !activeFolderBlockName) {
       setFolderRows([]);
       setFolderSelectedIds(new Set());
       return;
@@ -295,8 +335,8 @@ export default function DistributionClient({
 
     const controller = new AbortController();
     const params = new URLSearchParams({
-      folderKey: activeFolder.key,
-      block: activeFolderBlock.bloco,
+      folderKey: activeFolderKey,
+      block: activeFolderBlockName,
       limit: String(FOLDER_CANDIDATE_LIMIT),
       overwriteAssigned: overwriteAssigned ? "1" : "0",
     });
@@ -326,7 +366,7 @@ export default function DistributionClient({
       });
 
     return () => controller.abort();
-  }, [activeFolder?.key, activeFolderBlock?.bloco, overwriteAssigned, showFolderModal]);
+  }, [activeFolderBlockName, activeFolderKey, overwriteAssigned, showFolderModal]);
 
   if (!isSupervisor) {
     // Modo enxuto: quem só pode adicionar (ex.: intake) cadastra o lead sem dono,
@@ -395,6 +435,14 @@ export default function DistributionClient({
     setMessage(null);
   }
 
+  function chooseArrivalQueue(queue: ArrivalQueue) {
+    setArrivalQueue(queue);
+    setActiveGroupKey(ALL_GROUPS_KEY);
+    setClientSearch("");
+    setSelectedIds(new Set());
+    setMessage(null);
+  }
+
   function toggleRow(id: number) {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -422,7 +470,7 @@ export default function DistributionClient({
 
   function applyDistributionResult(result: ManualDistributionResult) {
     const assignedById = new Map(result.assigned.map((item) => [item.inscricaoId, item]));
-    setRows((current) =>
+    const updateRows = (current: ManualDistributionCandidate[]) =>
       filters.unassignedOnly && !overwriteAssigned
         ? current.filter((row) => !assignedById.has(row.id))
         : current.map((row) => {
@@ -434,8 +482,9 @@ export default function DistributionClient({
                   assignedSellerEmail: assigned.sellerEmail,
                 }
               : row;
-          })
-    );
+          });
+    setGeneralRows(updateRows);
+    setExclusiveClassRows(updateRows);
     setSelectedIds((current) => {
       const next = new Set(current);
       for (const item of result.assigned) next.delete(item.inscricaoId);
@@ -614,9 +663,9 @@ export default function DistributionClient({
           </div>
           <h1 className="text-2xl font-bold text-[rgb(var(--slate-12))]">Chegada de Leads</h1>
           <p className="mt-0.5 text-sm text-[rgb(var(--slate-10))]">
-            Novos leads do Meta e das landing pages (Google) ·{" "}
+            {queueLabel} · {queueDescription} ·{" "}
             {rows.length.toLocaleString("pt-BR")} lead(s) em {groups.length} grupo(s)
-            {total > rows.length ? ` · ${total.toLocaleString("pt-BR")} no recorte` : ""}
+            {queueTotal > rows.length ? ` · ${queueTotal.toLocaleString("pt-BR")} no recorte` : ""}
           </p>
         </div>
         <div className="flex flex-wrap gap-2 self-start sm:self-auto">
@@ -640,6 +689,51 @@ export default function DistributionClient({
             Lead orgânico (WhatsApp)
           </button>
         </div>
+      </div>
+
+      {/* ── Filas de chegada ───────────────────────────────────── */}
+      <div className="mb-4 inline-flex max-w-full overflow-x-auto rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-1 shadow-[0_1px_2px_rgba(28,32,36,0.04)]">
+        <button
+          type="button"
+          onClick={() => chooseArrivalQueue("general")}
+          aria-pressed={arrivalQueue === "general"}
+          className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+            arrivalQueue === "general"
+              ? "bg-[rgb(var(--blue-9))] text-white"
+              : "text-[rgb(var(--slate-11))] hover:bg-[rgb(var(--slate-2))]"
+          }`}
+        >
+          Chegada geral
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+            arrivalQueue === "general" ? "bg-white/20 text-white" : "bg-[rgb(var(--slate-2))] text-[rgb(var(--slate-10))]"
+          }`}>
+            {generalRows.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => chooseArrivalQueue("exclusive_class")}
+          aria-pressed={arrivalQueue === "exclusive_class"}
+          className={`flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+            arrivalQueue === "exclusive_class"
+              ? "bg-[rgb(var(--blue-9))] text-white"
+              : "text-[rgb(var(--slate-11))] hover:bg-[rgb(var(--slate-2))]"
+          }`}
+        >
+          Aula Exclusiva / Experimental
+          <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+            arrivalQueue === "exclusive_class" ? "bg-white/20 text-white" : "bg-[rgb(var(--slate-2))] text-[rgb(var(--slate-10))]"
+          }`}>
+            {exclusiveClassRows.length}
+          </span>
+        </button>
+      </div>
+
+      {/* ── Equipe: carga atual ─────────────────────────────────── */}
+      {/* Fica ANTES da lista de leads de propósito: a decisão de para quem
+          mandar vem antes da escolha de quais leads mandar. */}
+      <div className="mb-4">
+        <SellerWorkloadPanel sellers={sellers} insights={sellerInsights} />
       </div>
 
       {/* ── Painel principal ───────────────────────────────────── */}
@@ -714,7 +808,12 @@ export default function DistributionClient({
             </div>
             <div className="rounded-xl border border-[rgb(var(--border-weak))] bg-white px-4 py-3">
               <p className="text-[11px] font-semibold uppercase tracking-wide text-[rgb(var(--slate-10))]">Último lead</p>
-              <p className="mt-1 text-lg font-bold text-[rgb(var(--slate-12))]">{dateLabel(currentGroup.latestCreatedAt)}</p>
+              <p className="mt-1 text-lg font-bold text-[rgb(var(--slate-12))]">
+                {dateLabel(currentGroup.latestCreatedAt)}
+              </p>
+              <p className="text-sm font-bold text-[rgb(var(--slate-11))]">
+                {timeLabel(currentGroup.latestCreatedAt)}
+              </p>
               <p className="mt-0.5 text-xs text-[rgb(var(--slate-10))]">{signalLabel(currentGroup)}</p>
             </div>
           </div>
@@ -1103,7 +1202,12 @@ export default function DistributionClient({
                           <span className="text-[rgb(var(--slate-10))]">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-[rgb(var(--slate-10))]">{dateLabel(row.createdAt)}</td>
+                      <td className="px-4 py-3 text-xs text-[rgb(var(--slate-10))]">
+                        <span className="block whitespace-nowrap">{dateLabel(row.createdAt)}</span>
+                        <span className="block whitespace-nowrap font-semibold text-[rgb(var(--slate-11))]">
+                          {timeLabel(row.createdAt)}
+                        </span>
+                      </td>
                     </tr>
                   );
                 })}
@@ -1308,7 +1412,7 @@ export default function DistributionClient({
                                 </span>
                               </span>
                               <span className="text-right text-[11px] font-semibold text-neutral-400">
-                                <span className="block">{dateLabel(row.createdAt)}</span>
+                                <span className="block whitespace-nowrap">{dateTimeLabel(row.createdAt)}</span>
                                 <span className={row.assignedSellerName ? "mt-1 block max-w-32 truncate text-amber-600" : "mt-1 block text-emerald-700"}>
                                   {row.assignedSellerName ?? "Sem responsável"}
                                 </span>
@@ -1378,6 +1482,7 @@ export default function DistributionClient({
         onClose={() => setProfileLeadId(null)}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
+        commercial={commercial}
         currentUser={profileUser}
       />
 

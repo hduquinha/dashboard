@@ -18,11 +18,15 @@ import {
   listCommissions,
   listEnrollments,
   listFixedExpenses,
+  listPendingInvoiceEnrollments,
   listFixedExpensesRange,
+  listOverdueReceivables,
+  listReceivables,
   listRevenues,
   listVariableExpenses,
 } from "@/lib/finance";
 import type { FinanceFilters } from "@/types/finance";
+import { parseBusinessUnitFilter } from "@/lib/financeBusinessUnits";
 
 export const metadata: Metadata = {
   title: "Gestao Financeira VozUP",
@@ -67,9 +71,12 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
   const month = dataRange ? dataRange.to : requestedMonth || currentMonth();
   const from = dataRange ? dataRange.from : periodMode === "custom" ? pick(resolved.from) || month : month;
   const to = dataRange ? dataRange.to : periodMode === "custom" ? pick(resolved.to) || from : month;
+  // Chave Voz UP × Instituto UP: sem valor, soma as duas.
+  const businessUnit = parseBusinessUnitFilter(pick(resolved.unidade));
   const filters: FinanceFilters = {
     from,
     to,
+    businessUnit,
     branchId: parseOptionalNumber(pick(resolved.branchId)),
     courseId: parseOptionalNumber(pick(resolved.courseId)),
     categoryId: parseOptionalNumber(pick(resolved.categoryId)),
@@ -103,6 +110,9 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
     allMonthlyTotals,
     commissionsOverview,
     agenda,
+    pendingInvoices,
+    receivables,
+    overdueReceivables,
   ] = await Promise.all([
     getFinanceCatalog(),
     getFinanceDashboardSummary(month, filters),
@@ -116,10 +126,10 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
         })
       : listRevenues(filters),
     periodMode === "all"
-      ? listAllFixedExpenses()
+      ? listAllFixedExpenses(businessUnit)
       : periodMode === "custom"
-        ? listFixedExpensesRange(from, to)
-        : listFixedExpenses(month),
+        ? listFixedExpensesRange(from, to, businessUnit)
+        : listFixedExpenses(month, businessUnit),
     listVariableExpenses(expenseFilters),
     matriculasVisao === "todos"
       ? listEnrollments({ courseId: filters.courseId, sellerId: filters.sellerId })
@@ -132,6 +142,14 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
       ? getCommissionsOverview({ sellerId: filters.sellerId })
       : getCommissionsOverview({ ...filters }),
     listFinanceAgenda(),
+    // Fora do recorte de período de propósito: nota pendente de março continua
+    // pendente com o filtro em agosto (ver listPendingInvoiceEnrollments).
+    listPendingInvoiceEnrollments(),
+    // A aba Cobrança recorta pelo VENCIMENTO, não pela competência: a pergunta
+    // dela é "o que tenho para receber e cobrar neste mês".
+    listReceivables({ from, to, sellerId: filters.sellerId, courseId: filters.courseId, branchId: filters.branchId }),
+    // Vencidas de qualquer mês, pelo mesmo motivo da fila de NF.
+    listOverdueReceivables(),
   ]);
 
   return (
@@ -156,7 +174,12 @@ export default async function FinanceiroPage({ searchParams }: PageProps) {
       comissoesVisao={comissoesVisao}
       allMonthlyTotals={allMonthlyTotals}
       commissionsOverview={commissionsOverview}
+      pendingInvoices={pendingInvoices}
+      receivables={receivables}
+      overdueReceivables={overdueReceivables}
+      canManageInvoices={hasPermission(session?.user, "finance.invoices")}
       canDeleteAuditEvents={hasPermission(session?.user, "admin.audit")}
+      initialTab={pick(resolved.aba)}
     />
   );
 }

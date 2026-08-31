@@ -109,6 +109,20 @@ function parseList(value: unknown): string[] | null {
     .map((entry) => entry);
 }
 
+/**
+ * Nome de contato que seja só um número não é nome. No export do WhatsApp,
+ * contato não salvo vem com `saved_name`/`public_name` iguais ao próprio
+ * telefone ("+55 11 99493-1607"); deixar isso virar o nome do lead sujaria
+ * busca e ordem alfabética. Nesse caso o lead entra só com o telefone.
+ */
+function normalizeContactName(value: unknown): string | null {
+  const nome = normalizeString(value);
+  if (!nome) {
+    return null;
+  }
+  return /\p{L}/u.test(nome) ? nome : null;
+}
+
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -147,6 +161,12 @@ export function normalizePhone(value: unknown): string | null {
   }
   const digits = normalized.replace(/\D+/g, "");
   if (digits.length >= 10) {
+    // Export do WhatsApp vem com o país (+5511994931607); o resto da base grava
+    // sem ele (11994931607). Sem tirar o 55, o mesmo telefone não bate com o
+    // cadastro que já existe e a pessoa entra duplicada.
+    if (digits.length >= 12 && digits.length <= 13 && digits.startsWith("55")) {
+      return digits.slice(2);
+    }
     return digits;
   }
   return normalized.replace(/\s+/g, "");
@@ -281,7 +301,12 @@ function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
   const trafficSourceValue = indicacaoValue ?? normalizeString(row.traffic_source);
 
   return {
-    nome: normalizeString(row.nome),
+    // `saved_name`/`public_name` vêm do export de contatos do WhatsApp; quando o
+    // contato não está salvo, o public_name é o próprio número — nesse caso o
+    // lead entra só com telefone e o vendedor descobre quem é na conferência.
+    nome:
+      normalizeContactName(pickField(row, "nome", "name", "saved_name", "contato")) ??
+      normalizeContactName(row.public_name),
     page: normalizeString(row.page),
     sono: normalizeString(row.sono),
     _step: toNumber(row._step),
@@ -291,7 +316,9 @@ function buildPayload(rawRow: Record<string, unknown>): ImportPayload {
     clientId: normalizeString(pickField(row, "clientId", "client_id", "id", "lead_id")),
     from_bio: indicacaoValue,
     indicacao: indicacaoValue,
-    telefone: normalizePhone(pickField(row, "telefone", "phone", "tefone", "celular")),
+    telefone: normalizePhone(
+      pickField(row, "telefone", "phone", "tefone", "celular", "phone_number", "formatted_phone", "whatsapp", "numero")
+    ),
     ansiedade: normalizeString(row.ansiedade),
     timestamp: normalizeString(row.timestamp),
     saude_fisica: normalizeString(row.saude_fisica),
@@ -385,6 +412,18 @@ export function importSpreadsheet(data: SpreadsheetBinary, options?: ImportOptio
 
     try {
       const payload = buildPayload(row);
+
+      // Sem nome E sem telefone não há lead nenhum ali — antes essas linhas
+      // entravam como registro vazio, que é como uma planilha de colunas
+      // desconhecidas virava centenas de cadastros em branco no CRM.
+      if (!payload.nome && !payload.telefone) {
+        comErros.push({
+          linha: currentLine,
+          mensagem: "Linha sem nome e sem telefone — nenhuma coluna reconhecida.",
+          raw: row,
+        });
+        return;
+      }
 
       let isDuplicate = false;
       if (payload.clientId) {

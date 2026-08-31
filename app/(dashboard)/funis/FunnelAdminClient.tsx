@@ -14,6 +14,7 @@ import {
 import type { Funnel } from "@/types/funnel";
 import type { CommercialSeller } from "@/types/commercial";
 import type { CommercialStageKind } from "@/types/inscricao";
+import { FUNNEL_BOARDS, type FunnelBoard } from "@/lib/funnelBoards";
 import { STAGE_COLOR_CLASSES, STAGE_COLOR_TOKENS, stageColorTokenForIndex } from "@/lib/stageColors";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,8 @@ interface StageDraft {
   label: string;
   kind: CommercialStageKind;
   color: string;
+  /** Quadro do Kanban em que a coluna aparece (ver lib/funnelBoards.ts). */
+  board: FunnelBoard;
 }
 
 interface FunnelDraft {
@@ -44,10 +47,10 @@ function emptyDraft(): FunnelDraft {
     name: "",
     sellerIds: [],
     stages: [
-      { id: null, label: "Novo", kind: "entry", color: "slate" },
-      { id: null, label: "Em atendimento", kind: "normal", color: "blue" },
-      { id: null, label: "Ganho", kind: "won", color: "emerald" },
-      { id: null, label: "Perdido", kind: "lost", color: "rose" },
+      { id: null, label: "Novo", kind: "entry", color: "slate", board: "principal" },
+      { id: null, label: "Em atendimento", kind: "normal", color: "blue", board: "principal" },
+      { id: null, label: "Ganho", kind: "won", color: "emerald", board: "principal" },
+      { id: null, label: "Perdido", kind: "lost", color: "rose", board: "principal" },
     ],
   };
 }
@@ -62,6 +65,7 @@ function draftFromFunnel(funnel: Funnel): FunnelDraft {
       label: stage.label,
       kind: stage.kind,
       color: stage.color,
+      board: stage.board,
     })),
   };
 }
@@ -101,7 +105,7 @@ function FunnelDialog({
   function addStage() {
     setStages((current) => [
       ...current,
-      { id: null, label: "", kind: "normal", color: stageColorTokenForIndex(current.length) },
+      { id: null, label: "", kind: "normal", color: stageColorTokenForIndex(current.length), board: "principal" },
     ]);
   }
 
@@ -204,7 +208,7 @@ function FunnelDialog({
                 {stages.map((stage, index) => (
                   <div
                     key={index}
-                    className="grid grid-cols-[auto_minmax(0,1fr)_120px_auto_auto] items-center gap-2 rounded-lg border border-neutral-200 bg-white p-2"
+                    className="grid grid-cols-[auto_minmax(0,1fr)_120px_130px_auto_auto] items-center gap-2 rounded-lg border border-neutral-200 bg-white p-2"
                   >
                     <div className="flex flex-col">
                       <button
@@ -240,6 +244,19 @@ function FunnelDialog({
                       {(Object.keys(KIND_LABELS) as CommercialStageKind[]).map((kind) => (
                         <option key={kind} value={kind}>
                           {KIND_LABELS[kind]}
+                        </option>
+                      ))}
+                    </select>
+
+                    <select
+                      value={stage.board}
+                      onChange={(event) => updateStage(index, { board: event.target.value as FunnelBoard })}
+                      title="Em qual quadro do Kanban esta coluna aparece"
+                      className={inputClass}
+                    >
+                      {FUNNEL_BOARDS.map((board) => (
+                        <option key={board.key} value={board.key}>
+                          {board.label}
                         </option>
                       ))}
                     </select>

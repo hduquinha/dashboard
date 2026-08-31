@@ -10,6 +10,7 @@ import {
 import { hasPermission } from "@/lib/permissions";
 import { notifySellerLeadAssigned } from "@/lib/pushNotifications";
 import {
+  findStageByBoard,
   findStageByKey,
   findStageByKind,
   getDefaultFunnel,
@@ -52,7 +53,9 @@ function assertSupervisor(user: DashboardUser | null | undefined): void {
   }
 }
 
-async function getLeadFunnel(inscricaoId: number): Promise<Funnel> {
+/** Funil do lead, caindo no padrão quando ele ainda não tem um. Exportado para
+ *  `scheduleOutcome.ts`, que precisa saber se a etapa alvo existe neste funil. */
+export async function getLeadFunnel(inscricaoId: number): Promise<Funnel> {
   const row = await getPool().query<{ funnel_id: number | null }>(
     `SELECT funnel_id FROM ${SCHEMA}.commercial_leads WHERE inscricao_id = $1`,
     [inscricaoId]
@@ -114,6 +117,9 @@ export async function ensureCommercialSchema(): Promise<void> {
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_value NUMERIC;
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE;
     ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS contact_attempts SMALLINT NOT NULL DEFAULT 0 CHECK (contact_attempts BETWEEN 0 AND 10);
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS repique_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS last_objection TEXT;
+    ALTER TABLE ${SCHEMA}.commercial_leads ADD COLUMN IF NOT EXISTS last_objection_at TIMESTAMP WITH TIME ZONE;
 
     CREATE TABLE IF NOT EXISTS ${SCHEMA}.commercial_events (
       id BIGSERIAL PRIMARY KEY,
@@ -137,7 +143,60 @@ export async function ensureCommercialSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_commercial_events_to_stage_created ON ${SCHEMA}.commercial_events(to_stage, created_at DESC);
   `);
 
+  // Nunca deixar o recálculo derrubar a inicialização do schema comercial: numa
+  // base recém-criada `funnel_stages` pode ainda não existir neste ponto.
+  try {
+    await backfillRepiqueCount();
+  } catch (error) {
+    console.error("[commercial] falha ao recalcular o contador de repique:", error);
+  }
+
   schemaReady = true;
+}
+
+/**
+ * Recalcula `repique_count` a partir do histórico de eventos — uma vez por boot
+ * do processo.
+ *
+ * O contador é escrito ao vivo em setCommercialStage/closeCommercialLead, mas
+ * quem manda é `commercial_events`: assim o número já nasce certo para os leads
+ * que passaram pelo Desinteresse antes desta funcionalidade existir, e qualquer
+ * caminho novo que mova etapa sem passar por essas funções é corrigido no
+ * próximo restart em vez de mentir para sempre.
+ */
+async function backfillRepiqueCount(): Promise<void> {
+  await getPool().query(`
+    WITH lost_keys AS (
+      SELECT DISTINCT key FROM ${SCHEMA}.funnel_stages WHERE kind = 'lost'
+    ),
+    counts AS (
+      SELECT e.inscricao_id, COUNT(*)::int AS total
+      FROM ${SCHEMA}.commercial_events e
+      WHERE e.event_type IN ('stage_changed', 'closed')
+        AND e.to_stage IN (SELECT key FROM lost_keys)
+        AND e.from_stage IS DISTINCT FROM e.to_stage
+        -- Andar de uma coluna de perda para outra (Desinteresse → Em espera)
+        -- é arquivar o mesmo repique, não fazer um novo. Mesma regra do ao
+        -- vivo em setCommercialStage; sem ela o boot somaria um repique
+        -- fantasma em todo lead que a operação tirou do quadro.
+        AND (e.from_stage IS NULL OR e.from_stage NOT IN (SELECT key FROM lost_keys))
+      GROUP BY e.inscricao_id
+    )
+    UPDATE ${SCHEMA}.commercial_leads cl
+    SET repique_count = c.total
+    FROM counts c
+    WHERE c.inscricao_id = cl.inscricao_id
+      AND cl.repique_count <> c.total
+  `);
+
+  // Lead que já está parado na coluna de perda sem nenhum evento (veio de
+  // importação ou de antes do log) conta como um repique — senão o card fica
+  // no Desinteresse sem etiqueta nenhuma.
+  await getPool().query(`
+    UPDATE ${SCHEMA}.commercial_leads
+    SET repique_count = 1
+    WHERE commercial_stage_kind = 'lost' AND repique_count = 0
+  `);
 }
 
 async function insertEvent(
@@ -241,7 +300,7 @@ async function ensureCommercialLeadRow(inscricaoId: number): Promise<void> {
 export async function listCommercialSellers(): Promise<CommercialSeller[]> {
   const members = await listTeamMembers({ activeOnly: true });
 
-  return members.map((member) => ({
+  return members.filter((member) => member.isSeller).map((member) => ({
     id: member.id,
     chatwootUserId: member.id,
     name: member.name,
@@ -293,18 +352,113 @@ export async function setCommercialStage(
   );
   const fromStage = current.rows[0]?.commercial_stage ?? null;
 
+  // Repique: cada ENTRADA na coluna de perda (Desinteresse) conta uma vez.
+  // Reordenar o card dentro da própria coluna não conta — só a chegada nela.
+  // Vir de OUTRA coluna de perda também não: mandar o lead do Desinteresse
+  // para o quadro Em espera é arquivar aquele repique, não fazer mais um.
+  const cameFromLostStage =
+    funnel.stages.find((candidate) => candidate.key === fromStage)?.kind === "lost";
+  const enteredLostStage = stage.kind === "lost" && fromStage !== stage.key && !cameFromLostStage;
+
   await getPool().query(
     `
       UPDATE ${SCHEMA}.commercial_leads
       SET commercial_stage = $2,
           commercial_stage_kind = $3,
           position = COALESCE($4, position),
+          repique_count = repique_count + CASE WHEN $5 THEN 1 ELSE 0 END,
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
-    [inscricaoId, stage.key, stage.kind, position]
+    [inscricaoId, stage.key, stage.kind, position, enteredLostStage]
   );
-  await insertEvent(inscricaoId, "stage_changed", user, { actor }, fromStage, stage.key);
+  // O responsável no MOMENTO do movimento vai no payload. Sem isso o histórico
+  // só sabe quem moveu, e o dono teria que ser lido de commercial_leads — que
+  // guarda o dono de HOJE. Lead transferido depois faria o trabalho de quem o
+  // tinha antes aparecer no relatório de quem o tem agora.
+  await insertEvent(
+    inscricaoId,
+    "stage_changed",
+    user,
+    {
+      actor,
+      ownerEmail: assignedEmail || null,
+      ownerName: item?.commercial?.assignedSellerName ?? null,
+    },
+    fromStage,
+    stage.key
+  );
+}
+
+const OBJECTION_MAX_LENGTH = 400;
+
+export interface LeadObjectionInput {
+  /** Motivos marcados na lista pronta. */
+  reasons?: unknown;
+  /** Detalhe escrito pelo vendedor. */
+  note?: unknown;
+}
+
+/**
+ * Objeção do lead que foi para o repique (coluna Desinteresse).
+ *
+ * O contador de repique é do `setCommercialStage` — ele conta a entrada na
+ * coluna, tenha o vendedor preenchido a objeção ou não. Aqui só registramos o
+ * PORQUÊ: fica na ficha (última objeção) e na linha do tempo, que é o histórico
+ * de verdade quando o mesmo lead volta pro repique uma segunda vez.
+ */
+export async function registerLeadObjection(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  input: LeadObjectionInput
+): Promise<{ objection: string }> {
+  await ensureCommercialLeadRow(inscricaoId);
+
+  const actor = productivityActorFromUser(user);
+  const item = (await listInscricoesByIds([inscricaoId]))[0];
+  const assignedEmail = normalizeEmail(item?.commercial?.assignedSellerEmail);
+  if (!isProductivityManager(user) && assignedEmail !== actor.email) {
+    throw new Error("Voce nao pode registrar objecao de lead de outro vendedor.");
+  }
+
+  const reasons = Array.isArray(input.reasons)
+    ? input.reasons
+        .map((reason) => (typeof reason === "string" ? reason.trim() : ""))
+        .filter((reason) => reason.length > 0 && reason.length <= 120)
+        .slice(0, 8)
+    : [];
+  const note = typeof input.note === "string" ? input.note.trim().slice(0, OBJECTION_MAX_LENGTH) : "";
+  if (reasons.length === 0 && !note) {
+    throw new Error("Marque ao menos um motivo ou escreva a objecao.");
+  }
+
+  const objection = [reasons.join(", "), note].filter((part) => part.length > 0).join(" — ");
+  const stageRow = await getPool().query<{ commercial_stage: string | null }>(
+    `SELECT commercial_stage FROM ${SCHEMA}.commercial_leads WHERE inscricao_id = $1`,
+    [inscricaoId]
+  );
+
+  await getPool().query(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET last_objection = $2,
+          last_objection_at = NOW(),
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+    `,
+    [inscricaoId, objection]
+  );
+
+  await insertEvent(
+    inscricaoId,
+    "objection_recorded",
+    user,
+    { reasons, note: note || null, objection },
+    stageRow.rows[0]?.commercial_stage ?? null,
+    stageRow.rows[0]?.commercial_stage ?? null
+  );
+
+  return { objection };
 }
 
 /**
@@ -472,10 +626,22 @@ export async function closeCommercialLead(
           closed_course = $6,
           closed_value = $7,
           closed_at = NOW(),
+          repique_count = repique_count + CASE WHEN $8 THEN 1 ELSE 0 END,
           updated_at = NOW()
       WHERE inscricao_id = $1
     `,
-    [inscricaoId, funnel.id, toStage.key, toStage.kind, input.reason, courseName, value]
+    [
+      inscricaoId,
+      funnel.id,
+      toStage.key,
+      toStage.kind,
+      input.reason,
+      courseName,
+      value,
+      // Fechar como "não quis continuidade" joga o lead na mesma coluna de
+      // perda do Kanban, então também é um repique.
+      toStage.kind === "lost" && fromStage !== toStage.key,
+    ]
   );
 
   await insertEvent(
@@ -491,6 +657,13 @@ export async function closeCommercialLead(
 interface CommercialLeadAssignmentContext {
   sourceGroupTitle?: string | null;
   leadPath?: string[] | null;
+  /**
+   * Nao dispara o aviso "lead atribuido a voce" por lead. Usado na distribuicao
+   * da triagem, que repassa dezenas/centenas de contatos de uma vez — um push
+   * por lead viraria uma rajada no celular do vendedor. Quem passa isto fica
+   * responsavel por avisar uma vez so, com o total do lote.
+   */
+  silent?: boolean;
 }
 
 export async function assignCommercialLead(
@@ -579,10 +752,16 @@ export async function applyCommercialLeadAssignment(
       sellerName: seller.name,
     }, previousStage, entryStage.key);
   }
+  // `previousSeller*` fecha a pergunta "quem era o responsável antes" sem
+  // consulta extra: até aqui a transferência gravava só o destino, e a origem
+  // se perdia. Nulo quando o lead ainda não tinha dono (primeira distribuição).
   await insertEvent(inscricaoId, "assigned", user, {
     sellerId: seller.chatwootUserId,
     sellerEmail: seller.email,
     sellerName: seller.name,
+    previousSellerId,
+    previousSellerEmail: item?.commercial?.assignedSellerEmail ?? null,
+    previousSellerName: item?.commercial?.assignedSellerName ?? null,
   });
 
   await upsertProductivityLeadAssignment({
@@ -599,10 +778,12 @@ export async function applyCommercialLeadAssignment(
     actor,
   });
 
-  try {
-    await notifySellerLeadAssigned(seller.email, { id: inscricaoId, nome: item?.nome ?? null });
-  } catch (error) {
-    console.error("[commercial] falha ao notificar vendedor da atribuicao:", error);
+  if (!context.silent) {
+    try {
+      await notifySellerLeadAssigned(seller.email, { id: inscricaoId, nome: item?.nome ?? null });
+    } catch (error) {
+      console.error("[commercial] falha ao notificar vendedor da atribuicao:", error);
+    }
   }
 
   return { seller };
@@ -668,12 +849,81 @@ export async function moveLeadToFunnel(
   funnelId: number
 ): Promise<void> {
   assertSupervisor(user);
-  await ensureCommercialLeadRow(inscricaoId);
-
   const funnel = await getFunnelById(funnelId);
   if (!funnel) {
     throw new Error("Funil nao encontrado.");
   }
+  await applyFunnelMove(user, inscricaoId, funnel, "funnel_changed");
+}
+
+/**
+ * Contrato assinado: o card sai da coluna Fechado e nasce no quadro de
+ * **Clientes** — acompanhamento e oferta de outros produtos.
+ *
+ * Não é troca de funil, é troca de ETAPA dentro do mesmo funil. Essa distinção
+ * é o ponto do desenho: mandar o lead para outro funil o faria renascer numa
+ * etapa `entry` e a venda sumiria dos ganhos de /campanhas, do ranking e do
+ * CAC. As etapas do quadro de Clientes são `won`, então tudo continua contando
+ * igual — muda só onde o card é desenhado.
+ *
+ * Devolve `null` sem fazer nada quando o funil do lead não tem o quadro de
+ * Clientes montado ou quando ele já está lá (2ª via do contrato, correção de
+ * venda): quem chama é a assinatura, que não pode depender disto.
+ */
+export async function moveLeadToClientBoard(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number
+): Promise<FunnelStage | null> {
+  await ensureCommercialLeadRow(inscricaoId);
+  const funnel = await getLeadFunnel(inscricaoId);
+  const target = findStageByBoard(funnel, "clientes");
+  if (!target) {
+    return null;
+  }
+
+  const current = await getPool().query<{ commercial_stage: string | null }>(
+    `SELECT commercial_stage FROM ${SCHEMA}.commercial_leads WHERE inscricao_id = $1`,
+    [inscricaoId]
+  );
+  const fromStage = current.rows[0]?.commercial_stage ?? null;
+  const fromBoard = funnel.stages.find((stage) => stage.key === fromStage)?.board;
+  if (fromBoard === "clientes") {
+    return null;
+  }
+
+  await getPool().query(
+    `
+      UPDATE ${SCHEMA}.commercial_leads
+      SET commercial_stage = $2,
+          commercial_stage_kind = $3,
+          position = NULL,
+          updated_at = NOW()
+      WHERE inscricao_id = $1
+    `,
+    [inscricaoId, target.key, target.kind]
+  );
+
+  await insertEvent(
+    inscricaoId,
+    "stage_changed",
+    user,
+    { motivo: "contrato_assinado" },
+    fromStage,
+    target.key
+  );
+
+  return target;
+}
+
+/** Troca de funil propriamente dita, sem gate de permissao — cada chamador aplica o seu. */
+async function applyFunnelMove(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  funnel: Funnel,
+  eventType: string,
+  extraPayload: Record<string, unknown> = {}
+): Promise<FunnelStage> {
+  await ensureCommercialLeadRow(inscricaoId);
   const entryStage = requireStageByKind(funnel, "entry");
 
   const current = await getPool().query<{ commercial_stage: string | null }>(
@@ -695,5 +945,76 @@ export async function moveLeadToFunnel(
     [inscricaoId, funnel.id, entryStage.key]
   );
 
-  await insertEvent(inscricaoId, "funnel_changed", user, { funnelId: funnel.id, funnelName: funnel.name }, fromStage, entryStage.key);
+  await insertEvent(
+    inscricaoId,
+    eventType,
+    user,
+    { funnelId: funnel.id, funnelName: funnel.name, ...extraPayload },
+    fromStage,
+    entryStage.key
+  );
+
+  return entryStage;
+}
+
+export interface TriageApprovalResult {
+  funnelId: number;
+  funnelName: string;
+  stageKey: string;
+}
+
+/**
+ * "Aprovar" um lead da triagem: tira ele do funil de triagem (lista fria
+ * importada, que nao aparece no CRM geral) e joga na etapa de entrada do funil
+ * de trabalho, mantendo o vendedor responsavel — na pratica o card sai da pasta
+ * Triagem e nasce no Kanban de quem aprovou.
+ *
+ * Diferente de moveLeadToFunnel, o vendedor comum PODE executar — mas so no
+ * lead que esta com ele, e so no sentido triagem → funil normal (mesma regra de
+ * dono usada em setCommercialStage).
+ */
+export async function approveTriageLead(
+  user: DashboardUser | null | undefined,
+  inscricaoId: number,
+  targetFunnelId?: number | null
+): Promise<TriageApprovalResult> {
+  await ensureCommercialLeadRow(inscricaoId);
+
+  const currentFunnel = await getLeadFunnel(inscricaoId);
+  if (!currentFunnel.isTriage) {
+    throw new Error("Este lead nao esta na triagem.");
+  }
+
+  const actor = productivityActorFromUser(user);
+  const item = (await listInscricoesByIds([inscricaoId]))[0];
+  const assignedEmail = normalizeEmail(item?.commercial?.assignedSellerEmail);
+  if (!isProductivityManager(user) && assignedEmail !== actor.email) {
+    throw new Error("Voce so pode aprovar leads da triagem que estao com voce.");
+  }
+
+  const targetFunnel =
+    targetFunnelId && Number.isFinite(targetFunnelId)
+      ? await getFunnelById(Math.trunc(targetFunnelId))
+      : await getDefaultFunnel();
+  if (!targetFunnel) {
+    throw new Error("Funil de destino nao encontrado.");
+  }
+  if (targetFunnel.isTriage) {
+    throw new Error("Escolha um funil de trabalho — a triagem nao pode ser o destino.");
+  }
+  // Vendedor comum so aprova para um funil que ele enxerga; senao o lead sumiria
+  // do quadro dele em vez de "entrar no Kanban".
+  if (!isProductivityManager(user)) {
+    const available = await listFunnelsForUser(user);
+    if (!available.some((funnel) => funnel.id === targetFunnel.id)) {
+      throw new Error("Voce nao tem acesso a este funil.");
+    }
+  }
+
+  const entryStage = await applyFunnelMove(user, inscricaoId, targetFunnel, "triage_approved", {
+    fromFunnelId: currentFunnel.id,
+    fromFunnelName: currentFunnel.name,
+  });
+
+  return { funnelId: targetFunnel.id, funnelName: targetFunnel.name, stageKey: entryStage.key };
 }

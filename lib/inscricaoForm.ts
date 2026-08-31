@@ -246,7 +246,7 @@ export function hasUpDayFormData(data: UpDayFormData): boolean {
 
   const treinamentoNome = data.treinamentoNome?.toLowerCase() ?? "";
   const origem = data.origem?.toLowerCase() ?? "";
-  return treinamentoNome.includes("up day") || origem === "landing-inscricao-agosto-2026";
+  return treinamentoNome.includes("up day") || origem.startsWith("landing-inscricao-");
 }
 
 export function extractPreviousFormFields(payload: Record<string, unknown>): FormFieldValue[] {

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { listTrainingsWithStats } from "@/lib/db";
 import { Calendar, Users, UserPlus, TrendingUp, ArrowRight, Trophy, UserCheck, Upload } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 
 export const dynamic = "force-dynamic";
@@ -54,9 +55,7 @@ export default async function TreinamentosPage() {
       {/* Summary Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-[#2DBDC2]/10">
-            <Calendar className="h-6 w-6 text-[#2DBDC2]" />
-          </div>
+          <IconTile icon={Calendar} tone="teal" size="lg" solid />
           <div>
             <p className="text-sm font-medium text-neutral-500">Treinamentos</p>
             <p className="text-2xl font-bold text-neutral-900">{trainings.length}</p>
@@ -64,9 +63,7 @@ export default async function TreinamentosPage() {
         </div>
         
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-50">
-            <Users className="h-6 w-6 text-emerald-500" />
-          </div>
+          <IconTile icon={Users} tone="brand" size="lg" solid />
           <div>
             <p className="text-sm font-medium text-neutral-500">Total Inscritos</p>
             <p className="text-2xl font-bold text-neutral-900">{totalInscritos.toLocaleString()}</p>
@@ -74,9 +71,7 @@ export default async function TreinamentosPage() {
         </div>
 
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan-50">
-            <UserCheck className="h-6 w-6 text-cyan-500" />
-          </div>
+          <IconTile icon={UserCheck} tone="teal" size="lg" solid />
           <div>
             <p className="text-sm font-medium text-neutral-500">Presentes</p>
             <p className="text-2xl font-bold text-cyan-600">{totalPresentes.toLocaleString()}</p>
@@ -84,9 +79,7 @@ export default async function TreinamentosPage() {
         </div>
         
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-50">
-            <UserPlus className="h-6 w-6 text-purple-500" />
-          </div>
+          <IconTile icon={UserPlus} tone="slate" size="lg" solid />
           <div>
             <p className="text-sm font-medium text-neutral-500">Recrutadores</p>
             <p className="text-2xl font-bold text-neutral-900">{totalRecrutadores.toLocaleString()}</p>
@@ -94,9 +87,7 @@ export default async function TreinamentosPage() {
         </div>
         
         <div className="flex items-center gap-4 rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm">
-          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50">
-            <TrendingUp className="h-6 w-6 text-blue-500" />
-          </div>
+          <IconTile icon={TrendingUp} tone="amber" size="lg" solid />
           <div>
             <p className="text-sm font-medium text-neutral-500">Últimas 24h</p>
             <p className="text-2xl font-bold text-neutral-900">{totalLast24h.toLocaleString()}</p>

@@ -34,10 +34,14 @@ const LANDING_TOPIC_LABELS: Record<string, string> = {
 const LANDING_VARIANT_LABELS: Record<string, string> = {
   "6-perguntas": "6 perguntas",
   "4-perguntas": "4 perguntas",
-  // "3-perguntas" virou "2-perguntas" (só nome e telefone) e hoje só redireciona,
-  // mas segue aqui porque anúncios antigos guardam a URL antiga no criativo.
   "3-perguntas": "3 perguntas",
-  "2-perguntas": "2 perguntas",
+};
+
+// Anúncios antigos ainda podem guardar a URL /2-perguntas no criativo, mas
+// essa rota hoje redireciona para o formulário de 3 perguntas. Normalizar aqui
+// evita que a mesma landing page apareça com dois títulos no Dashboard.
+const LANDING_VARIANT_REDIRECTS: Record<string, string> = {
+  "2-perguntas": "3-perguntas",
 };
 
 export const NATIVE_FORM_GROUP_KEY = "native_form";
@@ -86,11 +90,14 @@ export function classifyAdDestination(landingUrl: string | null): AdDestinationI
   if (segments[0] === "forms" && segments[1]) {
     const topic = segments[1];
     const variant = segments[2] ?? null;
+    const displayVariant = variant ? LANDING_VARIANT_REDIRECTS[variant] ?? variant : null;
     const topicLabel = LANDING_TOPIC_LABELS[topic] ?? prettifySlug(topic);
-    const variantLabel = variant ? (LANDING_VARIANT_LABELS[variant] ?? prettifySlug(variant)) : null;
+    const variantLabel = displayVariant
+      ? (LANDING_VARIANT_LABELS[displayVariant] ?? prettifySlug(displayVariant))
+      : null;
     return {
       kind: "landing_page",
-      key: `lp:${topic}${variant ? `/${variant}` : ""}`,
+      key: `lp:${topic}${displayVariant ? `/${displayVariant}` : ""}`,
       label: `LP ${topicLabel}`,
       detail: variantLabel,
       url: pageUrl,

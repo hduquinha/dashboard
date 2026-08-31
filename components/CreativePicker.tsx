@@ -84,7 +84,7 @@ export default function CreativePicker({
         {selected ? (
           <CreativeThumb creative={selected.creative} onOpen={() => onOpenCreative(selected.creative)} />
         ) : (
-          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded bg-[rgb(var(--slate-3))]">
+          <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[rgb(var(--slate-2))] to-[rgb(var(--slate-4))] ring-1 ring-inset ring-[rgb(var(--slate-6))]">
             <LayoutGrid className="h-4 w-4 text-[rgb(var(--slate-9))]" />
           </span>
         )}
@@ -126,7 +126,7 @@ export default function CreativePicker({
               !selected ? "bg-[rgb(var(--blue-2))] text-[rgb(var(--blue-11))]" : "text-[rgb(var(--slate-12))]"
             }`}
           >
-            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded bg-[rgb(var(--slate-3))]">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-[rgb(var(--slate-2))] to-[rgb(var(--slate-4))] ring-1 ring-inset ring-[rgb(var(--slate-6))]">
               <LayoutGrid className="h-4 w-4 text-[rgb(var(--slate-9))]" />
             </span>
             <span className="min-w-0 flex-1 truncate">

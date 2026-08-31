@@ -12,6 +12,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import type {
   CommercialDashboardStats,
   CommercialStageDashboardStat,
@@ -92,12 +93,7 @@ function MetricCard({
   icon: LucideIcon;
   tone: "blue" | "amber" | "emerald" | "rose";
 }) {
-  const toneClass = {
-    blue: "bg-blue-50 text-blue-700 border-blue-100",
-    amber: "bg-amber-50 text-amber-700 border-amber-100",
-    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
-    rose: "bg-rose-50 text-rose-700 border-rose-100",
-  }[tone];
+  const tileTone = { blue: "brand", amber: "amber", emerald: "teal", rose: "ruby" }[tone] as IconTileTone;
 
   return (
     <Link
@@ -105,9 +101,7 @@ function MetricCard({
       className="group rounded-lg border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] p-4 shadow-[0_1px_2px_rgba(28,32,36,0.04)] transition hover:border-[rgb(var(--border-strong))]"
     >
       <div className="flex items-start justify-between gap-3">
-        <div className={`flex size-9 flex-shrink-0 items-center justify-center rounded-lg border ${toneClass}`}>
-          <Icon className="size-4" />
-        </div>
+        <IconTile icon={Icon} tone={tileTone} size="md" />
         <ArrowRight className="size-4 text-[rgb(var(--slate-9))] transition group-hover:translate-x-0.5 group-hover:text-[rgb(var(--slate-12))]" />
       </div>
       <p className="mt-4 text-xs font-medium text-[rgb(var(--slate-10))]">{label}</p>
@@ -124,24 +118,28 @@ export default function CommercialCommandCenter({ stats }: CommercialCommandCent
       value: stats.unassignedLeads,
       href: "/crm?unassignedOnly=1",
       icon: UserPlus,
+      tone: "brand" as IconTileTone,
     },
     {
       label: "Parados ha 48h",
       value: stats.staleLeads,
       href: "/crm",
       icon: Clock3,
+      tone: "amber" as IconTileTone,
     },
     {
       label: "Em fechamento",
       value: stats.closingLeads,
       href: "/crm?commercialStage=fechamento",
       icon: Target,
+      tone: "teal" as IconTileTone,
     },
     {
       label: "Leads quentes",
       value: stats.hotLeads,
       href: "/crm?stars=5",
       icon: Flame,
+      tone: "ruby" as IconTileTone,
     },
   ];
 
@@ -239,9 +237,7 @@ export default function CommercialCommandCenter({ stats }: CommercialCommandCent
                   className="group flex min-h-12 items-center justify-between gap-3 rounded-lg border border-[rgb(var(--border-weak))] px-3 py-2 transition hover:bg-[rgb(var(--slate-2))]"
                 >
                   <span className="flex min-w-0 items-center gap-2">
-                    <span className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-[rgb(var(--slate-2))] text-[rgb(var(--slate-11))]">
-                      <ActionIcon className="size-4" />
-                    </span>
+                    <IconTile icon={ActionIcon} tone={item.tone} size="sm" />
                     <span className="truncate text-sm font-semibold text-[rgb(var(--slate-12))]">{item.label}</span>
                   </span>
                   <span className="flex items-center gap-2">

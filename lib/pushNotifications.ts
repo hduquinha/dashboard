@@ -2,7 +2,7 @@ import webpush, { type PushSubscription as WebPushSubscription } from "web-push"
 import { createAppNotifications, type NewAppNotification } from "@/lib/appNotifications";
 import { getPool, listInscricoesByIds } from "@/lib/db";
 import { describeLeadSource, isMetaOuGoogleAdsOrigem } from "@/lib/leadFields";
-import { hasPermission } from "@/lib/permissions";
+import { canReceiveNewLeadNotifications } from "@/lib/leadNotificationAudience";
 import { parsePayload } from "@/lib/parsePayload";
 import { isProductivityManager } from "@/lib/productivity";
 import { listTeamMembers } from "@/lib/teamAuth";
@@ -329,13 +329,13 @@ async function sendPushMessages(
   return result;
 }
 
-/** E-mails ativos que devem receber avisos de lead novo / não distribuído. */
+/** E-mails ativos que podem abrir a Chegada e efetivamente distribuir leads. */
 async function listDistributionRecipientEmails(): Promise<string[]> {
   const members = await listTeamMembers({ activeOnly: true });
   return [
     ...new Set(
       members
-        .filter((member) => hasPermission(member, "view.distribution"))
+        .filter(canReceiveNewLeadNotifications)
         .map((member) => member.email.trim().toLowerCase())
         .filter(Boolean)
     ),
@@ -343,10 +343,10 @@ async function listDistributionRecipientEmails(): Promise<string[]> {
 }
 
 /**
- * Despacha web push de leads novos para todos os aparelhos inscritos. Chamado
- * pelo server.js (loopback em /api/internal/push-dispatch) no mesmo padrão do
- * merge sweep. Cursor em push_state.last_notified_inscricao_id: na primeira
- * execução só grava a baseline (sem rajada de notificações antigas).
+ * Despacha web push de leads novos apenas para os aparelhos de quem pode
+ * distribui-los. Chamado pelo server.js (loopback em /api/internal/push-dispatch)
+ * no mesmo padrão do merge sweep. Cursor em push_state.last_notified_inscricao_id:
+ * na primeira execução só grava a baseline (sem rajada de notificações antigas).
  */
 export async function dispatchNewLeadPushes(): Promise<DispatchResult> {
   await ensurePushSchema();
@@ -458,14 +458,22 @@ export async function dispatchNewLeadPushes(): Promise<DispatchResult> {
         ]
       : individualMessages;
 
+  const recipientEmails = await listDistributionRecipientEmails();
+
   try {
-    await createAppNotifications(await listDistributionRecipientEmails(), feedItems);
+    await createAppNotifications(recipientEmails, feedItems);
   } catch (error) {
     console.error("[push] falha ao gravar notificacoes de lead novo no feed do site:", error);
   }
 
+  if (recipientEmails.length === 0) return result;
+
+  // O mesmo aparelho continua inscrito para avisos pessoais (lead atribuido,
+  // tarefa etc.). O filtro acontece somente neste despacho de chegada.
   const subs = await pool.query<PushTarget>(
-    `SELECT id, endpoint, p256dh, auth FROM ${SCHEMA}.push_subscriptions`
+    `SELECT id, endpoint, p256dh, auth FROM ${SCHEMA}.push_subscriptions
+     WHERE lower(user_email) = ANY($1::text[])`,
+    [recipientEmails]
   );
   result.subscriptions = subs.rows.length;
   if (subs.rows.length === 0) return result;
@@ -480,6 +488,56 @@ export async function dispatchNewLeadPushes(): Promise<DispatchResult> {
 interface SellerPushResult {
   subscriptions: number;
   sent: number;
+}
+
+/**
+ * Aviso de lote da Triagem de Leads: o master repassa dezenas de contatos de
+ * uma vez, entao vai UM aviso com o total em vez de um por lead (que viraria
+ * uma rajada de push no celular do vendedor — mesmo problema ja corrigido na
+ * central de notificacoes). Leva pro Kanban ja na pasta da triagem.
+ */
+export async function notifySellerTriageBatch(
+  sellerEmail: string,
+  total: number
+): Promise<SellerPushResult> {
+  await ensurePushSchema();
+  const pool = getPool();
+  const result: SellerPushResult = { subscriptions: 0, sent: 0 };
+
+  const email = sellerEmail.trim().toLowerCase();
+  if (!email || total < 1) return result;
+
+  const title = "Leads de triagem para conferir";
+  const body =
+    total === 1
+      ? "1 contato da triagem foi repassado para voce. Confira e aprove os que prestam."
+      : `${total} contatos da triagem foram repassados para voce. Confira e aprove os que prestam.`;
+  const url = "/produtividade?quadro=triagem";
+
+  try {
+    await createAppNotifications(
+      [email],
+      [{ kind: "lead_assigned", title, body, url, inscricaoId: null, dedupeKey: null }]
+    );
+  } catch (error) {
+    console.error("[push] falha ao gravar aviso de lote da triagem no feed do site:", error);
+  }
+
+  const subs = await pool.query<PushTarget>(
+    `SELECT id, endpoint, p256dh, auth FROM ${SCHEMA}.push_subscriptions WHERE lower(user_email) = $1`,
+    [email]
+  );
+  result.subscriptions = subs.rows.length;
+  if (subs.rows.length === 0) return result;
+
+  const sendResult = await sendPushMessages(
+    subs.rows,
+    [{ title, body, tag: "triagem-lote", url }],
+    { urgency: "normal", context: "lote de triagem" }
+  );
+  result.sent = sendResult.sent;
+
+  return result;
 }
 
 /**
@@ -571,6 +629,35 @@ async function getManagerAudience(): Promise<ManagerAudience> {
 }
 
 /**
+ * Push do lembrete de tarefa com hora marcada. Diferente dos outros despachos,
+ * quem decide o conteudo e quem chama (lib/taskAutomations.ts) — aqui so
+ * resolvemos os aparelhos daqueles emails e entregamos.
+ *
+ * Urgencia alta de proposito: e um compromisso agendado (ligacao de retorno,
+ * consultoria), o aviso perde o sentido se chegar meia hora depois.
+ */
+export async function sendTaskReminderPush(
+  emails: readonly string[],
+  message: { title: string; body: string; url: string; tag: string }
+): Promise<number> {
+  const normalized = [...new Set(emails.map((email) => email.trim().toLowerCase()).filter(Boolean))];
+  if (normalized.length === 0) return 0;
+
+  const { rows } = await getPool().query<PushTarget>(
+    `SELECT id, endpoint, p256dh, auth FROM ${SCHEMA}.push_subscriptions
+     WHERE lower(user_email) = ANY($1::text[])`,
+    [normalized]
+  );
+  if (rows.length === 0) return 0;
+
+  const result = await sendPushMessages(rows, [message], {
+    urgency: "high",
+    context: "lembrete de tarefa",
+  });
+  return result.sent;
+}
+
+/**
  * Push do alerta de lead parado para os proprios vendedores donos dos leads.
  * Cada um recebe so o que e dele, agrupado quando sao muitos.
  */
@@ -623,6 +710,15 @@ async function dispatchSellerStaleAlerts(
  * - `sem_atividade`: o vendedor ate mexeu, mas a ultima atividade ja passou de
  *   STALE_LEAD_IDLE_HOURS (mesmo corte do card "Parados ha 48h" da home).
  *
+ * Atividade = o MAIS RECENTE entre `commercial_leads.updated_at` e o ultimo
+ * evento do lead em `commercial_events`. Ate 2026-08-13 so olhava o primeiro,
+ * entao nota, tarefa, contato registrado e edicao de dados nao contavam e o
+ * vendedor era cobrado de lead que estava trabalhando naquele dia.
+ *
+ * O gestor NAO recebe um aviso por lead: recebe um resumo por ciclo. Sem isso o
+ * fan-out multiplicava cada parada pelo numero de gestores — 619 paradas viraram
+ * 3.626 notificacoes, e tres pessoas nunca leram nenhuma.
+ *
  * Nao redistribui nada sozinho — so da visibilidade pro master decidir.
  *
  * O controle de repeticao usa `last_activity_at` e e feito DENTRO da mesma
@@ -647,39 +743,65 @@ export async function dispatchStaleLeadAlerts(): Promise<StaleLeadAlertResult> {
     horas_parado: number | string;
   }>(
     `
-      WITH candidatos AS (
+      WITH base AS (
         SELECT
           cl.inscricao_id,
           cl.assigned_seller_name,
           cl.assigned_seller_email,
           cl.assigned_at,
-          COALESCE(cl.updated_at, cl.assigned_at) AS last_activity_at,
-          CASE
-            WHEN cl.updated_at IS NULL OR cl.updated_at = cl.assigned_at THEN 'sem_primeiro_contato'
-            ELSE 'sem_atividade'
-          END AS reason,
-          ROUND(EXTRACT(EPOCH FROM (NOW() - COALESCE(cl.updated_at, cl.assigned_at))) / 3600)::int AS horas_parado
+          cl.updated_at,
+          -- "Mexer no lead" é muito mais do que escrever em commercial_leads.
+          -- Nota, tarefa, contato registrado e edição de dados só geram linha
+          -- em commercial_events — e antes disso o vendedor era cobrado de
+          -- lead que ele estava trabalhando naquele dia. O histórico é a
+          -- fonte da verdade da atividade.
+          (SELECT MAX(e.created_at)
+             FROM ${SCHEMA}.commercial_events e
+            WHERE e.inscricao_id = cl.inscricao_id) AS last_event_at
         FROM ${SCHEMA}.commercial_leads cl
-        LEFT JOIN ${SCHEMA}.stale_lead_alerts sla ON sla.inscricao_id = cl.inscricao_id
         WHERE cl.assigned_seller_id IS NOT NULL
           AND cl.assigned_at IS NOT NULL
           AND cl.commercial_stage_kind NOT IN ('won', 'lost')
-          AND (
+      ),
+      atividade AS (
+        SELECT
+          b.*,
+          GREATEST(
+            b.assigned_at,
+            COALESCE(b.updated_at, b.assigned_at),
+            COALESCE(b.last_event_at, b.assigned_at)
+          ) AS last_activity_at
+        FROM base b
+      ),
+      candidatos AS (
+        SELECT
+          a.inscricao_id,
+          a.assigned_seller_name,
+          a.assigned_seller_email,
+          a.assigned_at,
+          a.last_activity_at,
+          CASE
+            WHEN a.last_activity_at = a.assigned_at THEN 'sem_primeiro_contato'
+            ELSE 'sem_atividade'
+          END AS reason,
+          ROUND(EXTRACT(EPOCH FROM (NOW() - a.last_activity_at)) / 3600)::int AS horas_parado
+        FROM atividade a
+        LEFT JOIN ${SCHEMA}.stale_lead_alerts sla ON sla.inscricao_id = a.inscricao_id
+        WHERE (
             (
-              (cl.updated_at IS NULL OR cl.updated_at = cl.assigned_at)
-              AND cl.assigned_at <= NOW() - ($1 || ' minutes')::interval
+              a.last_activity_at = a.assigned_at
+              AND a.assigned_at <= NOW() - ($1 || ' minutes')::interval
             )
             OR (
-              cl.updated_at IS NOT NULL
-              AND cl.updated_at <> cl.assigned_at
-              AND cl.updated_at <= NOW() - ($2 || ' hours')::interval
+              a.last_activity_at <> a.assigned_at
+              AND a.last_activity_at <= NOW() - ($2 || ' hours')::interval
             )
           )
           AND (
             sla.inscricao_id IS NULL
-            OR sla.last_activity_at IS DISTINCT FROM COALESCE(cl.updated_at, cl.assigned_at)
+            OR sla.last_activity_at IS DISTINCT FROM a.last_activity_at
           )
-        ORDER BY COALESCE(cl.updated_at, cl.assigned_at) ASC
+        ORDER BY a.last_activity_at ASC
         LIMIT $3
       ),
       marcados AS (
@@ -708,44 +830,21 @@ export async function dispatchStaleLeadAlerts(): Promise<StaleLeadAlertResult> {
   const items = await listInscricoesByIds(rows.map((row) => row.inscricao_id));
   const itemsById = new Map(items.map((item) => [item.id, item]));
 
-  const feedItems: NewAppNotification[] = [];
-  const individualMessages: PushMessage[] = [];
   /**
-   * Avisos na voz do dono do lead. Vendedor que tambem e gestor fica de fora
-   * daqui — ja recebe a versao de gestor e receberia o mesmo lead duas vezes.
+   * Avisos na voz do dono do lead — um por lead, porque e ele quem age.
+   * Vendedor que tambem e gestor fica de fora daqui: ja recebe o resumo.
    */
   const sellerAlerts = new Map<string, { feed: NewAppNotification[]; messages: PushMessage[] }>();
+  /** Quantos leads pararam por vendedor, para o resumo do gestor. */
+  const porVendedor = new Map<string, number>();
 
   for (const row of rows) {
     const nome = itemsById.get(row.inscricao_id)?.nome?.trim() || "Lead";
     const sellerName = row.assigned_seller_name?.trim() || "o vendedor";
     const horas = Number(row.horas_parado) || 0;
-    const title =
-      row.reason === "sem_primeiro_contato"
-        ? `Lead sem primeiro contato ha mais de ${thresholdMinutes} min`
-        : `Lead parado ha ${horas}h`;
-    const body =
-      row.reason === "sem_primeiro_contato"
-        ? `${nome} foi atribuido a ${sellerName} e ainda nao teve nenhuma atualizacao.`
-        : `${nome} esta com ${sellerName} e nao tem atividade ha ${horas}h.`;
     const dedupeKey = `stale_lead:${row.inscricao_id}:${row.reason}:${horas}`;
 
-    individualMessages.push({
-      title,
-      body,
-      tag: `stale-lead-${row.inscricao_id}`,
-      url: "/crm",
-    });
-    feedItems.push({
-      kind: "stale_lead",
-      title,
-      body,
-      url: "/crm",
-      inscricaoId: row.inscricao_id,
-      // A marcacao em stale_lead_alerts ja garante um alerta por parada; a
-      // chave aqui protege contra reprocesso do mesmo ciclo.
-      dedupeKey,
-    });
+    porVendedor.set(sellerName, (porVendedor.get(sellerName) ?? 0) + 1);
 
     const sellerEmail = row.assigned_seller_email?.trim().toLowerCase() ?? "";
     if (!sellerEmail || audience.emails.includes(sellerEmail)) continue;
@@ -777,9 +876,41 @@ export async function dispatchStaleLeadAlerts(): Promise<StaleLeadAlertResult> {
     sellerAlerts.set(sellerEmail, bundle);
   }
 
+  /**
+   * Resumo do gestor: UMA notificacao por ciclo com o total, em vez de uma por
+   * lead. O dedupe por dia+total impede que o mesmo panorama volte a cada
+   * ciclo de 5 minutos — so avisa de novo quando o numero muda.
+   */
+  const totalParados = rows.length;
+  const detalhe = [...porVendedor.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([nome, quantos]) => `${nome} (${quantos})`)
+    .join(", ");
+  const hoje = new Date().toISOString().slice(0, 10);
+  const resumoTitle =
+    totalParados === 1 ? "1 lead parado na equipe" : `${totalParados} leads parados na equipe`;
+  const resumoBody = detalhe
+    ? `Sem atividade ha mais de ${idleHours}h: ${detalhe}.`
+    : `Sem atividade ha mais de ${idleHours}h.`;
+  const managerDigest: NewAppNotification = {
+    kind: "stale_lead",
+    title: resumoTitle,
+    body: resumoBody,
+    url: "/crm",
+    inscricaoId: null,
+    dedupeKey: `stale_digest:${hoje}:${totalParados}`,
+  };
+  const managerPush: PushMessage = {
+    title: resumoTitle,
+    body: resumoBody,
+    tag: "stale-leads-equipe",
+    url: "/crm",
+  };
+
   try {
     if (audience.emails.length > 0) {
-      await createAppNotifications(audience.emails, feedItems);
+      await createAppNotifications(audience.emails, [managerDigest]);
     }
     for (const [sellerEmail, bundle] of sellerAlerts) {
       await createAppNotifications([sellerEmail], bundle.feed);
@@ -792,19 +923,9 @@ export async function dispatchStaleLeadAlerts(): Promise<StaleLeadAlertResult> {
 
   if (audience.subscriptions.length === 0) return result;
 
-  const messages: PushMessage[] =
-    rows.length > MAX_INDIVIDUAL_NOTIFICATIONS
-      ? [
-          {
-            title: `${rows.length} leads parados`,
-            body: "Leads atribuidos sem andamento. Abra o CRM para redistribuir ou cobrar.",
-            tag: "stale-leads-batch",
-            url: "/crm",
-          },
-        ]
-      : individualMessages;
-
-  const sendResult = await sendPushMessages(audience.subscriptions, messages, {
+  // Push do gestor tambem e um so: mesmo resumo do feed. Antes vinha um push
+  // por lead ate MAX_INDIVIDUAL_NOTIFICATIONS, o que virava rajada no celular.
+  const sendResult = await sendPushMessages(audience.subscriptions, [managerPush], {
     urgency: "high",
     context: "lead parado",
   });

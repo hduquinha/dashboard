@@ -82,6 +82,12 @@ describe("classifyAdDestination", () => {
     expect(destination.detail).toBe("4 perguntas");
   });
 
+  test("URL antiga de 2 perguntas aparece como a variante atual de 3 perguntas", () => {
+    const destination = classifyAdDestination("https://www.escolavozup.com/forms/vendas/2-perguntas");
+    expect(destination.key).toBe("lp:vendas/3-perguntas");
+    expect(destination.detail).toBe("3 perguntas");
+  });
+
   test("sem URL o destino fica explicitamente não identificado (nunca vira nativo por dedução)", () => {
     expect(classifyAdDestination(null).kind).toBe("unknown");
     expect(classifyAdDestination("   ").kind).toBe("unknown");

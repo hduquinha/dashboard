@@ -6,9 +6,12 @@ import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { matchesPurposeFilter, parsePurposeFilter } from "@/lib/campaignObjectives";
 import { listRecruitersWithDbNames, listTrainingFilterOptions } from "@/lib/db";
 import { getLatestGoogleAdsSyncRuns } from "@/lib/googleAds";
+import { getGoogleAdsReport, type GoogleAdsReport } from "@/lib/googleAdsReport";
+import { getReportSegments, type ReportSegmentsData } from "@/lib/reportSegments";
+import type { LeadLocationOption } from "@/lib/leadLocation";
 import { getInstagramProfileSeries, type InstagramProfileSeries } from "@/lib/instagramProfiles";
-import { isReportMonth, monthOfIsoDate, type MonthlyReport } from "@/lib/monthlyReport";
-import { loadMonthlyReport } from "@/lib/monthlyReportData";
+import type { MonthlyReport } from "@/lib/monthlyReport";
+import { loadCampaignReport } from "@/lib/monthlyReportData";
 import { hasPermission } from "@/lib/permissions";
 import { ttlCache } from "@/lib/serverCache";
 import { getUiPreferences, readPositiveNumber, readString } from "@/lib/uiPreferences";
@@ -16,6 +19,7 @@ import {
   computeKpiTotals,
   buildHierarchyTree,
   getAdLeadDetails,
+  getAdLeadLocations,
   getAdsHierarchy,
   getDailyAdRows,
   getDailySeries,
@@ -26,7 +30,6 @@ import {
   getMetaReconciliation,
   getPeriodReach,
   getRecentAdLeads,
-  getReportMonths,
   getSellerAdPerformance,
   shiftIsoDate,
 } from "@/lib/metaAds";
@@ -57,6 +60,12 @@ function pick(value: string | string[] | undefined): string {
   return (Array.isArray(value) ? value[0] : value) ?? "";
 }
 
+/** IDs vêm da URL para o link do relatório poder ser salvo/compartilhado.
+ * Mantemos uma lista curta e sem duplicatas antes de ela chegar às consultas. */
+function pickIdList(value: string | string[] | undefined): string[] {
+  return [...new Set(pick(value).split(",").map((item) => item.trim()).filter((item) => item.length > 0 && item.length <= 200))].slice(0, 100);
+}
+
 function isStatusFilter(value: string): value is MetaAdsStatusFilter {
   return value === "active" || value === "inactive" || value === "all";
 }
@@ -75,7 +84,8 @@ function isCampanhasTab(value: string): value is CampanhasTab {
     value === "anuncios" ||
     value === "leads" ||
     value === "rendimento" ||
-    value === "vendedores"
+    value === "vendedores" ||
+    value === "google"
   );
 }
 
@@ -128,6 +138,9 @@ export default async function CampanhasPage({ searchParams }: PageProps) {
   const tab: CampanhasTab = isCampanhasTab(tabRaw) ? tabRaw : "inteligencia";
   const selectedCampaignId = pick(resolved.campanha) || null;
   const selectedAdsetId = pick(resolved.conjunto) || null;
+  // Recorte por localização do lead. Vale só para as abas em que cada linha é
+  // uma pessoa: gasto e alcance não têm quebra por cidade na API da Meta.
+  const location = pick(resolved.local) || null;
 
   const purposeFilter = parsePurposeFilter(pick(resolved.tipo));
 
@@ -189,41 +202,73 @@ export default async function CampanhasPage({ searchParams }: PageProps) {
   let dailyRows: DailyAdRow[] = [];
   let adLeads: AdLeadDetail[] = [];
   let instagramProfiles: InstagramProfileSeries[] = [];
+  let locationOptions: LeadLocationOption[] = [];
   let monthlyReport: MonthlyReport | null = null;
-  let reportMonths: string[] = [];
+  let googleReport: GoogleAdsReport | null = null;
+  let reportSegments: ReportSegmentsData | null = null;
+  let reportCampaigns: Array<{ campaignId: string; campaignName: string }> = [];
+  let reportIncludedCampaignIds: string[] = [];
   let reportTicket: number | null = null;
   let reportSaleStage: string | null = null;
   if (tab === "relatorio") {
-    // O relatório é do MÊS, não do período do topo: ele tem seletor próprio e
-    // ignora status/busca de propósito (ver lib/monthlyReportData.ts).
-    const monthParam = pick(resolved.mes);
-    const [months, prefs] = await Promise.all([
-      getReportMonths(),
-      session ? getUiPreferences(session.user.email, "campanhas") : Promise.resolve({}),
-    ]);
-    reportMonths = months;
+    const prefs = await (session ? getUiPreferences(session.user.email, "campanhas") : Promise.resolve({}));
     reportTicket = readPositiveNumber(prefs, "ticketMedio");
     reportSaleStage = readString(prefs, "saleStageKey");
-    const month = isReportMonth(monthParam) ? monthParam : (months[0] ?? monthOfIsoDate(getMetaAdsToday()));
-    monthlyReport = await loadMonthlyReport({
-      month,
+    // A seleção mora só no relatório: os demais painéis continuam mostrando
+    // a conta toda. Se já havia campanha/conjunto escolhido em outra aba,
+    // esse escopo também é respeitado aqui.
+    const chosenCampaignIds = selectedCampaignId ? [selectedCampaignId] : pickIdList(resolved.relatorioCampanhas);
+    const candidateGroups = hierarchy.filter(
+      (group) =>
+        (!selectedCampaignId || group.campaignId === selectedCampaignId) &&
+        (!selectedAdsetId || group.adsets.some((adset) => adset.adsetId === selectedAdsetId))
+    );
+    reportCampaigns = candidateGroups.map((group) => ({ campaignId: group.campaignId, campaignName: group.campaignName }));
+    const candidateIds = new Set(reportCampaigns.map((campaign) => campaign.campaignId));
+    reportIncludedCampaignIds = chosenCampaignIds.filter((campaignId) => candidateIds.has(campaignId));
+    const reportScopeCampaignIds = selectedCampaignId ? [selectedCampaignId] : reportIncludedCampaignIds;
+    // Funil por origem: mesma janela do relatório, consulta própria (o
+    // relatório do Meta é por anúncio; este é por canal de captação). Google
+    // entra junto — o documento impresso mostra os dois lado a lado, e sem
+    // isto o card "Meta × Google" só apareceria em quem já tinha clicado na
+    // aba Google Ads antes de abrir o Relatório.
+    [reportSegments, googleReport] = await Promise.all([
+      getReportSegments(from, to),
+      getGoogleAdsReport(from, to).catch(() => null),
+    ]);
+    monthlyReport = await loadCampaignReport({
+      filters,
+      purposeFilter,
+      campaignIds: reportScopeCampaignIds,
+      adsetId: selectedAdsetId,
       ticketMedio: reportTicket,
       saleStageKey: reportSaleStage,
       // Faturamento é dado do Financeiro: só entra para quem tem acesso a ele.
       includeFinance: !session || hasPermission(session.user, "view.finance"),
     });
   } else if (tab === "leads") {
-    recentLeads = await getRecentAdLeads(filters, { ...scopeArg, limit: 80 });
+    [recentLeads, locationOptions] = await Promise.all([
+      getRecentAdLeads(filters, { ...scopeArg, limit: 80, location }),
+      getAdLeadLocations(filters, hasScope ? scopedAdIds : undefined),
+    ]);
   } else if (tab === "vendedores") {
     sellerPerformance = await getSellerAdPerformance(filters, scopeArg);
   } else if (tab === "diario") {
     dailyRows = await getDailyAdRows(filters, scopedAdIds);
   } else if (tab === "alcance") {
     instagramProfiles = await getInstagramProfileSeries(from, to);
+  } else if (tab === "google") {
+    // Google Ads vive fora do universo da Meta: nao passa por `filters` porque
+    // status/busca/proposito sao conceitos da hierarquia da Meta. So o periodo
+    // e compartilhado, para as duas telas falarem da mesma janela.
+    googleReport = await getGoogleAdsReport(from, to);
   } else if (tab === "horarios" || tab === "grupos") {
     // Uma pessoa por linha; a aba Horários agrega por hora e a Grupos agrega
     // por destino a partir do mesmo conjunto, sem consulta separada.
-    adLeads = await getAdLeadDetails(filters, scopedAdIds);
+    [adLeads, locationOptions] = await Promise.all([
+      getAdLeadDetails(filters, scopedAdIds, location),
+      getAdLeadLocations(filters, scopedAdIds),
+    ]);
   }
 
   return (
@@ -249,13 +294,18 @@ export default async function CampanhasPage({ searchParams }: PageProps) {
       sellerPerformance={sellerPerformance}
       dailyRows={dailyRows}
       adLeads={adLeads}
+      location={location}
+      locationOptions={locationOptions}
       instagramProfiles={instagramProfiles}
       monthlyReport={monthlyReport}
-      reportMonths={reportMonths}
+      reportCampaigns={reportCampaigns}
+      reportIncludedCampaignIds={reportIncludedCampaignIds}
       reportTicket={reportTicket}
       reportSaleStage={reportSaleStage}
       purposeFilter={purposeFilter}
       purposeCounts={purposeCounts}
+      googleReport={googleReport}
+      reportSegments={reportSegments}
       trainingOptions={trainingOptions}
       recruiterOptions={recruiterOptions}
     />

@@ -67,12 +67,16 @@ export async function PATCH(request: Request, context: RouteContext) {
     password?: string;
     priorityLevel?: number;
     permissions?: PermissionKey[];
+    isSeller?: boolean;
+    isTeacher?: boolean;
     institutoUpOnly?: boolean;
   } = {};
 
   if (typeof body?.name === "string" && body.name.trim()) update.name = body.name.trim();
   if (typeof body?.role === "string") update.role = normalizeTeamRole(body.role);
   if (typeof body?.active === "boolean") update.active = body.active;
+  if (typeof body?.isSeller === "boolean") update.isSeller = body.isSeller;
+  if (typeof body?.isTeacher === "boolean") update.isTeacher = body.isTeacher;
   if (typeof body?.institutoUpOnly === "boolean") update.institutoUpOnly = body.institutoUpOnly;
   if (typeof body?.priorityLevel === "number" && Number.isFinite(body.priorityLevel)) {
     update.priorityLevel = Math.max(0, Math.min(100, Math.round(body.priorityLevel)));

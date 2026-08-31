@@ -52,7 +52,7 @@ import type {
 
 const SCHEMA_NAME = "inscricoes";
 
-function payloadTextExpression(alias: string, keys: string[], fallback = "''"): string {
+export function payloadTextExpression(alias: string, keys: string[], fallback = "''"): string {
   const selectors = keys.flatMap((key) => [
     `NULLIF(TRIM(${alias}.payload->>'${key}'), '')`,
     `NULLIF(TRIM(${alias}.payload->'dados_extras'->>'${key}'), '')`,
@@ -117,6 +117,12 @@ export const UPDAY_PAYLOAD_CONDITION = `(
   OR (
     ${payloadTextExpression("i", ["tamanho_camiseta", "tamanhoCamiseta", "multa_ciente", "multaCiente", "cancelamento_ciente", "cancelamentoCiente"])} <> ''
     AND ${UPDAY_TRAINING_DATE_EXPRESSION} <> ''
+    -- Cartilha regra 4: data ISO e EXCLUSIVA do Encontro Online. Sem esta linha,
+    -- uma inscricao do Encontro Online que herdou campos do UP Day (camiseta,
+    -- multa, cancelamento) de um cadastro antigo da mesma pessoa marcava a turma
+    -- inteira como UP Day -- e o BOOL_OR das telas propagava isso para todos os
+    -- inscritos daquela data.
+    AND ${UPDAY_TRAINING_DATE_EXPRESSION} !~ '^\\d{4}-\\d{2}-\\d{2}'
   )
 )`;
 // Exportado para as queries da área VozUP (lib/vozupFolders.ts) — pressupõe alias "i".
@@ -265,6 +271,12 @@ async function ensureCommercialSchemaForReads(): Promise<void> {
     ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS funnel_id INTEGER;
     ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS commercial_stage_kind TEXT NOT NULL DEFAULT 'entry';
     ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS contact_attempts SMALLINT NOT NULL DEFAULT 0 CHECK (contact_attempts BETWEEN 0 AND 10);
+    -- Repique: quantas vezes o lead ja caiu na coluna de perda (Desinteresse).
+    -- Denormalizado porque o Kanban le isso em toda linha do quadro; a fonte da
+    -- verdade continua sendo commercial_events (ver backfill em lib/commercial.ts).
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS repique_count INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS last_objection TEXT;
+    ALTER TABLE ${DASHBOARD_SCHEMA_NAME}.commercial_leads ADD COLUMN IF NOT EXISTS last_objection_at TIMESTAMP WITH TIME ZONE;
 
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage);
     CREATE INDEX IF NOT EXISTS idx_commercial_leads_stage_position ON ${DASHBOARD_SCHEMA_NAME}.commercial_leads(commercial_stage, position);
@@ -465,14 +477,46 @@ export const LAST_INTERACTION_EXPRESSION = `GREATEST(
   END
 )`;
 
+// Ordem alfabética de verdade para nomes brasileiros: o banco usa collation
+// en_US.utf8, onde "Álvaro"/"Ângela" caem DEPOIS de "Zeca". Normalizar acentos
+// (e o caixa) antes de ordenar coloca cada nome no lugar que a pessoa espera.
+// NULLIF no fim manda quem não tem o campo para o final da lista (NULLS LAST).
+const ACCENTED_LETTERS = "áàâãäéèêëíìîïóòôõöúùûüýçñÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÝÇÑ";
+const PLAIN_LETTERS = "aaaaaeeeeiiiiooooouuuuycnaaaaaeeeeiiiiooooouuuuycn";
+
+function alphabeticalSortExpression(expression: string): string {
+  return `NULLIF(TRANSLATE(LOWER(BTRIM(${expression})), '${ACCENTED_LETTERS}', '${PLAIN_LETTERS}'), '')`;
+}
+
+/**
+ * Lead que está no funil de triagem (lista fria/importada, migração 021) ainda
+ * não faz parte do CRM: fica fora de listagem, contagem e higienização. Usa
+ * `i.id` — serve em qualquer consulta que tenha a tabela de inscrições como `i`,
+ * mesmo sem JOIN com commercial_leads.
+ */
+export function notInTriageFunnelCondition(idExpression: string): string {
+  return `${idExpression} NOT IN (
+  SELECT cl_t.inscricao_id
+  FROM ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl_t
+  JOIN ${DASHBOARD_SCHEMA_NAME}.funnels f_t ON f_t.id = cl_t.funnel_id AND f_t.is_triage = true
+)`;
+}
+
+export const NOT_IN_TRIAGE_FUNNEL_CONDITION = notInTriageFunnelCondition("i.id");
+
 const ORDERABLE_COLUMNS: Record<OrderableField, string> = {
   id: "i.id",
-  nome: `LOWER(${NAME_EXPRESSION})`,
-  telefone: PHONE_EXPRESSION,
-  cidade: `LOWER(${CITY_EXPRESSION})`,
-  profissao: `LOWER(${PROFESSION_EXPRESSION})`,
-  treinamento: ACTIVE_TRAINING_EXPRESSION,
-  recrutador: RECRUITER_EXPRESSION,
+  nome: alphabeticalSortExpression(NAME_EXPRESSION),
+  telefone: `NULLIF(REGEXP_REPLACE(${PHONE_EXPRESSION}, '\\D', '', 'g'), '')`,
+  cidade: alphabeticalSortExpression(CITY_EXPRESSION),
+  profissao: alphabeticalSortExpression(PROFESSION_EXPRESSION),
+  treinamento: alphabeticalSortExpression(ACTIVE_TRAINING_EXPRESSION),
+  recrutador: alphabeticalSortExpression(RECRUITER_EXPRESSION),
+  // A coluna "Cadastro" mostra `i.criado_em`; ordenar por ela tem que usar a
+  // MESMA data. Ordenar a coluna exibida por LAST_INTERACTION_EXPRESSION fazia
+  // um lead com cadastro antigo aparecer no meio dos recentes só porque a pessoa
+  // preencheu outro formulário hoje — a lista parecia desordenada.
+  data_cadastro: "i.criado_em",
   criado_em: LAST_INTERACTION_EXPRESSION,
   status_at: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_status_at', i.payload->>'status_at', '')), ''), i.criado_em::text)`,
   stars: `COALESCE(NULLIF(TRIM(COALESCE(i.payload->>'dashboard_stars', '')), ''), '0')::int`,
@@ -495,7 +539,16 @@ interface ListInscricoesOptions {
   orderDirection?: OrderDirection;
   filters?: {
     caracteristica?: string;
+    /**
+     * Busca livre do usuário na tela (hoje: campo de busca do Kanban). Usa a
+     * mesma varredura ampla de `caracteristica`, mas em campo separado para os
+     * dois poderem valer ao mesmo tempo — o filtro salvo do quadro restringe o
+     * conjunto e a busca procura dentro dele.
+     */
+    busca?: string;
     nome?: string;
+    /** Só leads com nome preenchido (descarta contato que veio só com telefone). */
+    comNome?: boolean;
     telefone?: string;
     cidade?: string;
     profissao?: string;
@@ -512,6 +565,12 @@ interface ListInscricoesOptions {
     commercialStage?: CommercialStage;
     /** Restringe o resultado ao funil comercial selecionado. */
     funnelId?: number;
+    /**
+     * Traz também os leads que estão em funil de triagem (lista fria/importada
+     * que ainda não entrou no CRM geral). Por padrão eles ficam de fora de
+     * qualquer listagem que não peça um funil específico.
+     */
+    incluirTriagem?: boolean;
     assignedSellerEmail?: string;
     assignedSellerId?: number;
     unassignedOnly?: boolean;
@@ -548,6 +607,11 @@ interface DbRow {
   assigned_seller_email: string | null;
   assigned_seller_name: string | null;
   assigned_at: Date | string | null;
+  closed_course: string | null;
+  closed_value: number | string | null;
+  repique_count: number | string | null;
+  last_objection: string | null;
+  last_objection_at: Date | string | null;
 }
 
 interface DuplicateDbRow extends DbRow {
@@ -900,6 +964,13 @@ function mapDbRowToInscricaoItem(row: DbRow): InscricaoItem {
       assignedSellerEmail: row.assigned_seller_email ?? null,
       assignedSellerName: row.assigned_seller_name ?? null,
       assignedAt: toIsoOrNull(row.assigned_at),
+      closedCourse: row.closed_course ?? null,
+      closedValue:
+        row.closed_value === null || row.closed_value === undefined ? null : Number(row.closed_value),
+      repiqueCount:
+        row.repique_count === null || row.repique_count === undefined ? 0 : Number(row.repique_count),
+      lastObjection: row.last_objection ?? null,
+      lastObjectionAt: toIsoOrNull(row.last_objection_at),
     },
     personKey: typeof row.person_key === "string" ? row.person_key : null,
     allEnrollments: null,
@@ -1225,8 +1296,15 @@ export async function listInscricoes(
   ];
   const filtersValues: unknown[] = [];
 
-  if (filters.caracteristica && filters.caracteristica.trim().length > 0) {
-    const term = filters.caracteristica.trim();
+  // Varredura ampla por texto: nome, e-mail, cidade, profissão, treinamento,
+  // indicação, status, notas, o payload inteiro e o telefone só com dígitos
+  // (para "9198" achar "(11) 91987-..."). Serve tanto ao filtro salvo quanto à
+  // busca digitada, e por isso mora numa função — as duas precisam procurar
+  // exatamente nos mesmos lugares.
+  const pushBroadSearch = (rawTerm: string) => {
+    const term = rawTerm.trim();
+    if (term.length === 0) return;
+
     filtersValues.push(`%${term}%`);
     const likeIndex = filtersValues.length;
     const searchParts = [
@@ -1249,11 +1327,23 @@ export async function listInscricoes(
     }
 
     conditions.push(`(${searchParts.join(" OR ")})`);
-  }
+  };
+
+  if (filters.caracteristica) pushBroadSearch(filters.caracteristica);
+  if (filters.busca) pushBroadSearch(filters.busca);
 
   if (filters.nome && filters.nome.trim().length > 0) {
     filtersValues.push(`%${filters.nome.trim()}%`);
     conditions.push(`${NAME_EXPRESSION} ILIKE $${filtersValues.length}`);
+  }
+
+  // Só quem tem nome de verdade. Contato de agenda que nunca foi salvo entra na
+  // base só com o número (e às vezes com o próprio número no lugar do nome),
+  // então a segunda condição descarta "nome" que é telefone puro.
+  if (filters.comNome) {
+    conditions.push(
+      `TRIM(${NAME_EXPRESSION}) <> '' AND TRIM(${NAME_EXPRESSION}) !~ '^[0-9+()\\s.-]+$'`
+    );
   }
 
   if (filters.telefone && filters.telefone.trim().length > 0) {
@@ -1313,10 +1403,16 @@ export async function listInscricoes(
   // Secondary subquery: finds primaries whose merged secondaries have the matching training.
   // Satélites com dashboard_excluido são vínculos removidos e não contam.
   const TRAINING_EXPR_S = TRAINING_EXPRESSION.replaceAll("i.payload", "s.payload");
+  // NÃO usar `EXISTS (... s.dashboard_merged_into = i.id::text ...)`: correlacionado
+  // com `i` e dentro de um OR, o planner não consegue virar semi-join e roda a
+  // subconsulta UMA VEZ POR LEAD (1876 varreduras completas ~ 17s por clique de
+  // ordenação na tela filtrada por treinamento). Sem correlação, o conjunto de
+  // primários com satélite daquele treinamento é montado uma vez e virado em hash.
   const secondaryTrainingSubquery = (paramRef: string) => `
-    EXISTS (
-      SELECT 1 FROM inscricoes.inscricoes s
-      WHERE s.payload->>'dashboard_merged_into' = i.id::text
+    i.id::text IN (
+      SELECT s.payload->>'dashboard_merged_into'
+      FROM inscricoes.inscricoes s
+      WHERE COALESCE(s.payload->>'dashboard_merged_into', '') <> ''
         AND COALESCE(s.payload->>'dashboard_excluido', '') != 'true'
         AND (${TRAINING_EXPR_S}) = ${paramRef}
     )`;
@@ -1382,6 +1478,14 @@ export async function listInscricoes(
   if (filters.funnelId && Number.isFinite(filters.funnelId) && filters.funnelId > 0) {
     filtersValues.push(Math.trunc(filters.funnelId));
     conditions.push(`cl.funnel_id = $${filtersValues.length}`);
+  } else if (!filters.incluirTriagem) {
+    // Lead em funil de triagem (lista fria/importada, ver migração 021) não faz
+    // parte do CRM geral: some de /crm, /inscricoes, /vozup, CSV e contagens.
+    // Quem pediu um funil específico acima já disse qual quadro quer ver, então
+    // o Kanban da própria triagem continua funcionando.
+    conditions.push(
+      `(cl.funnel_id IS NULL OR cl.funnel_id NOT IN (SELECT id FROM ${DASHBOARD_SCHEMA_NAME}.funnels WHERE is_triage = true))`
+    );
   }
 
   if (filters.assignedSellerEmail && filters.assignedSellerEmail.trim().length > 0) {
@@ -1463,9 +1567,12 @@ export async function listInscricoes(
     // Vínculos (satélites mesclados) também contam: um lead do Instituto que
     // depois entrou por uma aula VozUP aparece nos dois filtros de produto.
     const vozupCondSat = vozupCond.replaceAll("i.payload", "s.payload");
-    const satelliteExists = (cond: string) => `EXISTS (
-      SELECT 1 FROM ${SCHEMA_NAME}.inscricoes s
-      WHERE s.payload->>'dashboard_merged_into' = i.id::text
+    // Mesmo motivo do filtro de treinamento acima: sem correlação com `i`, para
+    // o planner montar o conjunto uma vez em vez de por lead.
+    const satelliteExists = (cond: string) => `i.id::text IN (
+      SELECT s.payload->>'dashboard_merged_into'
+      FROM ${SCHEMA_NAME}.inscricoes s
+      WHERE COALESCE(s.payload->>'dashboard_merged_into', '') <> ''
         AND COALESCE(s.payload->>'dashboard_excluido', '') != 'true'
         AND ${cond}
     )`;
@@ -1522,13 +1629,18 @@ export async function listInscricoes(
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
+      cl.closed_course,
+      cl.closed_value,
+      cl.repique_count,
+      cl.last_objection,
+      cl.last_objection_at,
       cl.position AS commercial_position,
       COUNT(*) OVER() AS total_count,
       TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
     FROM ${SCHEMA_NAME}.inscricoes AS i
     INNER JOIN filtered_unique_inscricoes fui ON fui.id = i.id AND fui.duplicate_rank = 1
     LEFT JOIN ${DASHBOARD_SCHEMA_NAME}.commercial_leads cl ON cl.inscricao_id = i.id
-    ORDER BY ${sortColumn} ${sortDirection}, i.id ${sortDirection}
+    ORDER BY ${sortColumn} ${sortDirection} NULLS LAST, i.id ${sortDirection}
     LIMIT $${limitIndex} OFFSET $${offsetIndex}
   `;
 
@@ -1801,6 +1913,11 @@ export async function getInscricaoById(id: number): Promise<InscricaoItem | null
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
+      cl.closed_course,
+      cl.closed_value,
+      cl.repique_count,
+      cl.last_objection,
+      cl.last_objection_at,
       cl.position AS commercial_position,
       NULL::bigint AS total_count,
       TRIM(${UNIQUE_INSCRICAO_PERSON_KEY}) AS person_key
@@ -1969,6 +2086,10 @@ export async function updateInscricao(
   } finally {
     client.release();
   }
+
+  // A ficha pode ter trocado o treinamento do lead — a lista de turmas do filtro
+  // tem que refletir isso na hora, sem esperar a janela de cache.
+  invalidateTrainingOptionsCache();
 
   const updated = await getInscricaoById(id);
   if (!updated) {
@@ -2218,6 +2339,8 @@ export async function insertInscricao(
     finalId = mergeResult.primaryId;
     merged = mergeResult.merged;
   }
+
+  invalidateTrainingOptionsCache();
 
   const inscricao = await getInscricaoById(finalId);
   if (!inscricao) {
@@ -2547,6 +2670,13 @@ export async function createRecruiterInscricao(
 
 interface InsertImportedInscricoesOptions {
   filename?: string | null;
+  /** Origem carimbada em todo o lote (ex.: "Triagem WhatsApp"). */
+  origem?: string | null;
+  /**
+   * Manda o lote para o funil de triagem: os leads entram trabalháveis no
+   * Kanban desse funil, mas não aparecem no CRM geral até alguém movê-los.
+   */
+  triagem?: boolean;
 }
 
 export interface InsertImportedInscricoesResult {
@@ -2616,10 +2746,19 @@ function buildImportPayload(
     payload["telefone"] = normalizedPhone;
   }
 
+  // Linha de planilha é cadastro pronto, não formulário pela metade. Sem
+  // `_final`, o registro só aparece porque a produção roda hoje com
+  // DASHBOARD_INCLUDE_INCOMPLETE=true — desligar essa variável (ou rodar em
+  // outro ambiente) faria o lote inteiro sumir das telas.
+  payload["_final"] = true;
   payload["importado_via_dashboard"] = true;
   payload["importado_em"] = new Date().toISOString();
   if (options.filename) {
     payload["importado_arquivo"] = options.filename;
+  }
+  const origem = options.origem?.trim();
+  if (origem) {
+    payload["origem"] = origem;
   }
 
   return payload;
@@ -2727,14 +2866,50 @@ export async function insertImportedInscricoes(
     };
   }
 
+  // Triagem: o lote nasce com card no funil de triagem, na etapa de entrada.
+  // É a linha em commercial_leads que tira o lead do CRM geral (listInscricoes)
+  // e o coloca no Kanban onde o vendedor faz a conferência. A busca é por SQL
+  // direto de propósito: lib/funnels.ts importa daqui, e importar de volta
+  // fecharia um ciclo entre os módulos.
+  let triageFunnel: { id: number; entryStage: string } | null = null;
+  if (options.triagem) {
+    const { rows } = await getPool().query<{ id: number; key: string }>(
+      `SELECT f.id, s.key
+         FROM ${DASHBOARD_SCHEMA_NAME}.funnels f
+         JOIN ${DASHBOARD_SCHEMA_NAME}.funnel_stages s ON s.funnel_id = f.id AND s.kind = 'entry'
+        WHERE f.is_triage = true
+        ORDER BY f.id ASC
+        LIMIT 1`
+    );
+    if (!rows[0]) {
+      throw new Error(
+        "Funil de triagem não encontrado — rode scripts/migrations/021_funil_triagem.sql."
+      );
+    }
+    triageFunnel = { id: rows[0].id, entryStage: rows[0].key };
+  }
+
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
     for (const record of filteredRecords) {
       const payload = buildImportPayload(record, options);
-      await client.query(`INSERT INTO ${SCHEMA_NAME}.inscricoes (payload) VALUES ($1::jsonb)`, [
-        JSON.stringify(payload),
-      ]);
+      const { rows } = await client.query<{ id: number }>(
+        `INSERT INTO ${SCHEMA_NAME}.inscricoes (payload) VALUES ($1::jsonb) RETURNING id`,
+        [JSON.stringify(payload)]
+      );
+      const inscricaoId = rows[0]?.id;
+      // O trigger de merge do UP Day pode ter absorvido a linha noutro cadastro;
+      // nesse caso não há id novo e não existe card para criar.
+      if (triageFunnel && inscricaoId) {
+        await client.query(
+          `INSERT INTO ${DASHBOARD_SCHEMA_NAME}.commercial_leads
+             (inscricao_id, funnel_id, commercial_stage, commercial_stage_kind)
+           VALUES ($1, $2, $3, 'entry')
+           ON CONFLICT (inscricao_id) DO NOTHING`,
+          [inscricaoId, triageFunnel.id, triageFunnel.entryStage]
+        );
+      }
     }
     await client.query("COMMIT");
   } catch (error) {
@@ -2744,6 +2919,8 @@ export async function insertImportedInscricoes(
     client.release();
   }
 
+  invalidateTrainingOptionsCache();
+
   return {
     inserted: filteredRecords.length,
     skipped: records.length - filteredRecords.length,
@@ -2752,28 +2929,71 @@ export async function insertImportedInscricoes(
   };
 }
 
+// O GROUP BY abaixo avalia a expressão de treinamento (enorme) em cada linha da
+// tabela: ~0,75s toda vez. Como a tela recarrega no servidor a cada ordenação,
+// filtro ou página, esse custo aparecia em TODA navegação. A lista de turmas só
+// muda quando nasce um treinamento novo, então uma janela curta de cache resolve
+// sem risco de a tela ficar desatualizada de forma perceptível.
+//
+// Por que 5 minutos e não 1: as escritas chamam `invalidateTrainingOptionsCache`
+// (5 pontos), então a correção não depende do TTL. Ele só limita por quanto tempo
+// um treinamento novo pode demorar a aparecer **nos outros workers** — o cache é
+// por processo e o `server.js` sobe 3. Cinco minutos de atraso num filtro é
+// invisível na prática, e corta em 5x quantas vezes a consulta mais cara do banco
+// é executada.
+const TRAINING_OPTIONS_CACHE_MS = 300_000;
+let trainingOptionsCache: { rows: TrainingRow[]; expiresAt: number } | null = null;
+
+interface TrainingRow {
+  treinamento: string | null;
+  is_upday: boolean | null;
+}
+
+/** Chamar depois de gravar/alterar o treinamento de uma inscrição. */
+export function invalidateTrainingOptionsCache(): void {
+  trainingOptionsCache = null;
+}
+
 export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
   const configured = listConfiguredTrainingOptions();
   const orderedOptions: TrainingOption[] = [...configured];
   const seen = new Set(orderedOptions.flatMap((option) => listTrainingOptionIds(option)));
 
-  // Query que busca de todos os campos possíveis de treinamento
+  // Query que busca de todos os campos possíveis de treinamento.
+  //
+  // `ACTIVE_TRAINING_EXPRESSION` é uma cadeia de ~30 COALESCE/NULLIF sobre o
+  // JSONB do payload (o lead não tem colunas: ver secção 4.1 do guia técnico).
+  // Escrita direto no SELECT + WHERE + GROUP BY, o Postgres a avaliava **três
+  // vezes por linha** — era a consulta mais cara do banco inteiro (1,2s, e ela
+  // roda em cinco telas diferentes).
+  //
+  // A CTE MATERIALIZED força o cálculo uma única vez por linha; o filtro e o
+  // agrupamento passam a operar sobre a coluna já pronta. Mesmo resultado,
+  // mesma ordenação — só sem repetir o trabalho. Mesmo padrão já usado na
+  // consulta do VozUP.
   const query = `
-    SELECT
-      ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
-      BOOL_OR(${ACTIVE_UPDAY_PAYLOAD_CONDITION}) AS is_upday
-    FROM ${SCHEMA_NAME}.inscricoes AS i
-    WHERE ${FINALIZED_INSCRICAO_CONDITION}
-      AND ${ACTIVE_TRAINING_EXPRESSION} <> ''
-    GROUP BY ${ACTIVE_TRAINING_EXPRESSION}
+    WITH base AS MATERIALIZED (
+      SELECT
+        ${ACTIVE_TRAINING_EXPRESSION} AS treinamento,
+        ${ACTIVE_UPDAY_PAYLOAD_CONDITION} AS is_upday
+      FROM ${SCHEMA_NAME}.inscricoes AS i
+      WHERE ${FINALIZED_INSCRICAO_CONDITION}
+    )
+    SELECT treinamento, BOOL_OR(is_upday) AS is_upday
+    FROM base
+    WHERE treinamento <> ''
+    GROUP BY treinamento
     ORDER BY 1
   `;
 
   try {
-    const { rows } = await getPool().query<{
-      treinamento: string | null;
-      is_upday: boolean | null;
-    }>(query);
+    let rows: TrainingRow[];
+    if (trainingOptionsCache && trainingOptionsCache.expiresAt > Date.now()) {
+      rows = trainingOptionsCache.rows;
+    } else {
+      rows = (await getPool().query<TrainingRow>(query)).rows;
+      trainingOptionsCache = { rows, expiresAt: Date.now() + TRAINING_OPTIONS_CACHE_MS };
+    }
     const extras: TrainingOption[] = [];
 
     for (const row of rows) {
@@ -2790,7 +3010,10 @@ export async function listTrainingFilterOptions(): Promise<TrainingOption[]> {
 
       // Tentar formatar como data se parecer ser uma data ISO
       const formatted = formatTrainingDateLabel(treinamentoId);
-      const isUpDay = Boolean(row.is_upday);
+      // O rótulo segue a mesma classificação do produto usada em /treinamentos:
+      // sem isso um único payload contaminado no grupo (BOOL_OR) renomeava a
+      // turma inteira do Encontro Online para "Up Day Plus" no filtro.
+      const isUpDay = classifyTrainingProduct(treinamentoId, { isUpDay: Boolean(row.is_upday) }) === "up-day-plus";
       const label = buildAutoTrainingLabel(treinamentoId, isUpDay ? "up-day-plus" : "online");
       const startsAt = !isUpDay && formatted ? treinamentoId : null;
 
@@ -2978,6 +3201,8 @@ export async function deleteInscricao(id: number): Promise<void> {
   if (!rowCount) {
     throw new Error("Inscrição não encontrada");
   }
+
+  invalidateTrainingOptionsCache();
 }
 
 export async function listAllInscricoes(batchSize = 200): Promise<InscricaoItem[]> {
@@ -3090,6 +3315,11 @@ export async function listInscricoesByIds(ids: number[]): Promise<InscricaoItem[
       cl.assigned_seller_email,
       cl.assigned_seller_name,
       cl.assigned_at,
+      cl.closed_course,
+      cl.closed_value,
+      cl.repique_count,
+      cl.last_objection,
+      cl.last_objection_at,
       cl.position AS commercial_position,
       NULL::bigint AS total_count
     FROM ${SCHEMA_NAME}.inscricoes AS i
@@ -3135,6 +3365,7 @@ export async function listDuplicateSuspects(
       FROM ${SCHEMA_NAME}.inscricoes AS i
       WHERE ${FINALIZED_INSCRICAO_CONDITION}
         AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+        AND ${NOT_IN_TRIAGE_FUNNEL_CONDITION}
         AND i.criado_em >= NOW() - ($1::text || ' days')::interval
       ORDER BY i.criado_em DESC
       LIMIT $2
@@ -3765,41 +3996,85 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
 
   // Expressão para extrair treinamento de múltiplos campos possíveis
   const treinamentoExpr = `COALESCE(NULLIF(${ACTIVE_TRAINING_EXPRESSION}, ''), 'Sem Treinamento')`;
-
+  // O satélite de mesclagem guarda a inscrição no formulário onde ela nasceu
+  // (cartilha regra 6): quem se inscreveu numa turma por um segundo cadastro
+  // aparece em "Ver inscritos" (listInscricoes casa o vínculo do satélite) e
+  // precisa ser contado aqui também, na identidade do primário — senão o card
+  // mostra menos gente que a lista para onde ele leva.
+  //
+  // A CTE `linhas` é MATERIALIZED pelo mesmo motivo de `listTrainingFilterOptions`:
+  // treinamento, chave da pessoa e condição de UP Day são cadeias longas de
+  // COALESCE sobre o JSONB. Calculadas aqui uma vez por linha, o LEFT JOIN do
+  // satélite com o primário, a janela e os agregados passam a operar sobre
+  // colunas prontas.
   const query = `
-    WITH base AS (
+    WITH linhas AS MATERIALIZED (
       SELECT
-        i.*,
+        i.id,
+        i.criado_em,
+        i.payload,
         TRIM(${UNIQUE_INSCRICAO_PARTITION}) AS person_key,
+        NULLIF(TRIM(COALESCE(i.payload->>'dashboard_merged_into', '')), '') AS merged_into,
         ${treinamentoExpr} AS treinamento_id,
-        ROW_NUMBER() OVER (
-          PARTITION BY TRIM(${UNIQUE_INSCRICAO_PARTITION}), ${treinamentoExpr}
-          ORDER BY
-            CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END DESC,
-            CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END DESC,
-            i.criado_em DESC,
-            i.id DESC
-        ) AS rn
+        ${ACTIVE_UPDAY_PAYLOAD_CONDITION} AS is_upday,
+        ${PRESENCE_VALIDATED_CONDITION} AS presenca_validada,
+        NULLIF(TRIM(COALESCE(i.payload->>'presenca_treinamento_id', '')), '') AS presenca_treinamento_id,
+        LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador' AS is_recrutador,
+        CASE WHEN LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes') THEN 1 ELSE 0 END AS final_rank,
+        CASE WHEN COALESCE(i.payload->>'_step', '') ~ '^\\d+$' THEN (i.payload->>'_step')::int ELSE 0 END AS step_rank
       FROM ${SCHEMA_NAME}.inscricoes AS i
       WHERE ${FINALIZED_INSCRICAO_CONDITION}
-        AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+    ),
+    base AS (
+      SELECT
+        i.*,
+        COALESCE(p.person_key, i.person_key) AS pessoa,
+        ROW_NUMBER() OVER (
+          PARTITION BY COALESCE(p.person_key, i.person_key), i.treinamento_id
+          ORDER BY i.final_rank DESC, i.step_rank DESC, i.criado_em DESC, i.id DESC
+        ) AS rn
+      FROM linhas AS i
+      LEFT JOIN linhas AS p
+        ON p.id::text = i.merged_into
+        AND p.merged_into IS NULL
+      -- satélite só conta quando o primário dele também aparece na lista
+      WHERE i.merged_into IS NULL OR p.id IS NOT NULL
     ),
     unique_per_training AS (
       SELECT * FROM base WHERE rn = 1
+    ),
+    -- A presença pertence à turma em que ela foi validada
+    -- (presenca_treinamento_id), que nem sempre é a turma da inscrição: quem se
+    -- inscreveu em uma data e compareceu em outra era contado como presente na
+    -- turma errada. Agrupar por ela faz o número do card bater com a tela de
+    -- presenças para onde ele leva.
+    presencas AS (
+      SELECT
+        COALESCE(presenca_treinamento_id, treinamento_id) AS treinamento_id,
+        COUNT(DISTINCT pessoa)::bigint AS presentes
+      FROM base
+      WHERE presenca_validada
+      GROUP BY 1
+    ),
+    totais AS (
+      SELECT
+        treinamento_id,
+        BOOL_OR(is_upday) AS is_upday,
+        COUNT(DISTINCT pessoa)::bigint AS total_inscritos,
+        COUNT(DISTINCT pessoa) FILTER (WHERE is_recrutador)::bigint AS recrutadores,
+        COUNT(DISTINCT pessoa) FILTER (WHERE NOT is_recrutador)::bigint AS leads,
+        COUNT(DISTINCT pessoa) FILTER (WHERE criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
+        MIN(criado_em) AS first_inscrito,
+        MAX(criado_em) AS last_inscrito
+      FROM unique_per_training
+      GROUP BY treinamento_id
     )
     SELECT
-      treinamento_id,
-      BOOL_OR(${ACTIVE_UPDAY_PAYLOAD_CONDITION}) AS is_upday,
-      COUNT(DISTINCT person_key)::bigint AS total_inscritos,
-      COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) = 'recrutador')::bigint AS recrutadores,
-      COUNT(DISTINCT person_key) FILTER (WHERE LOWER(COALESCE(NULLIF(TRIM(i.payload->>'tipo'), ''), 'lead')) <> 'recrutador')::bigint AS leads,
-      COUNT(DISTINCT person_key) FILTER (WHERE i.payload->>'presenca_validada' = 'true')::bigint AS presentes,
-      COUNT(DISTINCT person_key) FILTER (WHERE i.criado_em >= NOW() - INTERVAL '24 hours')::bigint AS last_24h,
-      MIN(i.criado_em) AS first_inscrito,
-      MAX(i.criado_em) AS last_inscrito
-    FROM unique_per_training AS i
-    GROUP BY treinamento_id
-    ORDER BY MAX(i.criado_em) DESC
+      t.*,
+      COALESCE(p.presentes, 0)::bigint AS presentes
+    FROM totais AS t
+    LEFT JOIN presencas AS p USING (treinamento_id)
+    ORDER BY t.last_inscrito DESC
   `;
 
   try {
@@ -3823,7 +4098,8 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
       .map((row) => {
       const treinamentoId = row.treinamento_id || "Sem Treinamento";
       const trainingInfo = getTrainingById(treinamentoId);
-      const isUpDay = Boolean(row.is_upday || trainingInfo?.kind === "up-day-plus");
+      const product = classifyTrainingProduct(treinamentoId, { isUpDay: Boolean(row.is_upday) });
+      const isUpDay = product === "up-day-plus";
       
       // Tentar formatar como data se o ID parecer uma data
       let label = trainingInfo?.label ?? buildAutoTrainingLabel(treinamentoId, isUpDay ? "up-day-plus" : "online");
@@ -3843,7 +4119,7 @@ export async function listTrainingsWithStats(): Promise<TrainingWithStats[]> {
         label,
         startsAt,
         days: trainingInfo?.days ?? (isUpDay && /\be\b/.test(treinamentoId) ? 2 : 1),
-        product: classifyTrainingProduct(treinamentoId, { isUpDay }),
+        product,
         totalInscritos: Number(row.total_inscritos) || 0,
         leads: Number(row.leads) || 0,
         recrutadores: Number(row.recrutadores) || 0,
@@ -3874,6 +4150,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         COUNT(*) FILTER (WHERE ${PRESENCE_APPROVED_CONDITION})::bigint AS graduados
       FROM ${SCHEMA_NAME}.inscricoes i
       WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND ${NOT_IN_TRIAGE_FUNNEL_CONDITION}
     `),
     pool.query(`
       SELECT
@@ -3885,6 +4162,7 @@ export async function getDashboardStats(): Promise<DashboardStats> {
         ) as recruits
       FROM ${SCHEMA_NAME}.inscricoes i
       WHERE ${FINALIZED_INSCRICAO_CONDITION}
+        AND ${NOT_IN_TRIAGE_FUNNEL_CONDITION}
         AND criado_em >= CURRENT_DATE - INTERVAL '6 months'
       GROUP BY 1, 2
       ORDER BY 2

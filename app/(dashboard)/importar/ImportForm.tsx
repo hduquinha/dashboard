@@ -33,6 +33,10 @@ export default function ImportForm({ action }: ImportFormProps) {
   const [state, formAction] = useFormState<ImportActionState, FormData>(action, initialImportState);
   const [confirmFeedback, setConfirmFeedback] = useState<ConfirmImportResponse | null>(null);
   const [isConfirming, startConfirm] = useTransition();
+  // Lista fria começa na triagem: o vendedor confere antes de o contato entrar
+  // no CRM geral. Por isso é o padrão de quem sobe planilha.
+  const [paraTriagem, setParaTriagem] = useState(true);
+  const [origem, setOrigem] = useState("");
 
   const previewSignature = useMemo(() => {
     if (!state.result) {
@@ -70,6 +74,8 @@ export default function ImportForm({ action }: ImportFormProps) {
       void confirmImportAction({
         filename: state.filename ?? null,
         registros: state.result!.importados,
+        triagem: paraTriagem,
+        origem: origem.trim() || null,
       })
         .then((response) => {
           setConfirmFeedback(response);
@@ -178,6 +184,38 @@ export default function ImportForm({ action }: ImportFormProps) {
               title="Linhas ignoradas"
               errors={state.result!.comErros}
             />
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-neutral-200 bg-neutral-50 p-4">
+            <label className="flex items-start gap-3 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                checked={paraTriagem}
+                onChange={(e) => setParaTriagem(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-neutral-300 text-emerald-600 focus:ring-emerald-500"
+              />
+              <span>
+                <span className="font-semibold">Mandar para a Triagem</span> — não entra no CRM geral
+                <span className="mt-0.5 block text-xs font-normal text-neutral-500">
+                  Os leads ficam só no quadro do funil Triagem, para o vendedor conferir. Não aparecem em
+                  Inscrições, Pipeline CRM nem nas pastas da VozUP. Quem passar na conferência entra no
+                  geral pelo botão &ldquo;Mover para outro funil&rdquo;.
+                </span>
+              </span>
+            </label>
+            <label className="block text-sm font-medium text-neutral-700">
+              Origem deste lote
+              <input
+                type="text"
+                value={origem}
+                onChange={(e) => setOrigem(e.target.value)}
+                placeholder="Ex.: Triagem WhatsApp"
+                className="mt-1 w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm text-neutral-800 focus:border-neutral-500 focus:outline-none focus:ring-2 focus:ring-neutral-200 sm:max-w-sm"
+              />
+              <span className="mt-1 block text-xs font-normal text-neutral-500">
+                Carimbada em todos os registros do lote — é assim que você acha esses leads depois.
+              </span>
+            </label>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-4">

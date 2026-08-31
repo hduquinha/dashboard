@@ -120,6 +120,16 @@ export interface CommercialLeadState {
   assignedSellerEmail: string | null;
   assignedSellerName: string | null;
   assignedAt: string | null;
+  /** Treinamento vendido, quando a venda já foi registrada na etapa Fechado. */
+  closedCourse: string | null;
+  /** Valor fechado de fato (já com desconto). Espelho do CRM; a fonte da
+   *  verdade do dinheiro é a matrícula no Financeiro. */
+  closedValue: number | null;
+  /** Quantas vezes o lead já foi para a coluna de perda (Desinteresse) — o "repique". */
+  repiqueCount: number;
+  /** Última objeção registrada pelo vendedor ao mandar o lead para o repique. */
+  lastObjection: string | null;
+  lastObjectionAt: string | null;
 }
 
 export interface InscricaoNote {
@@ -206,6 +216,13 @@ export type OrderableField =
   | "profissao"
   | "treinamento"
   | "recrutador"
+  /** Data em que a inscrição foi criada — é o que a coluna "Cadastro" exibe. */
+  | "data_cadastro"
+  /**
+   * Última interação: `criado_em` ou a data de um cadastro novo da mesma pessoa
+   * (`dashboard_ultima_interacao`), o que for mais recente. Faz o lead voltar ao
+   * topo como se fosse novo — é o "Mais recente" do CRM, NÃO a data de cadastro.
+   */
   | "criado_em"
   | "status_at"
   | "stars"

@@ -46,6 +46,8 @@ export async function POST(request: Request) {
       ? Math.max(0, Math.min(100, Math.round(body.priorityLevel)))
       : DEFAULT_PRIORITY_BY_ROLE[role];
   const institutoUpOnly = body?.institutoUpOnly === true;
+  const isSeller = body?.isSeller === true;
+  const isTeacher = body?.isTeacher === true;
   const permissions = Array.isArray(body?.permissions)
     ? normalizePermissionList(body.permissions)
     : defaultPermissionsForRole(role, { institutoUpOnly });
@@ -75,6 +77,8 @@ export async function POST(request: Request) {
       role,
       priorityLevel,
       permissions,
+      isSeller,
+      isTeacher,
       institutoUpOnly,
     });
     return NextResponse.json({ member });

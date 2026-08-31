@@ -8,6 +8,8 @@ import type {
 const SCHEMA = "dashboard";
 /** Notificacoes mais antigas que isso somem sozinhas (feed nao e historico). */
 const RETENTION_DAYS = 60;
+/** Depois disto o aviso continua no histórico, mas para de contar no badge. */
+const AUTO_READ_DAYS = 3;
 
 let schemaReady = false;
 
@@ -201,6 +203,20 @@ export async function markAppNotificationsRead(
 /** Limpeza de retencao, chamada pelo ciclo de alertas (nao pelo request do usuario). */
 export async function pruneAppNotifications(): Promise<number> {
   await ensureAppNotificationSchema();
+
+  // Aviso velho nao lido deixa de ser aviso: vira ruido que zera o valor do
+  // badge. "Chegou um lead novo" de cinco dias atras nao tem mais nada a
+  // informar — o lead ja foi distribuido ou ja apareceu na Chegada.
+  //
+  // Marcar como lida em vez de apagar preserva o historico em /notificacoes e
+  // devolve ao contador a funcao de sinalizar o que e de agora. Sem isto o
+  // badge chegou a 3.350 nao lidas, e tres pessoas nunca abriram nenhuma.
+  await getPool().query(
+    `UPDATE ${SCHEMA}.app_notifications
+        SET read_at = NOW()
+      WHERE read_at IS NULL
+        AND created_at < NOW() - INTERVAL '${AUTO_READ_DAYS} days'`
+  );
 
   const { rowCount } = await getPool().query(
     `DELETE FROM ${SCHEMA}.app_notifications WHERE created_at < NOW() - INTERVAL '${RETENTION_DAYS} days'`

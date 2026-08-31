@@ -16,6 +16,8 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 import dagre from "dagre";
+import { Magnet, UserRound, Users, X } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import { NetworkNode } from "@/lib/network";
 import { LeadProfileModal } from "@/components/LeadProfileModal";
 import { TrainingOption } from "@/types/training";
@@ -49,13 +51,15 @@ function CustomNode({ data }: NodeProps<{
     >
       <Handle type="target" position={Position.Top} className="!bg-neutral-400" />
       
-      <div
-        className={`mb-3 flex h-12 w-12 items-center justify-center rounded-full text-xl ${
-          isRecruiter ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"
-        }`}
-      >
-        {isRecruiter ? "👤" : "🧲"}
-      </div>
+      {/* Recrutador e lead precisam ser distinguíveis de longe no canvas, que é
+          onde a rede é lida em escala reduzida — daí a pastilha preenchida. */}
+      <IconTile
+        icon={isRecruiter ? UserRound : Magnet}
+        tone={isRecruiter ? "teal" : "brand"}
+        size="lg"
+        solid
+        className="mb-3 !rounded-full"
+      />
       
       <div className="text-center">
         <h3 className="font-bold text-neutral-900 line-clamp-1" title={node.displayName}>
@@ -140,9 +144,7 @@ function LeadGroupNode({ data }: NodeProps<{ count: number; onClick: () => void 
   return (
     <div className="flex w-[180px] flex-col items-center rounded-xl border-2 border-sky-100 bg-white p-3 shadow-sm transition hover:shadow-md">
       <Handle type="target" position={Position.Top} className="!bg-neutral-400" />
-      <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-sky-50 text-lg text-sky-600">
-        👥
-      </div>
+      <IconTile icon={Users} tone="brand" size="md" className="mb-2 !rounded-full" />
       <div className="text-center">
         <h3 className="text-sm font-bold text-neutral-900">{data.count} Leads</h3>
         <p className="text-[10px] text-neutral-500">Agrupados</p>
@@ -409,7 +411,7 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
               onClick={() => setGroupLeads(null)}
               className="rounded-full p-1 text-neutral-500 hover:bg-neutral-100"
             >
-              ✕
+              <X size={16} />
             </button>
           </div>
           <div className="space-y-3">
@@ -419,7 +421,7 @@ function NetworkCanvasContent({ roots, trainingOptions, recruiterOptions }: Netw
                 className="rounded-lg border border-neutral-100 p-3 shadow-sm transition hover:border-sky-200 hover:shadow-md"
               >
                 <div className="flex items-center gap-2">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-sky-100 text-sm">🧲</span>
+                  <IconTile icon={Magnet} tone="brand" size="sm" className="!rounded-full" />
                   <div>
                     <p className="font-semibold text-neutral-900">{lead.displayName}</p>
                     {lead.telefone && <p className="text-xs text-neutral-500">{lead.telefone}</p>}

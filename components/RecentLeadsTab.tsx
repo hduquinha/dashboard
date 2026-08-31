@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Clock, Mail, MessageCircle, RotateCcw, UserRound } from "lucide-react";
+import { Clock, MapPin, Mail, MessageCircle, RotateCcw, UserRound } from "lucide-react";
+import { formatLeadLocation } from "@/lib/leadLocation";
 import { readableCampaignName } from "@/lib/metaAdsLabels";
 import CreativeLightbox from "@/components/CreativeLightbox";
 import CreativeThumb from "@/components/CreativeThumb";
@@ -77,7 +78,7 @@ export default function RecentLeadsTab({ leads, scoped }: RecentLeadsTabProps) {
             {leads.map((lead) => (
               <li key={lead.id} className="flex flex-col gap-3 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex min-w-0 items-start gap-3">
-                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[rgb(var(--blue-3))] text-xs font-semibold text-[rgb(var(--blue-11))]">
+                  <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[rgb(var(--blue-3))] to-[rgb(var(--blue-5))] text-xs font-bold text-[rgb(var(--blue-11))] ring-1 ring-inset ring-[rgb(var(--blue-6))]">
                     {initials(lead.nome)}
                   </span>
                   <div className="min-w-0">
@@ -113,8 +114,22 @@ export default function RecentLeadsTab({ leads, scoped }: RecentLeadsTabProps) {
                         </span>
                       ) : null}
                     </div>
-                    <p className="mt-0.5 flex items-center gap-1 text-[11px] text-[rgb(var(--slate-9))]" title={fullDate(lead.criadoEm)}>
-                      <Clock className="h-3 w-3" /> {timeAgo(lead.criadoEm)}
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[rgb(var(--slate-9))]">
+                      <span className="flex items-center gap-1" title={fullDate(lead.criadoEm)}>
+                        <Clock className="h-3 w-3" /> {timeAgo(lead.criadoEm)}
+                      </span>
+                      {formatLeadLocation(lead) ? (
+                        <span
+                          className="flex items-center gap-1"
+                          title={
+                            lead.cidade
+                              ? "Cidade do cadastro — informada no formulário ou estimada pelo IP no envio."
+                              : "Região do DDD do telefone: diz de onde é a linha, não necessariamente onde a pessoa mora."
+                          }
+                        >
+                          <MapPin className="h-3 w-3" /> {formatLeadLocation(lead)}
+                        </span>
+                      ) : null}
                     </p>
                     <div className="mt-1 flex min-w-0 items-center gap-2">
                       <CreativeThumb creative={lead} onOpen={() => setLightboxCreative(lead)} />

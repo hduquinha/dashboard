@@ -25,6 +25,7 @@ import {
   type CreateLeadSellerOption,
 } from "@/components/CreateLeadModal";
 import type { TrainingOption } from "@/types/training";
+import type { CommercialWorkspace } from "@/types/commercial";
 import { hasPermission, type PermissionUser } from "@/lib/permissions";
 import type { VozupLead } from "@/lib/vozupFolders";
 import { buildWhatsAppWebUrl, openWhatsAppOnMobile } from "@/lib/utils";
@@ -52,6 +53,7 @@ interface Props {
   criativo?: string;
   isAulaExclusiva?: boolean;
   sellers: CreateLeadSellerOption[];
+  commercial: CommercialWorkspace;
   currentUser?: ({ email: string; isSupervisor: boolean } & PermissionUser) | null;
   createContext: CreateLeadContext;
 }
@@ -188,6 +190,7 @@ export default function VozupLeadsTable({
   criativo,
   isAulaExclusiva = false,
   sellers,
+  commercial,
   currentUser,
   createContext,
 }: Props) {
@@ -279,6 +282,7 @@ export default function VozupLeadsTable({
         onDelete={() => { setSelectedLeadId(null); refresh(); }}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
+        commercial={commercial}
         currentUser={currentUser}
       />
 
@@ -388,7 +392,7 @@ export default function VozupLeadsTable({
                     className={`px-4 py-4 transition ${selected || index === 0 ? "bg-cyan-50/70" : "bg-white/60"}`}
                   >
                     <div className="flex items-start gap-3">
-                      <div className="flex size-11 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-600">
+                      <div className="flex size-11 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[rgb(var(--blue-3))] to-[rgb(var(--blue-5))] text-xs font-black text-[rgb(var(--blue-11))] ring-1 ring-inset ring-[rgb(var(--blue-6))]">
                         {initials(lead.nome)}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -515,7 +519,7 @@ export default function VozupLeadsTable({
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex min-w-0 items-center gap-3">
-                            <div className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-600">
+                            <div className="flex size-10 flex-shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[rgb(var(--blue-3))] to-[rgb(var(--blue-5))] text-xs font-black text-[rgb(var(--blue-11))] ring-1 ring-inset ring-[rgb(var(--blue-6))]">
                               {initials(lead.nome)}
                             </div>
                             <div className="min-w-0">

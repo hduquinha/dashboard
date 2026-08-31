@@ -36,17 +36,116 @@ export interface FacebookLeadSyncResult {
   imported: number;
   skipped: number;
   errors: Array<{ leadgenId: string; error: string }>;
+  /** Uma linha por página sincronizada — mostra no log de onde vieram (ou não
+   *  vieram) os leads. Página sem formulário aqui é o sintoma de token faltando. */
+  pages: Array<{ pageId: string; pageName: string; forms: number; imported: number; skipped: number }>;
 }
 
 const LEAD_FIELDS =
   "id,created_time,form_id,field_data,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,platform";
 
-export function getFacebookAccessToken(): string {
-  const token = process.env.FACEBOOK_PAGE_ACCESS_TOKEN?.trim();
-  if (!token) {
+/**
+ * Tokens de página configurados. Aceita MAIS DE UM, separados por vírgula,
+ * ponto e vírgula ou quebra de linha.
+ *
+ * Por que plural: um token de página só enxerga os formulários da própria
+ * página — `me/leadgen_forms` devolve os dela e nada mais, e ler os de outra
+ * página responde "(#10) User has insufficient privileges on the page". Quando
+ * a operação anuncia por mais de uma página (é o caso aqui: os anúncios de
+ * formulário nativo coletam pela página "VozUp", enquanto o token existente é
+ * de outra página), um token só significa uma página inteira de leads que
+ * nunca chega no CRM, em silêncio.
+ */
+export function getFacebookAccessTokens(): string[] {
+  const raw = process.env.FACEBOOK_PAGE_ACCESS_TOKEN ?? "";
+  const tokens = raw
+    .split(/[,;\n]/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
+
+  if (tokens.length === 0) {
     throw new Error("FACEBOOK_PAGE_ACCESS_TOKEN não configurado");
   }
-  return token;
+  return tokens;
+}
+
+/** Primeiro token — para as chamadas que não dependem de página (Insights). */
+export function getFacebookAccessToken(): string {
+  return getFacebookAccessTokens()[0];
+}
+
+export interface FacebookPageToken {
+  token: string;
+  pageId: string;
+  pageName: string;
+}
+
+/**
+ * Resolve qual página pertence a cada token. O resultado fica em cache no
+ * processo porque isso não muda entre sincronizações (uma chamada por token a
+ * cada ciclo seria desperdício).
+ */
+let pageTokensCache: { value: FacebookPageToken[]; expiresAt: number } | null = null;
+
+export async function listFacebookPageTokens(): Promise<{
+  pages: FacebookPageToken[];
+  errors: Array<{ token: string; error: string }>;
+}> {
+  const now = Date.now();
+  if (pageTokensCache && pageTokensCache.expiresAt > now) {
+    return { pages: pageTokensCache.value, errors: [] };
+  }
+
+  const pages: FacebookPageToken[] = [];
+  const errors: Array<{ token: string; error: string }> = [];
+
+  for (const token of getFacebookAccessTokens()) {
+    const apelido = `…${token.slice(-6)}`;
+    try {
+      // Token de usuário (ou de usuário de sistema) não lê formulário direto:
+      // `/{page}/leadgen_forms` responde "(#190) This method must be called with
+      // a Page Access Token". Mas ele CONHECE as páginas do negócio e entrega o
+      // token de página de cada uma — é por aqui que um único token de sistema
+      // cobre todas as páginas de uma vez.
+      const contas = await fetchGraph<GraphList<{ id: string; name?: string; access_token?: string }>>(
+        "me/accounts?fields=id,name,access_token&limit=100",
+        token
+      );
+
+      const comToken = (contas.data ?? []).filter((conta) => conta.access_token);
+      if (comToken.length > 0) {
+        for (const conta of comToken) {
+          pages.push({
+            token: conta.access_token as string,
+            pageId: conta.id,
+            pageName: conta.name ?? conta.id,
+          });
+        }
+        continue;
+      }
+
+      errors.push({ token: apelido, error: "token de usuário sem nenhuma página atribuída" });
+      continue;
+    } catch {
+      // `me/accounts` não existe para token de página — segue como token de página.
+    }
+
+    try {
+      const page = await fetchGraph<{ id: string; name?: string }>("me?fields=id,name", token);
+      pages.push({ token, pageId: page.id, pageName: page.name ?? page.id });
+    } catch (error) {
+      // Token curto no log: identifica qual falhou sem vazar o segredo inteiro.
+      errors.push({
+        token: apelido,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (pages.length > 0) {
+    pageTokensCache = { value: pages, expiresAt: now + 30 * 60_000 };
+  }
+  return { pages, errors };
 }
 
 async function fetchGraph<T>(path: string, accessToken = getFacebookAccessToken()): Promise<T> {
@@ -82,8 +181,29 @@ function fieldValue(fieldData: FacebookFieldData[], keys: string[]): string {
   return "";
 }
 
-export async function fetchFacebookLeadDetails(leadgenId: string): Promise<FacebookLeadDetails> {
-  return fetchGraph<FacebookLeadDetails>(`${leadgenId}?fields=${LEAD_FIELDS}`);
+export async function fetchFacebookLeadDetails(
+  leadgenId: string,
+  pageId?: string
+): Promise<FacebookLeadDetails> {
+  const { pages } = await listFacebookPageTokens();
+  // O lead só pode ser lido com o token da página que o coletou. Com o pageId
+  // do webhook a escolha é direta; sem ele, tenta todos antes de desistir.
+  const candidatos = pageId
+    ? [...pages.filter((page) => page.pageId === pageId), ...pages.filter((page) => page.pageId !== pageId)]
+    : pages;
+
+  let ultimoErro: unknown = null;
+  for (const page of candidatos) {
+    try {
+      return await fetchGraph<FacebookLeadDetails>(`${leadgenId}?fields=${LEAD_FIELDS}`, page.token);
+    } catch (error) {
+      ultimoErro = error;
+    }
+  }
+
+  throw ultimoErro instanceof Error
+    ? ultimoErro
+    : new Error(`Nenhum token de página consegue ler o lead ${leadgenId}`);
 }
 
 export async function alreadyIngestedFacebookLead(leadgenId: string): Promise<boolean> {
@@ -149,7 +269,12 @@ export async function ingestFacebookLead(
   if (await alreadyIngestedFacebookLead(lead.id)) {
     return null;
   }
-  return ingestVozupLead(buildFacebookLeadPayload(lead, context), { notify: true });
+  // A data do lead é a que a Meta informa, não a da importação — ver o
+  // comentário de `createdAt` em ingestVozupLead.
+  return ingestVozupLead(buildFacebookLeadPayload(lead, context), {
+    notify: true,
+    createdAt: lead.created_time ?? null,
+  });
 }
 
 export async function syncRecentFacebookLeads(options: {
@@ -158,33 +283,61 @@ export async function syncRecentFacebookLeads(options: {
 } = {}): Promise<FacebookLeadSyncResult> {
   const leadLimit = Math.max(1, Math.min(options.leadLimit ?? 25, 100));
   const formLimit = Math.max(1, Math.min(options.formLimit ?? 50, 100));
-  const page = await fetchGraph<{ id: string; name?: string }>("me?fields=id,name");
-  const forms = await fetchGraph<GraphList<FacebookLeadForm>>(
-    `${page.id}/leadgen_forms?fields=id,name,status,leads.limit(${leadLimit}){${LEAD_FIELDS}}&limit=${formLimit}`
-  );
 
-  const result: FacebookLeadSyncResult = { imported: 0, skipped: 0, errors: [] };
+  const result: FacebookLeadSyncResult = { imported: 0, skipped: 0, errors: [], pages: [] };
+  const { pages, errors: tokenErrors } = await listFacebookPageTokens();
 
-  for (const form of forms.data ?? []) {
-    for (const lead of form.leads?.data ?? []) {
-      if (!lead.id) continue;
-      try {
-        if (await alreadyIngestedFacebookLead(lead.id)) {
-          result.skipped += 1;
-          continue;
+  for (const tokenError of tokenErrors) {
+    result.errors.push({ leadgenId: `token ${tokenError.token}`, error: tokenError.error });
+  }
+
+  for (const page of pages) {
+    const resumo = { pageId: page.pageId, pageName: page.pageName, forms: 0, imported: 0, skipped: 0 };
+    result.pages.push(resumo);
+
+    let forms: GraphList<FacebookLeadForm>;
+    try {
+      forms = await fetchGraph<GraphList<FacebookLeadForm>>(
+        `${page.pageId}/leadgen_forms?fields=id,name,status,leads.limit(${leadLimit}){${LEAD_FIELDS}}&limit=${formLimit}`,
+        page.token
+      );
+    } catch (error) {
+      // Uma página com problema não pode derrubar a sincronização das outras.
+      result.errors.push({
+        leadgenId: `page ${page.pageId}`,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+
+    for (const form of forms.data ?? []) {
+      resumo.forms += 1;
+      for (const lead of form.leads?.data ?? []) {
+        if (!lead.id) continue;
+        try {
+          if (await alreadyIngestedFacebookLead(lead.id)) {
+            resumo.skipped += 1;
+            result.skipped += 1;
+            continue;
+          }
+          const savedId = await ingestFacebookLead(lead, {
+            formId: form.id,
+            formName: form.name,
+            pageId: page.pageId,
+          });
+          if (savedId) {
+            resumo.imported += 1;
+            result.imported += 1;
+          } else {
+            resumo.skipped += 1;
+            result.skipped += 1;
+          }
+        } catch (error) {
+          result.errors.push({
+            leadgenId: lead.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
-        const savedId = await ingestFacebookLead(lead, {
-          formId: form.id,
-          formName: form.name,
-          pageId: page.id,
-        });
-        if (savedId) result.imported += 1;
-        else result.skipped += 1;
-      } catch (error) {
-        result.errors.push({
-          leadgenId: lead.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
       }
     }
   }

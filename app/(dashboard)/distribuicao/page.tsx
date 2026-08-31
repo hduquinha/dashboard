@@ -5,9 +5,11 @@ import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { getCommercialWorkspace } from "@/lib/commercial";
 import {
   type ManualDistributionFolderOption,
+  listExclusiveClassArrivalCandidates,
   listManualDistributionCandidates,
   normalizeManualDistributionFilters,
 } from "@/lib/manualDistribution";
+import { listSellerWorkloads } from "@/lib/sellerWorkload";
 import { listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import { listVozupBlockStats, VOZUP_FOLDERS } from "@/lib/vozupFolders";
 import { hasPermission } from "@/lib/permissions";
@@ -82,24 +84,47 @@ export default async function DistributionPage(props: DistributionPageProps) {
   const flatParams = flattenSearchParams(rawSearchParams);
   const filters = normalizeManualDistributionFilters(flatParams);
   const limit = parseLimit(flatParams.limit);
-  const [candidateResult, folderOptions] = commercial.isSupervisor
+  const [candidateResult, exclusiveClassResult, folderOptions] = commercial.isSupervisor
     ? await Promise.all([
         listManualDistributionCandidates(filters, limit),
+        listExclusiveClassArrivalCandidates(filters, limit),
         listVozupBlockStats().then(buildFolderOptions),
       ])
-    : [{ candidates: [], total: 0, limit }, [] as ManualDistributionFolderOption[]];
+    : [
+        { candidates: [], total: 0, limit },
+        { candidates: [], total: 0, limit, startsAt: new Date().toISOString() },
+        [] as ManualDistributionFolderOption[],
+      ];
+  const workloads = await listSellerWorkloads();
+
   const sellers = commercial.sellers
     .filter((seller) => seller.email && seller.name)
     .sort((left, right) => left.name.localeCompare(right.name, "pt-BR"));
+
+  const sellerInsights = sellers.map((seller) => {
+    const workload = workloads.get(seller.chatwootUserId);
+    return {
+      sellerId: seller.chatwootUserId,
+      total: workload?.total ?? 0,
+      repique: workload?.repique ?? 0,
+      byStage: workload?.byStage ?? [],
+      byOrigin: workload?.byOrigin ?? [],
+    };
+  });
 
   return (
     <DistributionClient
       candidates={candidateResult.candidates}
       total={candidateResult.total}
       limit={candidateResult.limit}
+      exclusiveClassCandidates={exclusiveClassResult.candidates}
+      exclusiveClassTotal={exclusiveClassResult.total}
+      exclusiveClassStartsAt={exclusiveClassResult.startsAt}
       filters={filters}
       folderOptions={folderOptions}
       sellers={sellers}
+      commercial={commercial}
+      sellerInsights={sellerInsights}
       trainingOptions={trainingOptions}
       recruiterOptions={recruiterOptions}
       isSupervisor={commercial.isSupervisor}

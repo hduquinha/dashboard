@@ -91,6 +91,12 @@ const ENTITY_DEFS: Record<string, EntityDef> = {
   settings: { table: "", label: "Configuração financeira" },
   installment_rates: { table: "", label: "Taxas de parcelamento" },
   audit_event: { table: "", label: "Registro de auditoria" },
+  aluno: { table: "academic_students", label: "Aluno" },
+  turma: { table: "academic_classes", label: "Turma" },
+  turma_aluno: { table: "academic_class_students", label: "Aluno na turma" },
+  sala: { table: "academic_rooms", label: "Sala" },
+  calendario: { table: "", label: "Calendário" },
+  configuracao_academica: { table: "", label: "Configuração acadêmica" },
 };
 
 const CATALOG_LABELS: Record<string, string> = {

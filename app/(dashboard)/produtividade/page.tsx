@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import ProductivityClient from "./ProductivityClient";
-import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { DASHBOARD_COOKIE_NAME } from "@/lib/auth";
+import { getFreshDashboardSession } from "@/lib/dashboardSession";
 import { getCommercialWorkspace } from "@/lib/commercial";
 import { listRecruitersWithDbNames, listTrainingFilterOptions } from "@/lib/db";
 import { getProductivityWorkspace } from "@/lib/productivity";
@@ -28,7 +29,7 @@ function pickDate(value: string | string[] | undefined): string | null {
 export default async function ProductivityPage(props: ProductivityPageProps) {
   const [cookieStore, searchParams] = await Promise.all([cookies(), props.searchParams]);
   const token = cookieStore.get(DASHBOARD_COOKIE_NAME)?.value;
-  const session = getDashboardSession(token);
+  const session = await getFreshDashboardSession(token);
   const [workspace, commercial, trainingOptions, recruiterOptions] = await Promise.all([
     getProductivityWorkspace(session?.user ?? null, {
       dateFrom: pickDate(searchParams?.dateFrom),

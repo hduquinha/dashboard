@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireTasks, requireTasksAdmin } from "@/lib/tasksApi";
 import { getBoardData, updateBoard, userCanAccessBoard } from "@/lib/tasks";
+import { memberIdForEmail } from "@/lib/leadTasks";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!(await assertBoardAccess(boardId, auth.user))) {
     return NextResponse.json({ error: "Sem acesso a este quadro." }, { status: 403 });
   }
-  const data = await getBoardData(boardId);
+  // O selo "Pendente hoje" de cada rotina é individual — ver getBoardData.
+  const data = await getBoardData(boardId, await memberIdForEmail(auth.user.email));
   if (!data) return NextResponse.json({ error: "Quadro nao encontrado." }, { status: 404 });
   return NextResponse.json(data);
 }

@@ -25,6 +25,22 @@ export function requireFinanceAccess(request: NextRequest): NextResponse | null 
   return null;
 }
 
+/**
+ * Escrita no controle de nota fiscal. Ver o financeiro (`view.finance`) mostra
+ * o status da NF; declarar que a nota foi emitida — ou dispensá-la — exige
+ * `finance.invoices`, porque é a linha que o contador vai conferir depois.
+ */
+export function requireInvoicePermission(request: NextRequest): NextResponse | null {
+  const session = getRequestDashboardSession(request);
+  if (session && !hasPermission(session.user, "finance.invoices")) {
+    return NextResponse.json(
+      { error: "Sem permissao para controlar notas fiscais." },
+      { status: 403 }
+    );
+  }
+  return null;
+}
+
 export function parseId(value: string | string[] | undefined): number {
   const raw = Array.isArray(value) ? value[0] : value;
   const parsed = Number.parseInt(raw ?? "", 10);

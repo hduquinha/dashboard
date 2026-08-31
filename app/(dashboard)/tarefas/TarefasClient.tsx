@@ -42,6 +42,7 @@ import {
   Sparkles,
   SlidersHorizontal,
   Table2,
+  Repeat,
   Tag,
   Trash2,
   Users,
@@ -67,6 +68,21 @@ import {
   TemplatesModal,
 } from "./BoardModals";
 import type { TaskAutomation } from "@/lib/taskAutomations";
+
+/**
+ * Hoje no fuso de São Paulo. `toISOString()` devolve UTC e vira o dia às 21h —
+ * a rotina registrada às 22h apareceria como sendo de amanhã.
+ */
+function todayISO(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "America/Sao_Paulo" });
+}
+
+/** "2026-08-12" -> "12/08". */
+function fmtDay(value: string | null): string {
+  if (!value) return "sem data";
+  const [, mes, dia] = value.split("-");
+  return `${dia}/${mes}`;
+}
 import type {
   BoardData,
   TaskBoard,
@@ -451,11 +467,29 @@ export default function TarefasClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board, editingTask, modal]);
 
-  /** O que aparece na coluna (respeita os filtros do topo). */
+  /**
+   * O que aparece na coluna (respeita os filtros do topo).
+   *
+   * Rotina não se ordena como tarefa pontual: ela não tem prazo, tem
+   * "situação". Entre DUAS rotinas, a que ainda não foi registrada hoje sobe —
+   * é a pergunta que a pessoa faz ao abrir o quadro. A comparação só vale
+   * quando os dois cards são rotina; assim a ordem manual (arraste) das
+   * tarefas pontuais nunca é alterada, e numa coluna mista nada se mexe.
+   */
   function tasksInColumn(columnId: number): TaskCard[] {
+    const hoje = todayISO();
+    const pendente = (task: TaskCard) =>
+      task.kind === "recorrente" && task.lastProduction?.date !== hoje;
+
     return filteredTasks
       .filter((t) => t.columnId === columnId)
-      .sort((a, b) => a.position - b.position);
+      .sort((a, b) => {
+        if (a.kind === "recorrente" && b.kind === "recorrente") {
+          const diff = Number(pendente(b)) - Number(pendente(a));
+          if (diff !== 0) return diff;
+        }
+        return a.position - b.position;
+      });
   }
 
   /**
@@ -688,10 +722,22 @@ export default function TarefasClient({
             );
           })}
           <a
+            href="/tarefas/arquivo"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-black text-amber-700 transition hover:bg-amber-100"
+          >
+            <Archive className="size-3.5" /> Arquivo
+          </a>
+          <a
             href="/tarefas/auditoria"
             className="inline-flex items-center gap-1.5 rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-xs font-black text-violet-700 transition hover:bg-violet-100"
           >
             <History className="size-3.5" /> Auditoria
+          </a>
+          <a
+            href="/tarefas/producao"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-200 bg-cyan-50 px-2.5 py-1.5 text-xs font-black text-cyan-700 transition hover:bg-cyan-100"
+          >
+            <Repeat className="size-3.5" /> Produção
           </a>
         </div>
 
@@ -1399,6 +1445,37 @@ function TaskCardView({
           </div>
         )}
 
+        {/* Rotina: identificação explícita de que este card NÃO se conclui —
+            ele acumula registros de produção (ver TaskProductionSection). Sem
+            o selo, uma rotina parece uma tarefa pontual que ninguém terminou. */}
+        {task.kind === "recorrente" && (
+          <div className="mt-2 space-y-1">
+            <div className="flex flex-wrap items-center gap-1">
+              <span className="inline-flex items-center gap-1 rounded-md bg-cyan-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-700">
+                <Repeat className="size-3" /> Rotina
+              </span>
+              {/* A pergunta que a pessoa faz ao olhar o quadro é "já registrei
+                  hoje?". Sem este selo ela precisa abrir o card para descobrir. */}
+              {task.myLastProductionDate === todayISO() ? (
+                <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                  <Check className="size-3" /> Você registrou hoje
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                  Pendente hoje
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] leading-snug text-slate-500">
+              {task.lastProduction
+                ? `Último: ${fmtDay(task.lastProduction.date)}${
+                    task.lastProduction.label ? ` · ${task.lastProduction.label}` : ""
+                  }${task.lastProduction.memberName ? ` · ${task.lastProduction.memberName}` : ""}`
+                : "Sem registro de produção ainda."}
+            </p>
+          </div>
+        )}
+
         {/* Selos de conteúdo: só aparecem quando existe conteúdo de verdade. */}
         {(task.checklistTotal > 0 || task.commentCount > 0 || task.attachmentCount > 0 || task.startDate) && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] font-bold text-slate-500">
@@ -1427,6 +1504,15 @@ function TaskCardView({
               </span>
             )}
           </div>
+        )}
+
+        {/* Quem criou o card. Fica separado dos avatares de responsável de
+            propósito: criar e responder são coisas diferentes, e um avatar a
+            mais na mesma fila faria parecer que o autor também é responsável. */}
+        {task.createdByName && (
+          <p className="mt-2 text-[10px] font-semibold text-slate-400">
+            Criado por {task.createdByName}
+          </p>
         )}
 
         <div className="mt-3 flex min-h-7 items-center gap-1.5 border-t border-slate-100 pt-2.5">

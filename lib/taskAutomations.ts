@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { getPool } from "@/lib/db";
 import { createAppNotifications } from "@/lib/appNotifications";
+import { sendTaskReminderPush } from "@/lib/pushNotifications";
 import {
   ensureTasksSchema,
   getTask,
@@ -592,10 +593,16 @@ function scheduleIsDue(automation: TaskAutomation, now: Date): boolean {
 
 /**
  * Ciclo periódico: comandos agendados + gatilhos de prazo (due_soon /
- * due_overdue) + o aviso de prazo para os responsáveis. Chamado pela rota
- * interna que o server.js aciona.
+ * due_overdue) + o aviso de prazo para os responsáveis + o fechamento mensal
+ * do arquivo. Chamado pela rota interna que o server.js aciona.
  */
-export async function runScheduledAutomations(): Promise<{ scheduled: number; dueTriggered: number; notified: number }> {
+export async function runScheduledAutomations(): Promise<{
+  scheduled: number;
+  dueTriggered: number;
+  notified: number;
+  /** Cards concluídos em meses fechados que foram para o arquivo neste ciclo. */
+  archived: number;
+}> {
   await ensureTasksSchema();
   const pool = getPool();
   const now = new Date();
@@ -630,12 +637,71 @@ export async function runScheduledAutomations(): Promise<{ scheduled: number; du
     scheduled += 1;
   }
 
-  // Gatilhos de prazo: hoje/amanhã (due_soon) e vencido (due_overdue).
+  // Compromisso com hora marcada (ligação de retorno, consultoria) avisa na
+  // hora, não no dia: um "vence hoje" às 8h para uma ligação das 17h não
+  // serve, e às 17h05 já passou. Carimba reminder_sent_at para tocar uma vez
+  // só — remarcar a hora limpa o carimbo e o lembrete volta a valer.
+  const { rows: timedCards } = await pool.query<{
+    id: number;
+    board_id: number;
+    title: string;
+    due_at: string;
+    lead_name: string | null;
+  }>(
+    `SELECT t.id, t.board_id, t.title,
+            TO_CHAR(t.due_time, 'HH24:MI') AS due_at,
+            NULLIF(TRIM(i.payload->>'nome'), '') AS lead_name
+       FROM ${SCHEMA}.tasks t
+       LEFT JOIN inscricoes.inscricoes i ON i.id = t.inscricao_id
+      WHERE NOT t.archived AND NOT t.is_template AND t.completed_at IS NULL
+        AND t.due_date IS NOT NULL AND t.due_time IS NOT NULL
+        AND t.reminder_sent_at IS NULL
+        AND (t.due_date + t.due_time) AT TIME ZONE 'America/Sao_Paulo' <= NOW()`
+  );
+  for (const card of timedCards) {
+    const { rows: assignees } = await pool.query<{ member_id: number }>(
+      `SELECT member_id FROM ${SCHEMA}.task_assignees WHERE task_id=$1`,
+      [card.id]
+    );
+    if (assignees.length > 0) {
+      const body = card.lead_name
+        ? `${card.lead_name} — combinado para as ${card.due_at}.`
+        : `Combinado para as ${card.due_at}.`;
+      await notifyTaskMembers(
+        assignees.map((a) => a.member_id),
+        { id: card.id, title: card.title, boardId: card.board_id },
+        "task_due",
+        body
+      );
+      // Além do feed do site, vai push: compromisso marcado precisa alcançar
+      // quem está na rua, não só quem está com o dashboard aberto.
+      const { rows: emailRows } = await pool.query<{ email: string }>(
+        `SELECT email FROM ${SCHEMA}.team_members
+          WHERE id = ANY($1::int[]) AND email IS NOT NULL`,
+        [assignees.map((a) => a.member_id)]
+      );
+      await sendTaskReminderPush(
+        emailRows.map((row) => row.email),
+        {
+          title: card.title.slice(0, 90),
+          body,
+          url: `/tarefas?board=${card.board_id}&card=${card.id}`,
+          tag: `task-due-${card.id}`,
+        }
+      ).catch((error) => console.error("[tasks] falha no push do lembrete", error));
+      notified += 1;
+    }
+    await pool.query(`UPDATE ${SCHEMA}.tasks SET reminder_sent_at = NOW() WHERE id = $1`, [card.id]);
+  }
+
+  // Gatilhos de prazo: hoje/amanhã (due_soon) e vencido (due_overdue). Tarefa
+  // com hora marcada fica de fora — já foi avisada acima, no horário dela.
   const { rows: dueCards } = await pool.query<{ id: number; board_id: number; title: string; due_date: string; overdue: boolean }>(
     `SELECT id, board_id, title, due_date, (due_date < CURRENT_DATE) AS overdue
        FROM ${SCHEMA}.tasks
       WHERE NOT archived AND NOT is_template AND completed_at IS NULL
-        AND due_date IS NOT NULL AND due_date <= CURRENT_DATE + 1`
+        AND due_date IS NOT NULL AND due_date <= CURRENT_DATE + 1
+        AND due_time IS NULL`
   );
   for (const card of dueCards) {
     const type: AutomationTriggerType = card.overdue ? "due_overdue" : "due_soon";
@@ -661,7 +727,13 @@ export async function runScheduledAutomations(): Promise<{ scheduled: number; du
     }
   }
 
-  return { scheduled, dueTriggered, notified };
+  // Fechamento mensal: tarefa concluída em mês já fechado sai do quadro e vai
+  // para o arquivo. Fica neste ciclo (e não numa automação de quadro) porque
+  // vale para todos os quadros e não é configurável — é a regra da casa.
+  const { archiveClosedMonths } = await import("@/lib/tasksArchive");
+  const { archived } = await archiveClosedMonths();
+
+  return { scheduled, dueTriggered, notified, archived };
 }
 
 /** Ações de agendado que não dependem de um card existente (ex.: criar sprint). */

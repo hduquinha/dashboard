@@ -1,9 +1,17 @@
 // Tipos compartilhados do módulo de Gestão Financeira (VozUP).
 // Valores monetários sempre em reais (number); meses como "YYYY-MM".
 
+import type { FinanceBusinessUnit } from "@/lib/financeBusinessUnits";
+
 export type FinanceCategoryKind = "receita" | "gasto_fixo" | "gasto_variavel";
 export type RevenueStatus = "previsto" | "recebido" | "atrasado" | "cancelado" | "parcial";
 export type ExpenseStatus = "pendente" | "pago" | "atrasado";
+/**
+ * Emissão da nota fiscal da matrícula. `dispensada` cobre o caso real de venda
+ * que não gera NF (cortesia, permuta, contrato já faturado por fora) — sem ela
+ * a fila de pendências nunca zeraria.
+ */
+export type EnrollmentInvoiceStatus = "pendente" | "emitida" | "dispensada";
 export type InstallmentStatus = "pendente" | "pago";
 export type BranchItemCostKind = "fixo" | "variavel";
 export type BranchItemPhase = "implementacao" | "pre_operacional";
@@ -31,6 +39,13 @@ export interface FinancePaymentMethod {
   id: number;
   name: string;
   kind: PaymentMethodKind;
+  /** Taxa própria da forma, em percentual. */
+  feePct: number;
+  /**
+   * Teto de parcelas DESTA forma (carnê em 48x, cartão em 12x…). `null` = sem
+   * teto próprio, vale o teto do sistema (ver lib/enrollmentInstallments.ts).
+   */
+  maxInstallments: number | null;
   active: boolean;
 }
 
@@ -96,6 +111,7 @@ export interface FinanceCatalog {
 export interface FinanceRevenue {
   id: number;
   date: string; // YYYY-MM-DD
+  businessUnit: FinanceBusinessUnit;
   description: string;
   categoryId: number | null;
   categoryName: string | null;
@@ -218,6 +234,7 @@ export interface CommissionsOverview {
 export interface FinanceFixedExpense {
   id: number;
   month: string; // YYYY-MM
+  businessUnit: FinanceBusinessUnit;
   description: string;
   categoryId: number | null;
   categoryName: string | null;
@@ -241,6 +258,7 @@ export interface FinanceFixedExpense {
 export interface FinanceVariableExpense {
   id: number;
   date: string;
+  businessUnit: FinanceBusinessUnit;
   description: string;
   categoryId: number | null;
   categoryName: string | null;
@@ -258,7 +276,14 @@ export interface FinanceEnrollment {
   student: string;
   courseId: number | null;
   courseName: string | null;
+  /** Turma combinada na venda (`academic_classes`); a alocação real vive em /turmas. */
+  classId: number | null;
   totalAmount: number;
+  /** Valor pago na contratação, antes das parcelas mensais. */
+  downPaymentAmount: number;
+  /** Quantidade de parcelas mensais após a entrada. */
+  regularInstallments: number;
+  /** Quantidade total de linhas do cronograma, incluindo entrada quando houver. */
   installments: number;
   paymentMethodId: number | null;
   paymentMethodName: string | null;
@@ -282,6 +307,97 @@ export interface FinanceEnrollment {
   paymentCount: number;
   netTotal: number;
   notes: string | null;
+  /** Controle manual de emissão da NF (a emissão em si acontece fora do CRM). */
+  invoiceStatus: EnrollmentInvoiceStatus;
+  invoiceNumber: string | null;
+  invoiceIssuedAt: string | null;
+  invoiceNotes: string | null;
+  hasInvoiceFile: boolean;
+  invoiceFilename: string | null;
+}
+
+/** Parte de um recebimento aplicada a uma parcela prevista da matrícula. */
+export interface EnrollmentPaymentAllocation {
+  revenueId: number;
+  revenueDate: string;
+  installmentNumber: number | null;
+  amount: number;
+}
+
+/**
+ * Situação de pagamento de UMA matrícula, do ponto de vista do vencimento.
+ *
+ * Diferente de `balanceRemaining`, que é só "quanto falta do contrato": um contrato de
+ * 12x recém-vendido tem saldo alto e está perfeitamente em dia. Quem responde "esta
+ * pessoa está devendo?" é o vencimento das parcelas, e é isso que este tipo carrega.
+ */
+export type EnrollmentPaymentHealthStatus =
+  | "quitado"
+  | "em_dia"
+  | "atrasado"
+  /** Venceu parcela, mas há dinheiro recebido no contrato sem parcela vinculada. */
+  | "a_conciliar"
+  | "sem_cronograma";
+
+export interface EnrollmentPaymentHealth {
+  enrollmentId: number;
+  status: EnrollmentPaymentHealthStatus;
+  /** Soma do que já venceu e continua em aberto no cronograma. */
+  overdueAmount: number;
+  /** O que falta de verdade: o vencido menos o crédito já pago e não aplicado. */
+  uncoveredAmount: number;
+  /**
+   * Dinheiro recebido no contrato que não está quitando parcela nenhuma — pagamento
+   * lançado sem selecionar parcela ou excesso preso numa parcela antiga. É
+   * conciliação pendente, não dívida.
+   */
+  creditAmount: number;
+  overdueCount: number;
+  /** Vencimento mais antigo ainda em aberto — a "idade" da dívida. */
+  oldestDueDate: string | null;
+  daysLate: number;
+  /** Próxima parcela a vencer (ainda no prazo). */
+  nextDueDate: string | null;
+  nextAmount: number;
+  /** Saldo em aberto no cronograma, vencido ou não. */
+  openAmount: number;
+  scheduleCount: number;
+}
+
+/**
+ * Matrícula com dinheiro recebido e NF ainda não emitida — a fila de cobrança.
+ *
+ * Vive fora do recorte de período da aba: uma venda de março com NF pendente
+ * continua pendente em agosto, e sumir do painel quando o filtro muda de mês
+ * seria justamente perder a cobrança.
+ */
+export interface PendingInvoiceEnrollment {
+  id: number;
+  student: string;
+  courseName: string | null;
+  sellerName: string | null;
+  totalAmount: number;
+  paidAmount: number;
+  saleDate: string;
+  /** Data do primeiro pagamento recebido — é dela que nasce a obrigação da NF. */
+  firstPaymentDate: string;
+  /** Dias desde o primeiro pagamento, para ordenar o que está mais atrasado. */
+  daysWaiting: number;
+  /** Repetidos da matrícula para o painel abrir o controle sem recarregar a linha. */
+  invoiceNotes: string | null;
+  hasInvoiceFile: boolean;
+  invoiceFilename: string | null;
+}
+
+/**
+ * Parcela cujo valor previsto mudou porque um recebimento quitou as parcelas
+ * marcadas por menos do que elas somavam. Guardado no próprio pagamento para
+ * que editar ou excluir o recebimento devolva o cronograma ao que era.
+ */
+export interface EnrollmentScheduleShift {
+  revenueId: number;
+  before: number;
+  after: number;
 }
 
 /** Pagamento real lançado contra uma matrícula, independente do plano original de parcelas. */
@@ -293,6 +409,10 @@ export interface EnrollmentPayment {
   revenueDescription: string | null;
   revenueDate: string | null;
   installmentNumber: number | null;
+  /** Uma quitação pode cobrir mais de uma parcela (ex.: agosto e setembro). */
+  allocations: EnrollmentPaymentAllocation[];
+  /** Remanejamento de valores previstos que este recebimento provocou. */
+  scheduleShift: EnrollmentScheduleShift[];
   amount: number;
   paymentDate: string;
   paymentMethod: RevenuePaymentMethod;
@@ -549,6 +669,8 @@ export interface FinanceCommissionPanel {
 export interface FinanceFilters {
   from?: string; // YYYY-MM
   to?: string; // YYYY-MM
+  /** Voz UP ou Instituto UP; ausente soma as duas. Ver lib/financeBusinessUnits.ts. */
+  businessUnit?: FinanceBusinessUnit;
   branchId?: number;
   courseId?: number;
   categoryId?: number;

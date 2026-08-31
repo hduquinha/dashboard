@@ -15,6 +15,7 @@ import {
   Legend,
 } from "recharts";
 import {
+  CheckCircle2,
   Trophy,
   Users,
   UserCheck,
@@ -22,6 +23,7 @@ import {
   Calendar,
   Printer,
 } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import { humanizeName } from "@/lib/utils";
 
 interface TrainingStats {
@@ -353,8 +355,8 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
           <div className="grid gap-6 lg:grid-cols-2">
             {/* Ranking Geral */}
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-              <h3 className="mb-4 text-lg font-semibold text-neutral-900">
-                🏆 Ranking Geral
+              <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-neutral-900">
+                <IconTile icon={Trophy} tone="amber" size="sm" /> Ranking Geral
               </h3>
               {topRecruitersChart.length > 0 ? (
                 <div className="h-80">
@@ -381,8 +383,8 @@ export default function RelatoriosClient({ trainings }: RelatoriosClientProps) {
 
             {/* Ranking de Presença */}
             <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm">
-              <h3 className="mb-4 text-lg font-semibold text-neutral-900">
-                ✅ Ranking de Presença
+              <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-neutral-900">
+                <IconTile icon={CheckCircle2} tone="teal" size="sm" /> Ranking de Presença
               </h3>
               {topPresenceChart.length > 0 ? (
                 <div className="h-80">

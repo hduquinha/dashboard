@@ -15,7 +15,9 @@ import {
   CheckCircle,
   XCircle,
   Info,
+  type LucideIcon,
 } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import { humanizeName } from "@/lib/utils";
 import {
   BarChart,
@@ -291,26 +293,26 @@ export default function RankingClient({ trainings, initialTraining }: RankingCli
           {/* Summary cards */}
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4 print:grid-cols-4">
             <Card
-              icon={<Users className="h-5 w-5 text-cyan-600" />}
-              bg="bg-cyan-100"
+              icon={Users}
+              tone="brand"
               label="Total c/ Presença"
               value={allRecords.length}
             />
             <Card
-              icon={<CheckCircle className="h-5 w-5 text-emerald-600" />}
-              bg="bg-emerald-100"
+              icon={CheckCircle}
+              tone="teal"
               label="Presentes"
               value={totalPresentesDinamica - excludedRecords.filter((r: RankingRecord) => r.presenteNaDinamica).length}
             />
             <Card
-              icon={<EyeOff className="h-5 w-5 text-red-500" />}
-              bg="bg-red-100"
+              icon={EyeOff}
+              tone="ruby"
               label="Excluídos"
               value={excludedIds.size}
             />
             <Card
-              icon={<Timer className="h-5 w-5 text-amber-600" />}
-              bg="bg-amber-100"
+              icon={Timer}
+              tone="amber"
               label={dinamicaDayLabel || "Dia da Dinâmica"}
               value={
                 (() => {
@@ -630,23 +632,19 @@ export default function RankingClient({ trainings, initialTraining }: RankingCli
 
 function Card({
   icon,
-  bg,
+  tone,
   label,
   value,
 }: {
-  icon: React.ReactNode;
-  bg: string;
+  icon: LucideIcon;
+  tone: IconTileTone;
   label: string;
   value: React.ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-neutral-200 bg-white p-5 shadow-sm print:border-neutral-300">
       <div className="flex items-center gap-3">
-        <div
-          className={`flex h-10 w-10 items-center justify-center rounded-xl ${bg}`}
-        >
-          {icon}
-        </div>
+        <IconTile icon={icon} tone={tone} size="md" />
         <div>
           <p className="text-xs font-medium text-neutral-500">{label}</p>
           <p className="text-xl font-bold text-neutral-900">{value}</p>

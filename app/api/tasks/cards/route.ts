@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { actorOf, currentMemberId, requireTasks } from "@/lib/tasksApi";
-import { createTask, userCanAccessBoard } from "@/lib/tasks";
+import { createTask, normalizeTaskKind, userCanAccessBoard } from "@/lib/tasks";
 import { applyCardTemplate, logActivity, userCanAccessTemplate } from "@/lib/taskDetails";
 import { notifyTaskMembers, runAutomations } from "@/lib/taskAutomations";
 
@@ -66,6 +66,9 @@ export async function POST(request: NextRequest) {
     assigneeIds,
     labelIds: Array.isArray(body?.labelIds) ? body.labelIds.filter((n: unknown) => typeof n === "number") : [],
     createdBy,
+    // Sem kind explícito a tarefa nasce pontual — o comportamento de sempre.
+    kind: normalizeTaskKind(body?.kind),
+    panelMemberId: typeof body?.panelMemberId === "number" ? body.panelMemberId : null,
   });
 
   await logActivity({ taskId: task.id, boardId, actor, action: "card_created", detail: { title } });

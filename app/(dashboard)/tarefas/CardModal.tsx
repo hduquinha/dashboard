@@ -19,7 +19,9 @@ import {
   Plus,
   Save,
   Tag,
+  Repeat,
   Trash2,
+  User,
   Users,
   X,
   Zap,
@@ -27,6 +29,8 @@ import {
 import Markdown from "./Markdown";
 import type { BoardData, TaskCard, TaskCustomField, TaskPriority } from "@/lib/tasks";
 import type { TaskActivityEntry, TaskAttachment, TaskChecklist, TaskComment } from "@/lib/taskDetails";
+import { TaskProductionSection } from "@/components/TaskProductionSection";
+import { LeadMovementSection } from "@/components/LeadMovementSection";
 import type { TaskAutomation } from "@/lib/taskAutomations";
 import type { TeamRole } from "@/lib/permissions";
 
@@ -102,6 +106,8 @@ export default function CardModal({ task: initialTask, board, members, automatio
 
   const [title, setTitle] = useState(initialTask.title);
   const [description, setDescription] = useState(initialTask.description ?? "");
+  const [kind, setKind] = useState(initialTask.kind);
+  const [panelMemberId, setPanelMemberId] = useState<number | null>(initialTask.panelMemberId);
   const [editingDescription, setEditingDescription] = useState(false);
   const [priority, setPriority] = useState<TaskPriority>(initialTask.priority);
   const [startDate, setStartDate] = useState(initialTask.startDate ?? "");
@@ -157,7 +163,7 @@ export default function CardModal({ task: initialTask, board, members, automatio
 
   async function saveAll() {
     setSaving(true);
-    await patchTask({
+    const ok = await patchTask({
       title,
       description,
       priority,
@@ -166,6 +172,8 @@ export default function CardModal({ task: initialTask, board, members, automatio
       assigneeIds,
       labelIds,
       completed,
+      kind,
+      panelMemberId,
       // Só manda a data quando o usuário informou uma: sem isso o backend
       // carimba/preserva sozinho pelo checkbox. Desmarcar "concluída" limpa
       // tudo via `completed: false`.
@@ -173,7 +181,19 @@ export default function CardModal({ task: initialTask, board, members, automatio
       customValues,
     });
     setSaving(false);
-    await loadDetail();
+
+    if (!ok) {
+      // Deu erro: o modal fica aberto e NÃO recarrega. Recarregar aqui
+      // descartaria o que a pessoa acabou de digitar junto com a falha —
+      // ela perderia o texto e ainda ficaria sem saber que não salvou.
+      window.alert("Não foi possível salvar as alterações. Tente novamente.");
+      return;
+    }
+
+    // Salvou: fecha o card. O quadro por trás já foi atualizado pelo
+    // `onChanged()` de dentro do patchTask, então recarregar o detalhe de um
+    // modal que está saindo da tela seria trabalho jogado fora.
+    onClose();
   }
 
   async function addChecklist() {
@@ -409,6 +429,18 @@ export default function CardModal({ task: initialTask, board, members, automatio
                   </button>
                 )}
               </section>
+
+              {/* Produção — só em rotina. Tarefa pontual continua simples, com
+                  prazo e conclusão, sem nada disso na tela. */}
+              {task.kind === "recorrente" && (
+                <TaskProductionSection taskId={task.id} />
+              )}
+
+              {/* Painel de leads — só leitura, e só depois que o card sabe de
+                  qual vendedor ele fala. Sem vendedor não há o que consultar. */}
+              {task.kind === "painel_leads" && task.panelMemberId && (
+                <LeadMovementSection taskId={task.id} />
+              )}
 
               {/* Checklists */}
               <section>
@@ -702,6 +734,51 @@ export default function CardModal({ task: initialTask, board, members, automatio
                   onChange={(event) => setDueDate(event.target.value)}
                   className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs"
                 />
+              </SidebarBlock>
+
+              <SidebarBlock icon={<Repeat className="size-3.5" />} label="Tipo de tarefa">
+                <select
+                  value={kind}
+                  onChange={(event) => setKind(event.target.value as TaskCard["kind"])}
+                  className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold"
+                >
+                  <option value="pontual">Pontual — tem prazo e se conclui</option>
+                  <option value="recorrente">Rotina — registra produção por dia</option>
+                  <option value="painel_leads">Histórico de leads — painel de um vendedor</option>
+                </select>
+                <p className="mt-1 text-[10px] leading-snug text-slate-400">
+                  {kind === "recorrente"
+                    ? "A rotina não se conclui: cada dia vira um registro de produção."
+                    : kind === "painel_leads"
+                      ? "Card de leitura: mostra a movimentação de leads do vendedor, por data."
+                      : "Tarefa comum, com prazo e conclusão."}
+                </p>
+                {kind === "painel_leads" && (
+                  <select
+                    value={panelMemberId ?? ""}
+                    onChange={(event) =>
+                      setPanelMemberId(event.target.value ? Number(event.target.value) : null)
+                    }
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-2 py-1 text-xs font-semibold"
+                  >
+                    <option value="">Escolha o vendedor…</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {member.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </SidebarBlock>
+
+              {/* Autoria do card: quem criou e quando. Antes só existia dentro
+                  do histórico da aba Atividade — para saber de quem era o card
+                  a pessoa tinha que trocar de aba e procurar. */}
+              <SidebarBlock icon={<User className="size-3.5" />} label="Criado por">
+                <p className="text-xs font-semibold text-slate-700">
+                  {task.createdByName ?? "Autor não identificado"}
+                </p>
+                <p className="mt-0.5 text-[10px] text-slate-400">{when(task.createdAt)}</p>
               </SidebarBlock>
 
               <SidebarBlock icon={<Clock className="size-3.5" />} label="Prioridade e status">

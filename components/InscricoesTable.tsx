@@ -7,9 +7,11 @@ import { CopyPhoneButton } from '@/components/CopyPhoneButton';
 import { LeadProfileModal } from '@/components/LeadProfileModal';
 import { TagBadge, TagOverflowBadge } from '@/components/TagBadge';
 import type { InscricaoItem, OrderDirection, OrderableField } from '@/types/inscricao';
+import type { CommercialWorkspace } from '@/types/commercial';
 import type { TrainingOption } from '@/types/training';
 import { buildOperationalTags } from '@/lib/participantTags';
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from '@/lib/utils';
+import type { PermissionUser } from '@/lib/permissions';
 
 interface RecruiterOption {
   code: string;
@@ -25,7 +27,14 @@ interface InscricoesTableProps {
   orderDirection: OrderDirection;
   trainingOptions: TrainingOption[];
   recruiterOptions: RecruiterOption[];
-  showUpDayColumns?: boolean;
+  commercial: CommercialWorkspace;
+  currentUser: PermissionUser | null;
+  /**
+   * Presença validada só existe no Encontro Online (cartilha, regra 3). Em turma
+   * presencial — UP Day Plus, aula VozUP — a coluna nem aparece, em vez de ficar
+   * ali sempre vazia sugerindo que ninguém compareceu.
+   */
+  showPresenceColumn?: boolean;
 }
 
 function formatTrainingDate(value: string | null | undefined): string | null {
@@ -34,6 +43,26 @@ function formatTrainingDate(value: string | null | undefined): string | null {
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
+
+interface SortOption {
+  col: OrderableField;
+  label: string;
+  /** Rótulo do botão de direção — muda conforme o campo (A→Z para texto, recência para data). */
+  asc: string;
+  desc: string;
+  defaultDirection: OrderDirection;
+}
+
+const SORT_OPTIONS: SortOption[] = [
+  { col: 'data_cadastro', label: 'Cadastro', asc: 'Mais antigos', desc: 'Mais recentes', defaultDirection: 'desc' },
+  { col: 'criado_em', label: 'Última interação', asc: 'Mais antigas', desc: 'Mais recentes', defaultDirection: 'desc' },
+  { col: 'nome', label: 'Nome', asc: 'A → Z', desc: 'Z → A', defaultDirection: 'asc' },
+  { col: 'cidade', label: 'Cidade', asc: 'A → Z', desc: 'Z → A', defaultDirection: 'asc' },
+  { col: 'profissao', label: 'Profissão', asc: 'A → Z', desc: 'Z → A', defaultDirection: 'asc' },
+  { col: 'treinamento', label: 'Treinamento', asc: 'A → Z', desc: 'Z → A', defaultDirection: 'asc' },
+  { col: 'recrutador', label: 'Indicador', asc: 'A → Z', desc: 'Z → A', defaultDirection: 'asc' },
+  { col: 'telefone', label: 'Telefone', asc: 'Crescente', desc: 'Decrescente', defaultDirection: 'asc' },
+];
 
 const WA_ICON = (
   <svg className="h-3.5 w-3.5 flex-shrink-0" fill="currentColor" viewBox="0 0 24 24">
@@ -50,7 +79,9 @@ export default function InscricoesTable({
   orderDirection,
   trainingOptions,
   recruiterOptions,
-  showUpDayColumns = true,
+  commercial,
+  currentUser,
+  showPresenceColumn = true,
 }: InscricoesTableProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -88,6 +119,15 @@ export default function InscricoesTable({
     updateQuery({ orderBy: col, orderDirection: dir, page: '1' });
   }
 
+  // Trocar o campo pelo seletor já entra na direção natural dele: nome/cidade
+  // em A→Z, data no mais recente primeiro.
+  function handleSortField(col: OrderableField) {
+    const option = SORT_OPTIONS.find((entry) => entry.col === col);
+    updateQuery({ orderBy: col, orderDirection: option?.defaultDirection ?? 'asc', page: '1' });
+  }
+
+  const activeSort = SORT_OPTIONS.find((option) => option.col === orderBy) ?? SORT_OPTIONS[0];
+
   function goToPage(p: number) {
     updateQuery({ page: String(Math.min(Math.max(1, p), totalPages)) });
   }
@@ -110,6 +150,40 @@ export default function InscricoesTable({
         <span className="text-xs text-neutral-500">
           <span className="font-bold text-neutral-900">{total.toLocaleString()}</span> inscrições
         </span>
+
+        <div className="ml-auto flex items-center gap-1.5">
+          <label htmlFor="ordenar-inscricoes" className="text-[11px] font-semibold uppercase tracking-wide text-neutral-400">
+            Ordenar
+          </label>
+          <div className="relative">
+            <select
+              id="ordenar-inscricoes"
+              value={activeSort.col}
+              disabled={isPending}
+              onChange={(e) => handleSortField(e.target.value as OrderableField)}
+              className="h-8 appearance-none rounded-lg border border-neutral-200 bg-white py-1 pl-2.5 pr-7 text-xs font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 disabled:opacity-60"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.col} value={option.col}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <svg className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => updateQuery({ orderDirection: orderDirection === 'asc' ? 'desc' : 'asc', page: '1' })}
+            className="inline-flex h-8 items-center gap-1 rounded-lg border border-neutral-200 bg-white px-2.5 text-xs font-medium text-neutral-700 transition hover:border-cyan-300 hover:text-cyan-700 disabled:opacity-60"
+            title="Inverter a ordem"
+          >
+            <span>{orderDirection === 'asc' ? activeSort.asc : activeSort.desc}</span>
+            <span className="text-neutral-400">{orderDirection === 'asc' ? '↑' : '↓'}</span>
+          </button>
+        </div>
       </div>
 
       {/* ── MOBILE CARDS ────────────────────── */}
@@ -162,28 +236,28 @@ export default function InscricoesTable({
         <table className="w-full table-fixed">
           <colgroup>
             <col className="w-10" />          {/* # */}
-            <col className="w-[30%]" />        {/* Nome */}
+            <col className={showPresenceColumn ? 'w-[30%]' : 'w-[36%]'} /> {/* Nome */}
             <col className="w-28" />           {/* Cadastro */}
             <col className="w-[22%]" />        {/* Treinamento */}
             <col className="w-[18%]" />        {/* Indicador */}
-            <col className="w-20" />           {/* Presença */}
+            {showPresenceColumn && <col className="w-20" />}
             <col className="w-20" />           {/* Ações */}
           </colgroup>
           <thead className="border-b border-neutral-100 bg-neutral-50/80">
             <tr>
               <th className={TH}>#</th>
               <SortTh col="nome" label="Nome" orderBy={orderBy} orderDirection={orderDirection} onSort={handleSort} />
-              <SortTh col="criado_em" label="Cadastro" orderBy={orderBy} orderDirection={orderDirection} onSort={handleSort} extraClass="text-center" />
+              <SortTh col="data_cadastro" label="Cadastro" orderBy={orderBy} orderDirection={orderDirection} onSort={handleSort} extraClass="text-center" />
               <SortTh col="treinamento" label="Treinamento" orderBy={orderBy} orderDirection={orderDirection} onSort={handleSort} />
               <SortTh col="recrutador" label="Indicador" orderBy={orderBy} orderDirection={orderDirection} onSort={handleSort} />
-              <th className={`${TH} text-center`}>Presença</th>
+              {showPresenceColumn && <th className={`${TH} text-center`}>Presença</th>}
               <th className={`${TH} text-right`}>Ações</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-50">
             {records.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-20 text-center text-sm text-neutral-400">
+                <td colSpan={showPresenceColumn ? 7 : 6} className="py-20 text-center text-sm text-neutral-400">
                   Nenhuma inscrição encontrada.
                 </td>
               </tr>
@@ -279,6 +353,7 @@ export default function InscricoesTable({
                   </td>
 
                   {/* Presença */}
+                  {showPresenceColumn && (
                   <td className={`${TD} text-center`}>
                     {ins.presencaValidada ? (
                       ins.presencaAprovada ? (
@@ -293,6 +368,7 @@ export default function InscricoesTable({
                       )
                     ) : <span className="text-[10px] text-neutral-300">—</span>}
                   </td>
+                  )}
 
                   {/* Ações */}
                   <td className={`${TD} text-right`} onClick={(e) => e.stopPropagation()}>
@@ -353,6 +429,8 @@ export default function InscricoesTable({
         onUpdate={syncRecord}
         trainingOptions={trainingOptions}
         recruiterOptions={recruiterOptions}
+        commercial={commercial}
+        currentUser={currentUser}
         onDelete={(id) => {
           setRecords((prev) => prev.filter((r) => r.id !== id));
           setSelectedLeadId(null);

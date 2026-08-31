@@ -93,6 +93,8 @@
   --color-up-cyan-dark: var(--up-cyan-dark);
   --font-sans: var(--font-inter);
   --font-mono: var(--font-geist-mono);
+  /* Títulos do relatório de campanha impresso — ver CampaignReportDocument.tsx. */
+  --font-poppins: var(--font-poppins);
 }
 
 body {

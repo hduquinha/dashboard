@@ -1,15 +1,21 @@
 import {
   ArrowRightLeft,
   BadgeCheck,
+  CalendarCheck,
+  CalendarClock,
+  CalendarPlus,
   Flag,
+  GraduationCap,
   History,
   Link2,
   Mail,
   MessageCircle,
+  MessageCircleWarning,
   Pencil,
   PhoneCall,
   Star,
   StickyNote,
+  Trash2,
   UserRoundCheck,
   UserRoundX,
   RotateCcw,
@@ -65,6 +71,14 @@ export const EVENT_TYPE_LABELS: Record<string, string> = {
   unassigned: "Remoção de atribuição",
   reopened: "Reabertura",
   closed: "Fechamento",
+  objection_recorded: "Objeção do repique",
+  task_created: "Tarefa criada",
+  schedule_outcome: "Resultado do agendamento",
+  task_rescheduled: "Compromisso remarcado",
+  task_deleted: "Tarefa excluída",
+  funnel_changed: "Troca de funil",
+  triage_approved: "Aprovação na triagem",
+  student_created: "Conversão em aluno",
   lead_edited: "Edição de dados",
   lead_status_changed: "Mudança de status",
   lead_stars_changed: "Mudança de temperatura",
@@ -130,6 +144,81 @@ export function describeCommercialEvent(event: DescribableEvent): EventDescripti
         iconClass: "bg-blue-100 text-blue-700",
         title: `Etapa: ${stageLabel(event.fromStage)} → ${stageLabel(event.toStage)}`,
         detail: null,
+      };
+    case "objection_recorded": {
+      const reasons = Array.isArray(payload.reasons)
+        ? (payload.reasons as unknown[]).filter((reason): reason is string => typeof reason === "string")
+        : [];
+      return {
+        icon: MessageCircleWarning,
+        iconClass: "bg-rose-100 text-rose-700",
+        title: reasons.length > 0 ? `Objeção: ${reasons.join(", ")}` : "Objeção registrada",
+        detail: typeof payload.note === "string" && payload.note ? payload.note : null,
+      };
+    }
+    case "task_created":
+      return {
+        icon: CalendarPlus,
+        iconClass: "bg-sky-100 text-sky-700",
+        title: `Tarefa: ${String(payload.title ?? "—")}`,
+        detail: typeof payload.dueDate === "string" && payload.dueDate
+          ? `Para ${payload.dueDate}${typeof payload.dueTime === "string" && payload.dueTime ? ` às ${payload.dueTime}` : ""}`
+          : null,
+      };
+    case "schedule_outcome":
+      return {
+        icon: CalendarCheck,
+        iconClass: "bg-emerald-100 text-emerald-700",
+        title: `Compromisso: ${String(payload.outcomeLabel ?? payload.outcome ?? "resultado registrado")}`,
+        detail: typeof payload.taskTitle === "string" && payload.taskTitle ? payload.taskTitle : null,
+      };
+    case "task_rescheduled": {
+      const de = typeof payload.fromDate === "string" && payload.fromDate
+        ? `${payload.fromDate}${typeof payload.fromTime === "string" && payload.fromTime ? ` ${payload.fromTime}` : ""}`
+        : "sem data";
+      const para = `${String(payload.toDate ?? "—")}${
+        typeof payload.toTime === "string" && payload.toTime ? ` ${payload.toTime}` : ""
+      }`;
+      const nota = typeof payload.note === "string" && payload.note ? ` — ${payload.note}` : "";
+      return {
+        icon: CalendarClock,
+        iconClass: payload.countsAsReschedule
+          ? "bg-amber-100 text-amber-700"
+          : "bg-sky-100 text-sky-700",
+        title: `Compromisso remarcado: ${de} → ${para}`,
+        detail: `${String(payload.reasonLabel ?? payload.reason ?? "motivo não informado")}${nota}`,
+      };
+    }
+    case "task_deleted":
+      return {
+        icon: Trash2,
+        iconClass: "bg-rose-100 text-rose-700",
+        title: `Tarefa excluída: ${String(payload.taskTitle ?? "sem título")}`,
+        detail:
+          typeof payload.dueDate === "string" && payload.dueDate
+            ? `Estava marcada para ${payload.dueDate.split("-").reverse().join("/")}`
+            : null,
+      };
+    case "funnel_changed":
+      return {
+        icon: ArrowRightLeft,
+        iconClass: "bg-indigo-100 text-indigo-700",
+        title: `Movido para o funil ${String(payload.funnelName ?? "—")}`,
+        detail: null,
+      };
+    case "triage_approved":
+      return {
+        icon: BadgeCheck,
+        iconClass: "bg-emerald-100 text-emerald-700",
+        title: `Aprovado na triagem → ${String(payload.funnelName ?? "funil de trabalho")}`,
+        detail: payload.fromFunnelName ? `Saiu de "${String(payload.fromFunnelName)}".` : null,
+      };
+    case "student_created":
+      return {
+        icon: GraduationCap,
+        iconClass: "bg-cyan-100 text-cyan-700",
+        title: `Lead convertido em aluno: ${String(payload.studentName ?? "—")}`,
+        detail: payload.studentId ? `Ficha acadêmica #${String(payload.studentId)}.` : null,
       };
     case "closed": {
       if (payload.reason === "curso_fechado") {

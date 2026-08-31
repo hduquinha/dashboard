@@ -2,6 +2,29 @@ import type { TrainingKind, TrainingOption } from "@/types/training";
 
 const DEFAULT_TRAINING_OPTIONS: TrainingOption[] = [
   {
+    // Turma de dois SÁBADOS (24/10 e 07/11), não mais sábado e domingo
+    // seguidos. Os rótulos "24 e 25/10" continuam como alias: quem carregou a
+    // landing antes da mudança ainda pode enviar o antigo, e ele tem que cair
+    // nesta mesma turma em vez de abrir um bloco solto.
+    id: "24/10 e 07/11",
+    label: "Up Day Plus 24/10 e 07/11/2026",
+    kind: "up-day-plus",
+    days: 2,
+    cluster: 80,
+    aliases: [
+      "24/10 e 07/11/2026",
+      "24 de Outubro e 07 de Novembro de 2026",
+      "24 de outubro e 07 de novembro de 2026",
+      "2026-10-24T08:59:00-03:00",
+      "Inscricao UP Day - Outubro 2026",
+      "Inscrição UP Day - Outubro 2026",
+      "24 e 25/10",
+      "24 e 25/10/2026",
+      "24 e 25 de Outubro de 2026",
+      "24 e 25 de outubro de 2026",
+    ],
+  },
+  {
     id: "15 e 16/08",
     label: "Up Day Plus 15 e 16/08/2026",
     kind: "up-day-plus",
@@ -252,9 +275,23 @@ export function classifyTrainingProduct(
   const configured = findConfiguredTraining(normalized);
   const comparable = normalizeComparable(normalized);
 
+  // Turma cadastrada em `DEFAULT_TRAINING_OPTIONS`/`TRAINING_CONFIG` manda — é lá
+  // que ficam os aliases ISO das turmas do UP Day.
+  if (configured?.kind) {
+    return configured.kind;
+  }
+
+  // Cartilha regra 4: id de turma em ISO é EXCLUSIVO do Encontro Online. Vem
+  // antes do `isUpDay` porque esse sinal é lido do payload e uma inscrição do
+  // Encontro Online pode ter herdado campos do UP Day (camiseta, multa, origem
+  // de importação antiga) de um cadastro anterior da mesma pessoa — a data da
+  // turma manda, o resto do payload não.
+  if (formatTrainingDateLabel(normalized) !== null) {
+    return "online";
+  }
+
   if (
     opts.isUpDay ||
-    configured?.kind === "up-day-plus" ||
     comparable.includes("up day") ||
     comparable.includes("up-day") ||
     /^\d{1,2}\s*e\s*\d{1,2}\//.test(comparable)
@@ -262,11 +299,7 @@ export function classifyTrainingProduct(
     return "up-day-plus";
   }
 
-  if (
-    configured?.kind === "online" ||
-    comparable.includes("encontro online") ||
-    formatTrainingDateLabel(normalized) !== null
-  ) {
+  if (comparable.includes("encontro online")) {
     return "online";
   }
 

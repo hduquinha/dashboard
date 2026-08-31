@@ -42,6 +42,10 @@ const PAID_META_OBJECT_ID_KEYS = [
   "adSetId",
   "ad_id",
   "adId",
+  // `utm_id={{ad.id}}` nas URL tags da Meta: só existe em clique de anúncio, e
+  // é a prova mais forte que temos — não depende de nome nenhum.
+  "utm_id",
+  "utmId",
   "creative_id",
   "creativeId",
 ] as const;

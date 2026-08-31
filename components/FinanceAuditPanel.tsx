@@ -15,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import { cn } from "@/lib/utils";
 import type {
   FinanceAuditAction,
@@ -28,14 +29,14 @@ const PAGE_SIZE = 50;
 
 const ACTION_META: Record<
   FinanceAuditAction,
-  { label: string; icon: typeof FilePlus2; tone: string }
+  { label: string; icon: typeof FilePlus2; tone: string; tile: IconTileTone }
 > = {
-  create: { label: "Criado", icon: FilePlus2, tone: "border-emerald-200 bg-emerald-50 text-emerald-700" },
-  update: { label: "Editado", icon: FileSignature, tone: "border-amber-200 bg-amber-50 text-amber-700" },
-  delete: { label: "Excluído", icon: Trash2, tone: "border-rose-200 bg-rose-50 text-rose-700" },
-  attach: { label: "Comprovante", icon: Paperclip, tone: "border-sky-200 bg-sky-50 text-sky-700" },
-  status: { label: "Status", icon: ShieldCheck, tone: "border-violet-200 bg-violet-50 text-violet-700" },
-  purge: { label: "Evento removido", icon: ShieldX, tone: "border-slate-300 bg-slate-100 text-slate-700" },
+  create: { label: "Criado", icon: FilePlus2, tone: "border-emerald-200 bg-emerald-50 text-emerald-700", tile: "teal" },
+  update: { label: "Editado", icon: FileSignature, tone: "border-amber-200 bg-amber-50 text-amber-700", tile: "amber" },
+  delete: { label: "Excluído", icon: Trash2, tone: "border-rose-200 bg-rose-50 text-rose-700", tile: "ruby" },
+  attach: { label: "Comprovante", icon: Paperclip, tone: "border-sky-200 bg-sky-50 text-sky-700", tile: "brand" },
+  status: { label: "Status", icon: ShieldCheck, tone: "border-violet-200 bg-violet-50 text-violet-700", tile: "slate" },
+  purge: { label: "Evento removido", icon: ShieldX, tone: "border-slate-300 bg-slate-100 text-slate-700", tile: "slate" },
 };
 
 /** Rótulos das colunas do banco. Coluna sem entrada aqui aparece pelo nome cru. */
@@ -411,14 +412,7 @@ export default function FinanceAuditPanel({ canDelete = false }: FinanceAuditPan
               const Icon = meta.icon;
               return (
                 <li key={event.id} className="flex items-start gap-3 p-4">
-                  <span
-                    className={cn(
-                      "flex size-9 flex-shrink-0 items-center justify-center rounded-lg border",
-                      meta.tone
-                    )}
-                  >
-                    <Icon size={16} />
-                  </span>
+                  <IconTile icon={Icon} tone={meta.tile} size="md" />
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">

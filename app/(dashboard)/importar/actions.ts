@@ -68,6 +68,10 @@ function buildUnauthorizedImportState(): ImportActionState {
 export interface ConfirmImportInput {
   filename?: string | null;
   registros: ImportPayload[];
+  /** Manda o lote para o funil de Triagem em vez do CRM geral. */
+  triagem?: boolean;
+  /** Origem carimbada em todo o lote (ex.: "Triagem WhatsApp"). */
+  origem?: string | null;
 }
 
 export interface ConfirmImportResponse {
@@ -168,8 +172,11 @@ export async function confirmImportAction(input: ConfirmImportInput): Promise<Co
   }
 
   try {
+    const origem = typeof input?.origem === "string" ? input.origem.trim().slice(0, 120) : "";
     const summary = await insertImportedInscricoes(registros, {
       filename: sanitizeImportFilename(input?.filename) ?? null,
+      triagem: input?.triagem === true,
+      origem: origem || null,
     });
 
     const insertedLabel = `${summary.inserted} registro${summary.inserted === 1 ? "" : "s"} importado${

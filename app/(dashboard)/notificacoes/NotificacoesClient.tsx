@@ -2,47 +2,43 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { AlarmClock, Bell, CheckCheck, Inbox, ListChecks, MessageSquare, RefreshCw, UserPlus } from "lucide-react";
+import {
+  AlarmClock,
+  AtSign,
+  BadgeDollarSign,
+  Bell,
+  CalendarClock,
+  CheckCheck,
+  Hourglass,
+  Inbox,
+  ListChecks,
+  RefreshCw,
+  UserCheck,
+} from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import { cn } from "@/lib/utils";
 import type { AppNotification, AppNotificationFeed, AppNotificationKind } from "@/types/notifications";
 
 const POLL_INTERVAL_MS = 45_000;
 
+/**
+ * Ícone e tom por tipo de aviso. Cada tipo tem o seu desenho: três deles
+ * dividiam o mesmo relógio, e na lista corrida ficava impossível bater o olho
+ * e saber se o aviso era de lead parado, de lead sem distribuir ou de prazo
+ * de tarefa.
+ */
 const KIND_META: Record<
   AppNotificationKind,
-  { icon: typeof Bell; label: string; tone: string }
+  { icon: typeof Bell; label: string; tone: IconTileTone }
 > = {
-  new_lead: { icon: Inbox, label: "Lead novo", tone: "bg-blue-50 text-blue-700 border-blue-100" },
-  lead_assigned: {
-    icon: UserPlus,
-    label: "Atribuição",
-    tone: "bg-emerald-50 text-emerald-700 border-emerald-100",
-  },
-  stale_lead: {
-    icon: AlarmClock,
-    label: "Lead parado",
-    tone: "bg-amber-50 text-amber-700 border-amber-100",
-  },
-  undistributed_lead: {
-    icon: AlarmClock,
-    label: "Sem distribuir",
-    tone: "bg-rose-50 text-rose-700 border-rose-100",
-  },
-  task_assigned: {
-    icon: ListChecks,
-    label: "Tarefa atribuída",
-    tone: "bg-cyan-50 text-cyan-700 border-cyan-100",
-  },
-  task_mention: {
-    icon: MessageSquare,
-    label: "Citação em tarefa",
-    tone: "bg-violet-50 text-violet-700 border-violet-100",
-  },
-  task_due: {
-    icon: AlarmClock,
-    label: "Prazo de tarefa",
-    tone: "bg-amber-50 text-amber-700 border-amber-100",
-  },
+  new_lead: { icon: Inbox, label: "Lead novo", tone: "brand" },
+  lead_assigned: { icon: UserCheck, label: "Atribuição", tone: "teal" },
+  stale_lead: { icon: AlarmClock, label: "Lead parado", tone: "amber" },
+  undistributed_lead: { icon: Hourglass, label: "Sem distribuir", tone: "ruby" },
+  task_assigned: { icon: ListChecks, label: "Tarefa atribuída", tone: "brand" },
+  task_mention: { icon: AtSign, label: "Citação em tarefa", tone: "slate" },
+  task_due: { icon: CalendarClock, label: "Prazo de tarefa", tone: "amber" },
+  finance_overdue: { icon: BadgeDollarSign, label: "Parcela vencida", tone: "ruby" },
 };
 
 function formatWhen(iso: string): string {
@@ -201,7 +197,7 @@ function NotificationRow({
   const meta = KIND_META[item.kind] ?? {
     icon: Bell,
     label: "Aviso",
-    tone: "bg-slate-50 text-slate-700 border-slate-100",
+    tone: "slate" as IconTileTone,
   };
   const Icon = meta.icon;
   const isUnread = !item.readAt;
@@ -215,14 +211,7 @@ function NotificationRow({
           : "border-[rgb(var(--border-weak))]"
       )}
     >
-      <span
-        className={cn(
-          "flex size-9 flex-shrink-0 items-center justify-center rounded-lg border",
-          meta.tone
-        )}
-      >
-        <Icon className="size-4" />
-      </span>
+      <IconTile icon={Icon} tone={meta.tone} size="md" />
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">

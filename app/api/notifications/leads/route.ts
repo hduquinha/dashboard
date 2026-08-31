@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
-import { assertAuthenticatedRequest } from "@/lib/auth";
+import { getRequestDashboardSession } from "@/lib/auth";
 import { getPool } from "@/lib/db";
 import { describeLeadSource, isMetaOuGoogleAdsOrigem } from "@/lib/leadFields";
+import { canReceiveNewLeadNotifications } from "@/lib/leadNotificationAudience";
 import { parsePayload } from "@/lib/parsePayload";
 
 export const dynamic = "force-dynamic";
@@ -26,10 +27,12 @@ export interface NewLeadNotificationItem {
  * rajada de notificações antigas).
  */
 export async function GET(request: NextRequest) {
-  try {
-    assertAuthenticatedRequest(request);
-  } catch {
+  const session = getRequestDashboardSession(request);
+  if (!session) {
     return NextResponse.json({ error: "Nao autorizado" }, { status: 401 });
+  }
+  if (!canReceiveNewLeadNotifications(session.user)) {
+    return NextResponse.json({ error: "Sem permissao para distribuir leads" }, { status: 403 });
   }
 
   try {

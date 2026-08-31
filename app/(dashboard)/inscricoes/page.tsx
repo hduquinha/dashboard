@@ -6,6 +6,7 @@ import InscricoesTable from "@/components/InscricoesTable";
 import PrintButton from "@/components/PrintButton";
 import { listInscricoes, listTrainingFilterOptions, listRecruitersWithDbNames } from "@/lib/db";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { getCommercialWorkspace } from "@/lib/commercial";
 import { maskInscricoesForUser } from "@/lib/leadPermissions";
 import { isOnlineTraining } from "@/lib/participantTags";
 import type { OrderDirection, OrderableField } from "@/types/inscricao";
@@ -39,8 +40,9 @@ function parseNumberParam(value: string | string[] | undefined, fallback: number
 
 function parseOrderField(value: string | string[] | undefined): OrderableField {
   const raw = pickStringParam(value);
+  // Padrão é a data de cadastro (o que a coluna mostra), não a última interação.
   if (!raw) {
-    return "criado_em";
+    return "data_cadastro";
   }
   const allowed: OrderableField[] = [
     "id",
@@ -50,9 +52,10 @@ function parseOrderField(value: string | string[] | undefined): OrderableField {
     "profissao",
     "treinamento",
     "recrutador",
+    "data_cadastro",
     "criado_em",
   ];
-  return allowed.includes(raw as OrderableField) ? (raw as OrderableField) : "criado_em";
+  return allowed.includes(raw as OrderableField) ? (raw as OrderableField) : "data_cadastro";
 }
 
 function parseDirection(value: string | string[] | undefined): OrderDirection {
@@ -85,11 +88,46 @@ export default async function CrmPage(props: CrmPageProps) {
   const treinamentoSelecionado =
     pickStringParam(searchParams?.data_treinamento) ?? pickStringParam(searchParams?.treinamento) ?? "";
   const tamanhoCamiseta = pickStringParam(searchParams?.tamanho_camiseta) ?? "";
-  const presencaFiltro = pickStringParam(searchParams?.presenca) as "aprovada" | "reprovada" | "validada" | "nao-validada" | undefined;
+  const presencaParam = pickStringParam(searchParams?.presenca) as "aprovada" | "reprovada" | "validada" | "nao-validada" | undefined;
 
   const recruiterOptionsPromise = listRecruitersWithDbNames();
-  const trainingOptions = await listTrainingFilterOptions();
+  // As três consultas são independentes: aguardar a de treinamentos aqui fazia a
+  // busca de inscrições só começar depois dela, somando os tempos em cada
+  // ordenação/filtro. Agora correm juntas.
+  const trainingOptionsPromise = listTrainingFilterOptions();
+  const commercialPromise = getCommercialWorkspace(session?.user ?? null);
   const activeTreinamentoId = treinamentoSelecionado;
+
+  // Presença validada só existe no Encontro Online (cartilha, regra 3): com uma
+  // turma presencial selecionada — UP Day Plus, aula VozUP — a coluna e o filtro
+  // somem. O mesmo sinal decide a consulta, para um `?presenca=` esquecido na URL
+  // não filtrar a lista por baixo do pano depois que o controle sai da tela.
+  const treinamentoSemPresenca = activeTreinamentoId.length > 0 && !isOnlineTraining(activeTreinamentoId);
+  const presencaFiltro = treinamentoSemPresenca ? undefined : presencaParam;
+
+  const resultPromise = listInscricoes({
+    page,
+    pageSize,
+    orderBy,
+    orderDirection,
+    filters: {
+      nome,
+      telefone,
+      cidade,
+      indicacao,
+      dataTreinamento: activeTreinamentoId || undefined,
+      tamanhoCamiseta,
+      presenca: presencaFiltro,
+    },
+  });
+
+  const [recruiterOptions, trainingOptions, result, commercial] = await Promise.all([
+    recruiterOptionsPromise,
+    trainingOptionsPromise,
+    resultPromise,
+    commercialPromise,
+  ]);
+  const visibleInscricoes = maskInscricoesForUser(result.data, session?.user ?? null);
 
   // Agrupar treinamentos por cluster para exibição organizada
   const trainingsByCluster = trainingOptions.reduce((acc, option) => {
@@ -114,36 +152,9 @@ export default async function CrmPage(props: CrmPageProps) {
     .map(Number)
     .sort((a, b) => a - b);
 
-  const resultPromise = listInscricoes({
-    page,
-    pageSize,
-    orderBy,
-    orderDirection,
-    filters: {
-      nome,
-      telefone,
-      cidade,
-      indicacao,
-      dataTreinamento: activeTreinamentoId || undefined,
-      tamanhoCamiseta,
-      presenca: presencaFiltro,
-    },
-  });
-
-  const [recruiterOptions, result] = await Promise.all([
-    recruiterOptionsPromise,
-    resultPromise,
-  ]);
-  const visibleInscricoes = maskInscricoesForUser(result.data, session?.user ?? null);
-
   const selectedTrainingOption = activeTreinamentoId.length
     ? trainingOptions.find((option) => option.id === activeTreinamentoId)
     : undefined;
-  const useOnlineTrainingTable =
-    activeTreinamentoId.length > 0 &&
-    (selectedTrainingOption
-      ? selectedTrainingOption.kind === "online"
-      : isOnlineTraining(activeTreinamentoId));
   const trainingFilterLabel = selectedTrainingOption
     ? selectedTrainingOption.label ?? selectedTrainingOption.id
     : activeTreinamentoId;
@@ -271,6 +282,9 @@ export default async function CrmPage(props: CrmPageProps) {
             
             {/* Quick Search */}
             <form className="grid flex-1 grid-cols-1 gap-2 sm:grid-cols-[1fr_auto] lg:max-w-xl">
+              {/* Preserva a ordenação escolhida na tabela ao buscar/filtrar */}
+              <input type="hidden" name="orderBy" value={orderBy} />
+              <input type="hidden" name="orderDirection" value={orderDirection} />
               <div className="relative flex-1">
                 <svg className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -296,6 +310,9 @@ export default async function CrmPage(props: CrmPageProps) {
         {/* Filter Bar */}
         <div className="border-b border-neutral-100 bg-neutral-50/80 px-4 py-3 sm:px-6">
           <form className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:flex-wrap xl:items-center xl:gap-3">
+            {/* Preserva a ordenação escolhida na tabela ao filtrar */}
+            <input type="hidden" name="orderBy" value={orderBy} />
+            <input type="hidden" name="orderDirection" value={orderDirection} />
             {/* Treinamento Filter */}
             <div className="relative min-w-0">
               <select
@@ -330,23 +347,25 @@ export default async function CrmPage(props: CrmPageProps) {
               </svg>
             </div>
 
-            {/* Presença Filter */}
+            {/* Presença Filter — some em turma presencial (só Encontro Online tem presença) */}
+            {!treinamentoSemPresenca && (
             <div className="relative min-w-0">
               <select
                 name="presenca"
                 defaultValue={presencaFiltro ?? ""}
                 className="min-h-10 w-full appearance-none rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-8 text-sm font-medium text-neutral-700 transition hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-auto"
               >
-                <option value="">✓ Presença</option>
-                <option value="aprovada">✅ Aprovada</option>
-                <option value="reprovada">❌ Reprovada</option>
-                <option value="validada">📋 Validada</option>
+                <option value="">Presença</option>
+                <option value="aprovada">Aprovada</option>
+                <option value="reprovada">Reprovada</option>
+                <option value="validada">Validada</option>
                 <option value="nao-validada">⏳ Sem Presença</option>
               </select>
               <svg className="pointer-events-none absolute right-2 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </div>
+            )}
 
             {/* Camiseta Filter */}
             <div className="relative min-w-0">
@@ -390,7 +409,7 @@ export default async function CrmPage(props: CrmPageProps) {
               type="text"
               name="telefone"
               defaultValue={telefone}
-              placeholder="📱 Telefone..."
+              placeholder="Telefone..."
               className="min-h-10 w-full rounded-lg border border-neutral-200 bg-white py-2 pl-3 pr-3 text-sm font-medium text-neutral-700 transition placeholder:text-neutral-500 hover:border-neutral-300 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100 xl:w-36"
             />
 
@@ -450,7 +469,9 @@ export default async function CrmPage(props: CrmPageProps) {
             orderDirection={orderDirection}
             trainingOptions={trainingOptions}
             recruiterOptions={recruiterOptions}
-            showUpDayColumns={!useOnlineTrainingTable}
+            commercial={commercial}
+            currentUser={session?.user ?? null}
+            showPresenceColumn={!treinamentoSemPresenca}
           />
         </div>
       </section>

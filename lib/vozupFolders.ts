@@ -1,4 +1,9 @@
-import { getPool, TRAINING_EXPRESSION, UPDAY_PAYLOAD_CONDITION } from "@/lib/db";
+import {
+  getPool,
+  NOT_IN_TRIAGE_FUNNEL_CONDITION,
+  TRAINING_EXPRESSION,
+  UPDAY_PAYLOAD_CONDITION,
+} from "@/lib/db";
 import { AULA_SEM_DATA_SUFFIX, aulaBlockToLeadFields } from "@/lib/aulaBlocks";
 import { effectiveOriginSql } from "@/lib/leadOriginPriority";
 
@@ -56,9 +61,13 @@ const LANDING_PAGE_GRUPO_EXPRESSION = `COALESCE(
   ${ORIGEM_RAW}
 )`;
 
+// Lead em funil de triagem (lista fria importada) não é lead da VozUP: além de
+// cair todo na pasta "Outros", ele engordaria em ~50% a CTE de vínculos, que é
+// a consulta mais cara desta área.
 const BASE_FLAGS = `LOWER(TRIM(COALESCE(i.payload->>'_final', ''))) IN ('true', '1', 'sim', 'yes')
   AND COALESCE(i.payload->>'dashboard_excluido', '') != 'true'
-  AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''`;
+  AND COALESCE(i.payload->>'dashboard_merged_into', '') = ''
+  AND ${NOT_IN_TRIAGE_FUNNEL_CONDITION}`;
 
 /**
  * Modelo de vínculos: o lead é único (linha primária visível, BASE_FLAGS) e
@@ -77,15 +86,68 @@ const EVENT_FLAGS = `LOWER(TRIM(COALESCE(e.payload->>'_final', ''))) IN ('true',
   AND COALESCE(e.payload->>'dashboard_vinculo_removido', '') != 'true'`;
 const EVENT_FLAGS_NO_ALIAS = EVENT_FLAGS.replaceAll("e.payload", "payload");
 
+/**
+ * Chaves do payload que as classificações de pasta/bloco leem MUITAS vezes por
+ * linha. `origem` sozinha aparecia 60 vezes na consulta de estatísticas e a
+ * expressão de treinamento (COALESCE de 11 chaves) 17 vezes — 415 extrações de
+ * JSONB por linha, ~840ms só nisso. Extraídas uma vez na CTE materializada
+ * abaixo, viram colunas de texto e as condições passam a comparar strings.
+ * Medido: o mesmo filtro caiu de 192ms para 45ms.
+ */
+const PRECOMPUTED_JSON_KEYS = [
+  "campaign_name", "cancelamentoCiente", "cancelamento_ciente", "dashboard_treinamento",
+  "dataTreinamento", "dataTreinamentoExtenso", "data_treinamento", "data_treinamento_extenso",
+  "email", "form_name", "landing_page_grupo", "multaCiente", "multa_ciente", "origem", "origin",
+  "source", "tamanhoCamiseta", "tamanho_camiseta", "telefone", "training", "trainingCode",
+  "trainingDate", "trainingId", "trainingOption", "trainingStart", "training_code",
+  "training_date", "training_id", "training_option", "training_start", "treinamento",
+  "treinamentoInicio", "treinamentoNome", "treinamento_id", "treinamento_inicio",
+  "treinamento_nome", "whatsapp",
+] as const;
+
+/** Nome da coluna que guarda a chave já extraída. Entre aspas: `trainingId` e `training_id` não podem colidir na dobra de caixa do Postgres. */
+const precomputedColumn = (key: string) => `"k_${key}"`;
+
+const precomputedProjection = (source: string, prefix: string) =>
+  PRECOMPUTED_JSON_KEYS.map(
+    (key) => `${source}->>'${key}' AS "${prefix}_k_${key}"`
+  ).join(",\n      ");
+
+const precomputedLateral = (prefix: string) =>
+  PRECOMPUTED_JSON_KEYS.map(
+    (key) => `l."${prefix}_k_${key}" AS ${precomputedColumn(key)}`
+  ).join(", ");
+
+/**
+ * Reescreve `i.payload->>'chave'` / `e.payload->>'chave'` para a coluna já
+ * extraída. Só pode ser aplicado ao trecho DEPOIS da CTE: dentro dela os
+ * aliases ainda são as tabelas base, onde essas colunas não existem.
+ */
+function usePrecomputedKeys(sql: string): string {
+  let out = sql;
+  for (const key of PRECOMPUTED_JSON_KEYS) {
+    for (const alias of ["i", "e"]) {
+      out = out
+        .replaceAll(`${alias}.payload->>'${key}'`, `${alias}.${precomputedColumn(key)}`)
+        .replaceAll(`${alias}.payload ->> '${key}'`, `${alias}.${precomputedColumn(key)}`);
+    }
+  }
+  return out;
+}
+
+// MATERIALIZED de propósito: sem isso o Postgres inlina a CTE e volta a extrair
+// cada chave do JSONB em toda referência, anulando a pré-extração acima.
 const PRIMARY_EVENT_LINKS_CTE = `
-  primary_event_links AS (
+  primary_event_links AS MATERIALIZED (
     SELECT
       i.id AS primary_id,
       i.payload AS primary_payload,
       i.criado_em AS primary_criado_em,
       i.id AS event_id,
       i.payload AS event_payload,
-      i.criado_em AS event_criado_em
+      i.criado_em AS event_criado_em,
+      ${precomputedProjection("i.payload", "p")},
+      ${precomputedProjection("i.payload", "ev")}
     FROM inscricoes.inscricoes AS i
     WHERE ${BASE_FLAGS}
       AND COALESCE(i.payload->>'dashboard_vinculo_removido', '') != 'true'
@@ -98,7 +160,9 @@ const PRIMARY_EVENT_LINKS_CTE = `
       i.criado_em AS primary_criado_em,
       e.id AS event_id,
       e.payload AS event_payload,
-      e.criado_em AS event_criado_em
+      e.criado_em AS event_criado_em,
+      ${precomputedProjection("i.payload", "p")},
+      ${precomputedProjection("e.payload", "ev")}
     FROM inscricoes.inscricoes AS e
     JOIN inscricoes.inscricoes AS i
       ON i.id = (e.payload->>'dashboard_merged_into')::int
@@ -111,10 +175,12 @@ const PRIMARY_EVENT_LINKS_CTE = `
 const PRIMARY_EVENT_LINKS_FROM = `
   primary_event_links AS l
   CROSS JOIN LATERAL (
-    SELECT l.primary_id AS id, l.primary_payload AS payload, l.primary_criado_em AS criado_em
+    SELECT l.primary_id AS id, l.primary_payload AS payload, l.primary_criado_em AS criado_em,
+      ${precomputedLateral("p")}
   ) AS i
   CROSS JOIN LATERAL (
-    SELECT l.event_id AS id, l.event_payload AS payload, l.event_criado_em AS criado_em
+    SELECT l.event_id AS id, l.event_payload AS payload, l.event_criado_em AS criado_em,
+      ${precomputedLateral("ev")}
   ) AS e
 `;
 
@@ -205,6 +271,19 @@ export interface VozupFolderDef {
    * antes de listar os blocos individuais. Ver LANDING_PAGE_GRUPO_EXPRESSION.
    */
   hasSubfolders?: boolean;
+  /**
+   * SQL da subpasta desta pasta. Sem isto, `hasSubfolders` agrupa pelo TEMA da
+   * landing page, que é o que Landing Pages e Google Ads querem. A pasta Chat
+   * Ads precisa de outro corte — pago × orgânico — e é isso que este campo
+   * permite dizer.
+   */
+  subfolderExpression?: string;
+  /**
+   * Prefixo do rótulo da subpasta na tela. O padrão "Página de " serve para
+   * tema ("Página de Vendas"); a pasta Chat Ads passa vazio porque o valor da
+   * subpasta já é o rótulo final ("Pago (anúncio)").
+   */
+  subfolderLabelPrefix?: string;
 }
 
 export const VOZUP_FOLDERS: VozupFolderDef[] = [
@@ -240,6 +319,24 @@ export const VOZUP_FOLDERS: VozupFolderDef[] = [
     description: "Formulários de tráfego pago da Meta (Facebook/Instagram Lead Ads).",
     condition: `(${ORIGEM_NORM} = 'facebook lead ads' OR ${ORIGEM_NORM} LIKE 'meta%')`,
     blockKind: "meta-form",
+  },
+  {
+    key: "chat-ads",
+    label: "Chat Ads",
+    emoji: "💬",
+    // Cópia da home publicada em /chat-ads só como destino dos anúncios de
+    // chat. A origem é fixa ("Chat Ads VozUP"), não varia com o tráfego — é o
+    // que mantém esses leads separados da Meta. Ver a cartilha §2.
+    description: "Tráfego vindo do ChatGPT, separado entre anúncio pago e link orgânico.",
+    condition: `(${ORIGEM_NORM} LIKE 'chat ads%')`,
+    blockKind: "origem",
+    hasSubfolders: true,
+    // "Chat Ads Orgânico VozUP - ..." vs "Chat Ads VozUP - ...". O LIKE para em
+    // 'org' para casar com e sem acento, seja qual for a collation do banco.
+    subfolderExpression: `CASE WHEN ${ORIGEM_NORM} LIKE 'chat ads org%'
+      THEN 'Orgânico (link em resposta do ChatGPT)'
+      ELSE 'Pago (anúncio)' END`,
+    subfolderLabelPrefix: "",
   },
   {
     key: "google-ads",
@@ -382,6 +479,24 @@ export function vozupFolderCaseForEvents(): string {
   END`;
 }
 
+/**
+ * Mesma classificação acima, mas devolvendo NULL para quem está FORA do escopo
+ * da VozUP (produto do Instituto que não caiu em pasta nomeada). Serve para
+ * calcular a pasta e aplicar o escopo numa passada só: antes, o
+ * `WHERE ${VOZUP_SCOPE_CONDITION}` reavaliava todas as condições de pasta que o
+ * CASE já tinha acabado de testar, dobrando a parte mais cara da consulta.
+ * Equivale exatamente a `vozupFolderCaseForEvents()` + `WHERE escopo`:
+ * pasta nomeada → a chave; sem pasta e sem produto Instituto → 'outros';
+ * sem pasta e com produto Instituto → NULL (a linha sai).
+ */
+function vozupFolderCaseScopedForEvents(): string {
+  return `CASE
+    ${NAMED_FOLDERS.map((f) => `WHEN ${asEvent(f.condition)} THEN '${f.key}'`).join("\n    ")}
+    WHEN NOT ${asEvent(INSTITUTO_PRODUCT_CONDITION)} THEN 'outros'
+    ELSE NULL
+  END`;
+}
+
 /** CASE que dá o rótulo do bloco de um EVENTO (alias "e"). */
 export function vozupBlockCaseForEvents(): string {
   const specialFolders = NAMED_FOLDERS.filter((f) => f.blockKind !== "origem");
@@ -405,7 +520,10 @@ export function vozupSubpastaCaseForEvents(): string {
   if (subfolderFolders.length === 0) return vozupBlockCaseForEvents();
   return `CASE
     ${subfolderFolders
-      .map((f) => `WHEN ${asEvent(f.condition)} THEN ${asEvent(LANDING_PAGE_GRUPO_EXPRESSION)}`)
+      .map(
+        (f) =>
+          `WHEN ${asEvent(f.condition)} THEN ${asEvent(f.subfolderExpression ?? LANDING_PAGE_GRUPO_EXPRESSION)}`
+      )
       .join("\n    ")}
     ELSE ${vozupBlockCaseForEvents()}
   END`;
@@ -430,15 +548,25 @@ export async function listVozupBlockStats(): Promise<VozupBlockStats[]> {
     ultima_conversao: string | null;
   }>(`
     WITH ${PRIMARY_EVENT_LINKS_CTE},
+    -- Pasta e escopo numa passada só; as colunas do payload seguem adiante com
+    -- os mesmos nomes para as expressões de bloco/subpasta continuarem valendo.
+    events_pasta AS MATERIALIZED (
+      ${usePrecomputedKeys(`SELECT
+        ${vozupFolderCaseScopedForEvents()} AS pasta,
+        TRIM(${PERSON_KEY}) AS person_key,
+        e.criado_em AS criado_em,
+        ${PRECOMPUTED_JSON_KEYS.map((key) => `e.${precomputedColumn(key)} AS ${precomputedColumn(key)}`).join(",\n        ")}
+      FROM ${PRIMARY_EVENT_LINKS_FROM}`)}
+    ),
     events AS (
-      SELECT
-        ${vozupFolderCaseForEvents()} AS pasta,
+      ${usePrecomputedKeys(`SELECT
+        pasta,
         ${vozupBlockCaseForEvents()} AS bloco,
         ${vozupSubpastaCaseForEvents()} AS subpasta,
-        TRIM(${PERSON_KEY}) AS person_key,
-        e.criado_em
-      FROM ${PRIMARY_EVENT_LINKS_FROM}
-      WHERE ${asEvent(VOZUP_SCOPE_CONDITION)}
+        person_key,
+        criado_em
+      FROM events_pasta AS e
+      WHERE pasta IS NOT NULL`)}
     ),
     unique_leads AS (
       SELECT DISTINCT ON (person_key, pasta, bloco) pasta, bloco, subpasta, criado_em
@@ -557,11 +685,11 @@ export async function listVozupLeadsByBlock(
   const result = await pool.query<Omit<VozupLead, "aulaPresenca"> & { total: string; aula_presenca: string | null }>(
     `WITH ${PRIMARY_EVENT_LINKS_CTE},
     matching_leads AS (
-      SELECT DISTINCT i.id
+      ${usePrecomputedKeys(`SELECT DISTINCT i.id
       FROM ${PRIMARY_EVENT_LINKS_FROM}
       WHERE ${asEvent(folderCondition(folder))}
         AND ${eventBlockClause}
-        ${criativoClause}
+        ${criativoClause}`)}
     )
     SELECT
       i.id,
@@ -652,11 +780,11 @@ export async function listVozupLeadIdsByBlock(
   const result = await pool.query<{ id: number }>(
     `WITH ${PRIMARY_EVENT_LINKS_CTE},
     matching_leads AS (
-      SELECT DISTINCT i.id
+      ${usePrecomputedKeys(`SELECT DISTINCT i.id
       FROM ${PRIMARY_EVENT_LINKS_FROM}
       WHERE ${asEvent(folderCondition(folder))}
         AND ${eventBlockClause}
-        ${criativoClause}
+        ${criativoClause}`)}
     )
     SELECT i.id
     FROM inscricoes.inscricoes AS i

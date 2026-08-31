@@ -79,7 +79,7 @@ export async function GET(
     ))`;
     const upDayPayloadCondition = `(
       LOWER(${explicitTreinamentoExpr}) LIKE '%up day%'
-      OR LOWER(TRIM(COALESCE(NULLIF(TRIM(payload->>'origem'), ''), NULLIF(TRIM(payload->>'source'), ''), NULLIF(TRIM(payload->>'origin'), ''), ''))) = 'landing-inscricao-agosto-2026'
+      OR LOWER(TRIM(COALESCE(NULLIF(TRIM(payload->>'origem'), ''), NULLIF(TRIM(payload->>'source'), ''), NULLIF(TRIM(payload->>'origin'), ''), ''))) LIKE 'landing-inscricao-%'
       OR (
         TRIM(COALESCE(
           NULLIF(TRIM(payload->>'tamanho_camiseta'), ''),

@@ -1,5 +1,6 @@
 import type { DashboardUser } from "@/lib/auth";
 import { getPool } from "@/lib/db";
+import { normalizeFunnelBoard, type FunnelBoard } from "@/lib/funnelBoards";
 import { hasPermission } from "@/lib/permissions";
 import { isProductivityManager } from "@/lib/productivity";
 import {
@@ -18,6 +19,7 @@ interface FunnelRow {
   id: number;
   name: string;
   is_default: boolean;
+  is_triage?: boolean;
   seller_ids: number[] | null;
   created_at: Date | string;
   updated_at: Date | string;
@@ -30,6 +32,7 @@ interface FunnelStageRow {
   label: string;
   kind: string;
   color: string;
+  board: string;
   position: number;
 }
 
@@ -75,6 +78,7 @@ function stageFromRow(row: FunnelStageRow): FunnelStage {
     label: row.label,
     kind: normalizeKind(row.kind),
     color: normalizeStageColorToken(row.color),
+    board: normalizeFunnelBoard(row.board),
     position: row.position,
   };
 }
@@ -107,6 +111,12 @@ async function ensureFunnelSchema(): Promise<void> {
       position INTEGER NOT NULL DEFAULT 0,
       UNIQUE (funnel_id, key)
     );
+
+    ALTER TABLE ${SCHEMA}.funnels ADD COLUMN IF NOT EXISTS is_triage BOOLEAN NOT NULL DEFAULT false;
+
+    -- Quadro em que a etapa aparece (ver lib/funnelBoards.ts). Etapa antiga
+    -- fica no quadro principal, que e exatamente o comportamento de antes.
+    ALTER TABLE ${SCHEMA}.funnel_stages ADD COLUMN IF NOT EXISTS board TEXT NOT NULL DEFAULT 'principal';
   `);
 
   // Semeia o funil padrão uma única vez, com as mesmas chaves que os leads
@@ -231,6 +241,7 @@ async function fetchFunnels(where = "", values: unknown[] = []): Promise<Funnel[
     id: row.id,
     name: row.name,
     isDefault: row.is_default,
+    isTriage: Boolean(row.is_triage),
     sellerIds: row.seller_ids ?? [],
     stages: stagesByFunnel.get(row.id) ?? [],
     createdAt: new Date(row.created_at).toISOString(),
@@ -243,7 +254,15 @@ export async function listFunnels(): Promise<Funnel[]> {
   return fetchFunnels();
 }
 
-/** Admin/supervisor ve todos os funis; vendedor comum so os que tem atribuidos (+ sempre o padrao, como fallback). */
+/**
+ * Admin/supervisor ve todos os funis; vendedor comum so os que tem atribuidos
+ * (+ sempre o padrao, como fallback).
+ *
+ * Funil de triagem entra para todo mundo: a pasta "Triagem de Leads" do Kanban
+ * mostra so os leads do proprio vendedor (a API forca assignedSellerEmail =
+ * email da sessao), entao nao ha vazamento — e sem isso o vendedor levaria 403
+ * ao abrir a pasta, ja que ninguem esta em seller_ids do funil de triagem.
+ */
 export async function listFunnelsForUser(user: DashboardUser | null | undefined): Promise<Funnel[]> {
   await ensureFunnelSchema();
   const all = await fetchFunnels();
@@ -251,7 +270,9 @@ export async function listFunnelsForUser(user: DashboardUser | null | undefined)
     return all;
   }
   const userId = typeof user?.id === "number" ? user.id : null;
-  return all.filter((funnel) => funnel.isDefault || (userId !== null && funnel.sellerIds.includes(userId)));
+  return all.filter(
+    (funnel) => funnel.isDefault || funnel.isTriage || (userId !== null && funnel.sellerIds.includes(userId))
+  );
 }
 
 export async function getFunnelById(id: number): Promise<Funnel | null> {
@@ -269,12 +290,31 @@ export async function getDefaultFunnel(): Promise<Funnel> {
   return rows[0];
 }
 
+/**
+ * Funil de triagem (lista fria/importada). Só existe um na prática, mas a
+ * consulta aceita vários para o dia em que houver mais de uma frente.
+ */
+export async function getTriageFunnel(): Promise<Funnel | null> {
+  await ensureFunnelSchema();
+  const rows = await fetchFunnels(`WHERE is_triage = true`);
+  return rows[0] ?? null;
+}
+
 export function findStageByKey(funnel: Funnel, key: string): FunnelStage | null {
   return funnel.stages.find((stage) => stage.key === key) ?? null;
 }
 
 export function findStageByKind(funnel: Funnel, kind: CommercialStageKind): FunnelStage | null {
   return funnel.stages.find((stage) => stage.kind === kind) ?? null;
+}
+
+/**
+ * Primeira coluna de um quadro do funil — a porta de entrada dele. É por aqui
+ * que o contrato assinado acha o "Acompanhamento" sem depender de chave fixa:
+ * se o funil não tiver esse quadro montado, o chamador simplesmente não move.
+ */
+export function findStageByBoard(funnel: Funnel, board: FunnelBoard): FunnelStage | null {
+  return funnel.stages.find((stage) => stage.board === board) ?? null;
 }
 
 function validateStageSet(stages: FunnelStageInput[]): void {
@@ -333,9 +373,9 @@ export async function createFunnel(
     const key = uniqueKeyFor(label, takenKeys);
     const color = stage.color ? normalizeStageColorToken(stage.color) : stageColorTokenForIndex(index);
     await pool.query(
-      `INSERT INTO ${SCHEMA}.funnel_stages (funnel_id, key, label, kind, color, position)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [funnelId, key, label, stage.kind, color, index]
+      `INSERT INTO ${SCHEMA}.funnel_stages (funnel_id, key, label, kind, color, board, position)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [funnelId, key, label, stage.kind, color, normalizeFunnelBoard(stage.board), index]
     );
   }
 
@@ -409,15 +449,15 @@ export async function updateFunnel(
     const color = stage.color ? normalizeStageColorToken(stage.color) : stageColorTokenForIndex(index);
     if (stage.id !== null) {
       await pool.query(
-        `UPDATE ${SCHEMA}.funnel_stages SET label = $2, kind = $3, color = $4, position = $5 WHERE id = $1 AND funnel_id = $6`,
-        [stage.id, label, stage.kind, color, index, id]
+        `UPDATE ${SCHEMA}.funnel_stages SET label = $2, kind = $3, color = $4, board = $5, position = $6 WHERE id = $1 AND funnel_id = $7`,
+        [stage.id, label, stage.kind, color, normalizeFunnelBoard(stage.board), index, id]
       );
     } else {
       const key = uniqueKeyFor(label, takenKeys);
       await pool.query(
-        `INSERT INTO ${SCHEMA}.funnel_stages (funnel_id, key, label, kind, color, position)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, key, label, stage.kind, color, index]
+        `INSERT INTO ${SCHEMA}.funnel_stages (funnel_id, key, label, kind, color, board, position)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [id, key, label, stage.kind, color, normalizeFunnelBoard(stage.board), index]
       );
     }
   }

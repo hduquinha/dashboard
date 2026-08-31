@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { getPool, listInscricoes, listTrainingsWithStats } from "@/lib/db";
+import { normalizeBusinessUnit, type FinanceBusinessUnit } from "@/lib/financeBusinessUnits";
+import { classifyPaymentHealth } from "@/lib/receivables";
+import { installmentCap, normalizeEnrollmentInstallments } from "@/lib/enrollmentInstallments";
 import type {
   BranchItemCostKind,
   BranchItemPhase,
   CommissionsOverview,
   CommissionStatus,
+  EnrollmentInvoiceStatus,
   ExpenseStatus,
   FinanceAlertGroup,
   FinanceAgendaClass,
@@ -31,6 +35,9 @@ import type {
   FinanceRevenue,
   FinanceVariableExpense,
   InstallmentStatus,
+  PendingInvoiceEnrollment,
+  EnrollmentPaymentHealth,
+  EnrollmentPaymentHealthStatus,
   ProjectedCommissionRow,
   RealCommissionRow,
   RevenuePayment,
@@ -91,7 +98,7 @@ function dueDayFromDate(value: unknown): number | null {
   return normalizeDueDay(iso.slice(8, 10));
 }
 
-function dateInMonth(monthDate: string, day: number | null): string | null {
+export function dateInMonth(monthDate: string, day: number | null): string | null {
   if (!day) return null;
   const month = monthDate.slice(0, 7);
   const [year, monthNumber] = month.split("-").map((part) => Number.parseInt(part, 10));
@@ -170,7 +177,8 @@ type InvoiceTableName =
   | "finance_branch_items"
   | "finance_revenues"
   | "finance_revenue_payments"
-  | "finance_enrollment_payments";
+  | "finance_enrollment_payments"
+  | "finance_enrollments";
 
 async function saveFinanceInvoice(
   table: InvoiceTableName,
@@ -235,6 +243,7 @@ export async function ensureFinanceSchema(): Promise<void> {
       id BIGSERIAL PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
       kind TEXT NOT NULL DEFAULT 'avista' CHECK (kind IN ('avista', 'parcelado')),
+      fee_pct NUMERIC NOT NULL DEFAULT 0,
       active BOOLEAN NOT NULL DEFAULT TRUE
     );
 
@@ -285,6 +294,8 @@ export async function ensureFinanceSchema(): Promise<void> {
       student TEXT NOT NULL,
       course_id BIGINT REFERENCES ${SCHEMA}.finance_courses(id),
       total_amount NUMERIC NOT NULL,
+      down_payment_amount NUMERIC NOT NULL DEFAULT 0,
+      regular_installments INTEGER NOT NULL DEFAULT 1,
       installments INTEGER NOT NULL DEFAULT 1,
       payment_method_id BIGINT REFERENCES ${SCHEMA}.finance_payment_methods(id),
       card_brand_id BIGINT REFERENCES ${SCHEMA}.finance_card_brands(id),
@@ -364,12 +375,25 @@ export async function ensureFinanceSchema(): Promise<void> {
       net_amount NUMERIC NOT NULL DEFAULT 0,
       notes TEXT,
       asaas_payment_url TEXT,
+      -- Remanejamento de cronograma que ESTE recebimento provocou, no formato
+      -- [{revenueId, before, after}]. É o que permite desfazer o remanejamento
+      -- quando o pagamento é editado ou excluído.
+      schedule_shift JSONB,
       invoice_file BYTEA,
       invoice_filename TEXT,
       invoice_mime TEXT,
       created_by_user_id BIGINT,
       created_by_name TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- Um recebimento pode quitar uma ou várias parcelas. Isto separa a data
+    -- em que o dinheiro entrou da competência de cada parcela quitada.
+    CREATE TABLE IF NOT EXISTS ${SCHEMA}.finance_enrollment_payment_allocations (
+      payment_id BIGINT NOT NULL REFERENCES ${SCHEMA}.finance_enrollment_payments(id) ON DELETE CASCADE,
+      revenue_id BIGINT NOT NULL REFERENCES ${SCHEMA}.finance_revenues(id) ON DELETE CASCADE,
+      amount NUMERIC NOT NULL CHECK (amount > 0),
+      PRIMARY KEY (payment_id, revenue_id)
     );
 
     -- Capacidade configurável para as turmas que já existem no calendário
@@ -488,6 +512,7 @@ export async function ensureFinanceSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_finance_revenue_payments_commission_status ON ${SCHEMA}.finance_revenue_payments(commission_status);
     CREATE INDEX IF NOT EXISTS idx_finance_enrollment_payments_enrollment ON ${SCHEMA}.finance_enrollment_payments(enrollment_id);
     CREATE INDEX IF NOT EXISTS idx_finance_enrollment_payments_date ON ${SCHEMA}.finance_enrollment_payments(payment_date);
+    CREATE INDEX IF NOT EXISTS idx_finance_enrollment_payment_allocations_revenue ON ${SCHEMA}.finance_enrollment_payment_allocations(revenue_id);
     CREATE INDEX IF NOT EXISTS idx_finance_training_capacities_training ON ${SCHEMA}.finance_training_capacities(training_id);
     CREATE INDEX IF NOT EXISTS idx_finance_training_schedules_training ON ${SCHEMA}.finance_training_schedules(training_id);
     CREATE INDEX IF NOT EXISTS idx_finance_fixed_month ON ${SCHEMA}.finance_fixed_expenses(month);
@@ -513,11 +538,61 @@ export async function ensureFinanceSchema(): Promise<void> {
       ALTER TABLE ${SCHEMA}.finance_branch_items
         ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'implementacao' CHECK (phase IN ('implementacao', 'pre_operacional'));
       ALTER TABLE ${SCHEMA}.finance_enrollments
-        ADD COLUMN IF NOT EXISTS card_brand_id BIGINT REFERENCES ${SCHEMA}.finance_card_brands(id);
+        ADD COLUMN IF NOT EXISTS card_brand_id BIGINT REFERENCES ${SCHEMA}.finance_card_brands(id),
+        ADD COLUMN IF NOT EXISTS down_payment_amount NUMERIC NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS regular_installments INTEGER,
+        ADD COLUMN IF NOT EXISTS invoice_status TEXT NOT NULL DEFAULT 'pendente',
+        ADD COLUMN IF NOT EXISTS invoice_number TEXT,
+        ADD COLUMN IF NOT EXISTS invoice_issued_at DATE,
+        ADD COLUMN IF NOT EXISTS invoice_notes TEXT,
+        ADD COLUMN IF NOT EXISTS invoice_file BYTEA,
+        ADD COLUMN IF NOT EXISTS invoice_filename TEXT,
+        ADD COLUMN IF NOT EXISTS invoice_mime TEXT;
+      -- Unidade de negócio do lançamento (ver lib/financeBusinessUnits.ts).
+      -- Receita e despesa das duas empresas entram na mesma base; a coluna
+      -- existe para a leitura conseguir separar. Nasce 'vozup' porque toda a
+      -- base anterior à separação é da VozUP.
+      ALTER TABLE ${SCHEMA}.finance_revenues
+        ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'vozup';
+      ALTER TABLE ${SCHEMA}.finance_fixed_expenses
+        ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'vozup';
+      ALTER TABLE ${SCHEMA}.finance_variable_expenses
+        ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'vozup';
+      ALTER TABLE ${SCHEMA}.finance_enrollments
+        ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'vozup';
+      -- Itens de implantação da unidade entram no mesmo recorte de despesa que
+      -- as variáveis (compartilham o filtro em getFinanceMonthlyTotals e na
+      -- visão de caixa). Sem a coluna aqui, filtrar por unidade de negócio
+      -- quebrava a consulta inteira — foi o que derrubou a tela em 19/08/2026.
+      ALTER TABLE ${SCHEMA}.finance_branch_items
+        ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'vozup';
+      CREATE INDEX IF NOT EXISTS idx_finance_branch_items_business_unit
+        ON ${SCHEMA}.finance_branch_items(business_unit);
+      CREATE INDEX IF NOT EXISTS idx_finance_revenues_business_unit
+        ON ${SCHEMA}.finance_revenues(business_unit);
+      CREATE INDEX IF NOT EXISTS idx_finance_fixed_business_unit
+        ON ${SCHEMA}.finance_fixed_expenses(business_unit);
+      CREATE INDEX IF NOT EXISTS idx_finance_variable_business_unit
+        ON ${SCHEMA}.finance_variable_expenses(business_unit);
+
+      ALTER TABLE ${SCHEMA}.finance_enrollments
+        DROP CONSTRAINT IF EXISTS finance_enrollments_invoice_status_check;
+      ALTER TABLE ${SCHEMA}.finance_enrollments
+        ADD CONSTRAINT finance_enrollments_invoice_status_check
+        CHECK (invoice_status IN ('pendente', 'emitida', 'dispensada'));
+      CREATE INDEX IF NOT EXISTS idx_finance_enrollments_invoice_status
+        ON ${SCHEMA}.finance_enrollments(invoice_status);
       ALTER TABLE ${SCHEMA}.finance_installment_rates
         ADD COLUMN IF NOT EXISTS brand_id BIGINT REFERENCES ${SCHEMA}.finance_card_brands(id) ON DELETE CASCADE;
+      -- Teto de parcelas por forma de pagamento (carnê em 48x, cartão em 12x…).
+      -- NULL = sem teto próprio: vale o teto do sistema, que é como as formas
+      -- antigas se comportavam antes desta coluna existir.
+      ALTER TABLE ${SCHEMA}.finance_payment_methods
+        ADD COLUMN IF NOT EXISTS max_installments INTEGER,
+        ADD COLUMN IF NOT EXISTS fee_pct NUMERIC NOT NULL DEFAULT 0;
       ALTER TABLE ${SCHEMA}.finance_revenues
         ADD COLUMN IF NOT EXISTS due_date DATE,
+        ADD COLUMN IF NOT EXISTS card_brand_id BIGINT REFERENCES ${SCHEMA}.finance_card_brands(id),
         ADD COLUMN IF NOT EXISTS lead_inscricao_id BIGINT,
         ADD COLUMN IF NOT EXISTS lead_name TEXT,
         ADD COLUMN IF NOT EXISTS lead_phone TEXT,
@@ -533,6 +608,7 @@ export async function ensureFinanceSchema(): Promise<void> {
       ALTER TABLE ${SCHEMA}.finance_enrollment_payments
         ADD COLUMN IF NOT EXISTS revenue_id BIGINT REFERENCES ${SCHEMA}.finance_revenues(id) ON DELETE SET NULL,
         ADD COLUMN IF NOT EXISTS asaas_payment_url TEXT,
+        ADD COLUMN IF NOT EXISTS schedule_shift JSONB,
         ADD COLUMN IF NOT EXISTS commission_pct NUMERIC NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS commission_amount NUMERIC NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS commission_status TEXT NOT NULL DEFAULT 'disponivel',
@@ -556,6 +632,35 @@ export async function ensureFinanceSchema(): Promise<void> {
         CHECK (product IN ('online', 'up-day-plus', 'curso-oratoria'));
       CREATE INDEX IF NOT EXISTS idx_finance_enrollment_payments_revenue
         ON ${SCHEMA}.finance_enrollment_payments(revenue_id);
+      CREATE TABLE IF NOT EXISTS ${SCHEMA}.finance_enrollment_payment_allocations (
+        payment_id BIGINT NOT NULL REFERENCES ${SCHEMA}.finance_enrollment_payments(id) ON DELETE CASCADE,
+        revenue_id BIGINT NOT NULL REFERENCES ${SCHEMA}.finance_revenues(id) ON DELETE CASCADE,
+        amount NUMERIC NOT NULL CHECK (amount > 0),
+        PRIMARY KEY (payment_id, revenue_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_finance_enrollment_payment_allocations_revenue
+        ON ${SCHEMA}.finance_enrollment_payment_allocations(revenue_id);
+    `);
+    // Contratos antigos não tinham entrada registrada. Eles preservam o número
+    // de parcelas já existente como quantidade de parcelas mensais.
+    await getPool().query(`
+      UPDATE ${SCHEMA}.finance_enrollments
+         SET regular_installments = CASE
+           WHEN COALESCE(down_payment_amount, 0) > 0 THEN GREATEST(1, installments - 1)
+           ELSE GREATEST(1, installments)
+         END
+       WHERE regular_installments IS NULL;
+      ALTER TABLE ${SCHEMA}.finance_enrollments
+        ALTER COLUMN regular_installments SET DEFAULT 1,
+        ALTER COLUMN regular_installments SET NOT NULL;
+
+      -- Compatibilidade: cada pagamento antigo que apontava para uma parcela
+      -- ganha seu rateio equivalente, sem alterar valores nem datas.
+      INSERT INTO ${SCHEMA}.finance_enrollment_payment_allocations (payment_id, revenue_id, amount)
+      SELECT ep.id, ep.revenue_id, ep.amount
+        FROM ${SCHEMA}.finance_enrollment_payments ep
+       WHERE ep.revenue_id IS NOT NULL
+      ON CONFLICT (payment_id, revenue_id) DO NOTHING;
     `);
     // Taxas já existiam com PK em (installments) sozinho; agora a combinação
     // (installments, brand_id) é que precisa ser única — brand_id NULL segue
@@ -651,14 +756,20 @@ const DEFAULT_FIXED_CATEGORIES = [
   "Outros",
 ];
 const DEFAULT_VARIABLE_CATEGORIES = ["Manutenção", "Eventos", "Materiais", "Outros"];
-const DEFAULT_PAYMENT_METHODS: Array<{ name: string; kind: "avista" | "parcelado" }> = [
-  { name: "PIX", kind: "avista" },
-  { name: "Débito", kind: "avista" },
-  { name: "Dinheiro", kind: "avista" },
-  { name: "Transferência", kind: "avista" },
-  { name: "Crédito à Vista", kind: "avista" },
-  { name: "Cartão Parcelado", kind: "parcelado" },
-  { name: "Boleto Parcelado", kind: "parcelado" },
+const DEFAULT_PAYMENT_METHODS: Array<{
+  name: string;
+  kind: "avista" | "parcelado";
+  /** null = sem teto próprio (vale o teto do sistema). */
+  maxInstallments: number | null;
+}> = [
+  { name: "PIX", kind: "avista", maxInstallments: null },
+  { name: "Débito", kind: "avista", maxInstallments: null },
+  { name: "Dinheiro", kind: "avista", maxInstallments: null },
+  { name: "Transferência", kind: "avista", maxInstallments: null },
+  { name: "Crédito à Vista", kind: "avista", maxInstallments: null },
+  { name: "Cartão Parcelado", kind: "parcelado", maxInstallments: null },
+  { name: "Boleto Parcelado", kind: "parcelado", maxInstallments: null },
+  { name: "Carnê", kind: "parcelado", maxInstallments: 48 },
 ];
 const DEFAULT_EMPLOYEES = [
   "Henrique",
@@ -702,9 +813,9 @@ async function seedFinanceDefaults(): Promise<void> {
 
   for (const method of DEFAULT_PAYMENT_METHODS) {
     await pool.query(
-      `INSERT INTO ${SCHEMA}.finance_payment_methods (name, kind) VALUES ($1, $2)
+      `INSERT INTO ${SCHEMA}.finance_payment_methods (name, kind, max_installments) VALUES ($1, $2, $3)
        ON CONFLICT (name) DO NOTHING`,
-      [method.name, method.kind]
+      [method.name, method.kind, method.maxInstallments]
     );
   }
 
@@ -788,6 +899,8 @@ export async function getFinanceCatalog(): Promise<FinanceCatalog> {
       id: Number(r.id),
       name: r.name,
       kind: r.kind === "parcelado" ? "parcelado" : "avista",
+      feePct: num(r.fee_pct),
+      maxInstallments: r.max_installments === null ? null : Number(r.max_installments),
       active: Boolean(r.active),
     })),
     courses: courses.rows.map((r) => ({
@@ -847,7 +960,8 @@ export const CATALOG_ENTITIES: Record<string, CatalogEntityDef> = {
   },
   "payment-methods": {
     table: "finance_payment_methods",
-    columns: { name: "name", kind: "kind", active: "active" },
+    columns: { name: "name", kind: "kind", feePct: "fee_pct", maxInstallments: "max_installments", active: "active" },
+    numericFields: ["feePct", "maxInstallments"],
   },
   courses: {
     table: "finance_courses",
@@ -887,7 +1001,13 @@ function prepareCatalogFields(
       if (numericFields.has(api) && typeof value === "string" && value.trim() === "") return false;
       return true;
     })
-    .map(([api, col]) => [col, numericFields.has(api) ? num(payload[api]) : payload[api]]);
+    .map(([api, col]) => {
+      if (!numericFields.has(api)) return [col, payload[api]];
+      const value = num(payload[api]);
+      // Percentuais de taxa não podem gerar valores negativos ou maiores que
+      // 100%, mesmo quando a alteração vem de uma chamada direta à API.
+      return [col, api === "feePct" ? Math.min(100, Math.max(0, round2(value))) : value];
+    });
 }
 
 export async function createCatalogEntity(
@@ -983,16 +1103,16 @@ export async function updateBoletoFee(value: number): Promise<void> {
 // ── Receitas ─────────────────────────────────────────────────────
 
 /**
- * Pagamentos de matrícula pertencem a uma parcela prevista específica. A
- * parcela continua sendo uma previsão, mas seu status é definido exclusivamente
- * pela soma dos pagamentos ligados a ela — nunca pelo total recebido em outras
- * parcelas do contrato.
+ * Uma parcela continua sendo uma previsão, mas seu status é definido somente
+ * pelos rateios que a quitam. Um recebimento pode ratear agosto e setembro ao
+ * mesmo tempo, sem jogar o caixa de setembro para agosto (a entrada no caixa
+ * continua usando a data do pagamento).
  */
 const ENROLLMENT_ALLOCATION_JOIN = `
   LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(ep.amount), 0) AS linked_paid
-    FROM ${SCHEMA}.finance_enrollment_payments ep
-    WHERE ep.revenue_id = r.id
+    SELECT COALESCE(SUM(epa.amount), 0) AS linked_paid
+    FROM ${SCHEMA}.finance_enrollment_payment_allocations epa
+    WHERE epa.revenue_id = r.id
   ) alloc ON TRUE
 `;
 
@@ -1040,12 +1160,13 @@ const REVENUE_SELECT = `
     WHERE ep.enrollment_id = enrollment.id
   ) enrollment_pay ON TRUE
   LEFT JOIN LATERAL (
-    SELECT COALESCE(SUM(ep.amount), 0) AS paid_amount,
-           COALESCE(SUM(ep.fee_amount), 0) AS fee_total,
-           COALESCE(SUM(ep.net_amount), 0) AS net_received,
+    SELECT COALESCE(SUM(epa.amount), 0) AS paid_amount,
+           COALESCE(SUM(ep.fee_amount * epa.amount / NULLIF(ep.amount, 0)), 0) AS fee_total,
+           COALESCE(SUM(ep.net_amount * epa.amount / NULLIF(ep.amount, 0)), 0) AS net_received,
            COUNT(*)::int AS payment_count
-    FROM ${SCHEMA}.finance_enrollment_payments ep
-    WHERE ep.revenue_id = r.id
+    FROM ${SCHEMA}.finance_enrollment_payment_allocations epa
+    JOIN ${SCHEMA}.finance_enrollment_payments ep ON ep.id = epa.payment_id
+    WHERE epa.revenue_id = r.id
   ) linked_enrollment_pay ON TRUE
   ${ENROLLMENT_ALLOCATION_JOIN}
 `;
@@ -1068,6 +1189,7 @@ function mapRevenue(r: Record<string, unknown>): FinanceRevenue {
   return {
     id: Number(r.id),
     date: toIsoDate(r.date) ?? "",
+    businessUnit: normalizeBusinessUnit(r.business_unit),
     description: String(r.description ?? ""),
     categoryId: r.category_id === null ? null : Number(r.category_id),
     categoryName: (r.category_name as string) ?? null,
@@ -1141,6 +1263,10 @@ export async function listRevenues(filters: FinanceFilters = {}): Promise<Financ
       conditions.push(`${column} = $${values.length}`);
     }
   }
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`r.business_unit = $${values.length}`);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await getPool().query(
     `${REVENUE_SELECT} ${where} ORDER BY r.date DESC, r.id DESC LIMIT 2000`,
@@ -1151,6 +1277,7 @@ export async function listRevenues(filters: FinanceFilters = {}): Promise<Financ
 
 export interface RevenueInput {
   date: string;
+  businessUnit?: FinanceBusinessUnit;
   description: string;
   categoryId?: number | null;
   origin?: string | null;
@@ -1183,8 +1310,8 @@ export async function createRevenue(input: RevenueInput): Promise<number> {
   const { rows } = await getPool().query(
     `INSERT INTO ${SCHEMA}.finance_revenues
        (date, description, category_id, origin, student, course_id, branch_id, payment_method_id, seller_id, amount, fee_amount, status, notes,
-        due_date, lead_inscricao_id, lead_name, lead_phone, commission_pct, revenue_mode)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'previsto', $12, $13, $14, $15, $16, $17, 'avulso')
+        due_date, lead_inscricao_id, lead_name, lead_phone, commission_pct, revenue_mode, business_unit)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'previsto', $12, $13, $14, $15, $16, $17, 'avulso', $18)
      RETURNING id`,
     [
       input.date,
@@ -1204,6 +1331,7 @@ export async function createRevenue(input: RevenueInput): Promise<number> {
       input.leadName?.trim() || null,
       input.leadPhone?.trim() || null,
       round2(input.commissionPct ?? 0),
+      normalizeBusinessUnit(input.businessUnit),
     ]
   );
   return Number(rows[0].id);
@@ -1815,6 +1943,7 @@ function mapFixed(r: Record<string, unknown>): FinanceFixedExpense {
   return {
     id: Number(r.id),
     month: dateToMonth(r.month),
+    businessUnit: normalizeBusinessUnit(r.business_unit),
     description: String(r.description ?? ""),
     categoryId: r.category_id === null ? null : Number(r.category_id),
     categoryName: (r.category_name as string) ?? null,
@@ -2298,12 +2427,14 @@ export async function getAllTimeSpend(): Promise<FinanceAllTimeSpend> {
   };
 }
 
-export async function listFixedExpenses(month: string): Promise<FinanceFixedExpense[]> {
+export async function listFixedExpenses(month: string, businessUnit?: FinanceBusinessUnit): Promise<FinanceFixedExpense[]> {
   if (month < FIXED_EXPENSES_START_MONTH) return [];
   await ensureFixedExpensesForMonth(month);
+  const values: unknown[] = [monthToDate(month)];
+  const unitSql = businessUnit ? ` AND f.business_unit = $${values.push(businessUnit)}` : "";
   const { rows } = await getPool().query(
-    `${FIXED_SELECT} WHERE f.month = $1 ORDER BY f.kind, f.description`,
-    [monthToDate(month)]
+    `${FIXED_SELECT} WHERE f.month = $1${unitSql} ORDER BY f.kind, f.description`,
+    values
   );
   return rows.map(mapFixed);
 }
@@ -2313,7 +2444,7 @@ export async function listFixedExpenses(month: string): Promise<FinanceFixedExpe
  * em "Período". Provisiona cada mês do intervalo até o mês corrente (meses
  * futuros nunca são gerados por navegação).
  */
-export async function listFixedExpensesRange(from: string, to: string): Promise<FinanceFixedExpense[]> {
+export async function listFixedExpensesRange(from: string, to: string, businessUnit?: FinanceBusinessUnit): Promise<FinanceFixedExpense[]> {
   const effectiveFrom = from < FIXED_EXPENSES_START_MONTH ? FIXED_EXPENSES_START_MONTH : from;
   if (effectiveFrom > to) return [];
   const provisionLimit = currentMonth();
@@ -2323,9 +2454,11 @@ export async function listFixedExpensesRange(from: string, to: string): Promise<
     cursor = addMonths(cursor, 1);
   }
   await ensureFinanceSchema();
+  const values: unknown[] = [monthToDate(effectiveFrom), monthToDate(addMonths(to, 1))];
+  const unitSql = businessUnit ? ` AND f.business_unit = $${values.push(businessUnit)}` : "";
   const { rows } = await getPool().query(
-    `${FIXED_SELECT} WHERE f.month >= $1 AND f.month < $2 ORDER BY f.month, f.kind, f.description`,
-    [monthToDate(effectiveFrom), monthToDate(addMonths(to, 1))]
+    `${FIXED_SELECT} WHERE f.month >= $1 AND f.month < $2${unitSql} ORDER BY f.month, f.kind, f.description`,
+    values
   );
   return rows.map(mapFixed);
 }
@@ -2335,17 +2468,20 @@ export async function listFixedExpensesRange(from: string, to: string): Promise<
  * "ver todos os meses" da lista. Não chama ensureFixedExpensesForMonth (não
  * há um mês único a garantir) nem gera nada novo, só lista o que já existe.
  */
-export async function listAllFixedExpenses(): Promise<FinanceFixedExpense[]> {
+export async function listAllFixedExpenses(businessUnit?: FinanceBusinessUnit): Promise<FinanceFixedExpense[]> {
   await ensureFinanceSchema();
+  const values: unknown[] = [FIXED_EXPENSES_START_DATE];
+  const unitSql = businessUnit ? ` AND f.business_unit = $${values.push(businessUnit)}` : "";
   const { rows } = await getPool().query(
-    `${FIXED_SELECT} WHERE f.month >= $1::date ORDER BY f.month DESC, f.kind, f.description`,
-    [FIXED_EXPENSES_START_DATE]
+    `${FIXED_SELECT} WHERE f.month >= $1::date${unitSql} ORDER BY f.month DESC, f.kind, f.description`,
+    values
   );
   return rows.map(mapFixed);
 }
 
 export interface FixedExpenseInput {
   month: string;
+  businessUnit?: FinanceBusinessUnit;
   description: string;
   categoryId?: number | null;
   dueDate?: string | null;
@@ -2369,8 +2505,8 @@ export async function createFixedExpense(input: FixedExpenseInput): Promise<numb
   const recurringKey = recurringLocked ? randomUUID() : null;
   const { rows } = await getPool().query(
     `INSERT INTO ${SCHEMA}.finance_fixed_expenses
-       (month, description, category_id, due_date, amount, benefits_amount, status, paid_at, notes, invoice_url, kind, recurring_locked, recurring_key, recurring_due_day)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'geral', $11, $12, $13) RETURNING id`,
+       (month, description, category_id, due_date, amount, benefits_amount, status, paid_at, notes, invoice_url, kind, recurring_locked, recurring_key, recurring_due_day, business_unit)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'geral', $11, $12, $13, $14) RETURNING id`,
     [
       monthToDate(input.month),
       input.description.trim(),
@@ -2385,6 +2521,7 @@ export async function createFixedExpense(input: FixedExpenseInput): Promise<numb
       recurringLocked,
       recurringKey,
       recurringDueDay,
+      normalizeBusinessUnit(input.businessUnit),
     ]
   );
   const id = Number(rows[0].id);
@@ -2424,6 +2561,7 @@ export async function updateFixedExpense(id: number, input: Partial<FixedExpense
     paid_at: input.paidAt === undefined ? undefined : input.paidAt || null,
     notes: input.notes,
     invoice_url: input.invoiceUrl,
+    business_unit: input.businessUnit,
     recurring_locked: input.recurringLocked === undefined ? undefined : nextRecurringLocked,
     recurring_key: nextRecurringKey !== currentRecurringKey ? nextRecurringKey : undefined,
     recurring_due_day:
@@ -2487,6 +2625,7 @@ function mapVariable(r: Record<string, unknown>): FinanceVariableExpense {
   return {
     id: Number(r.id),
     date: toIsoDate(r.date) ?? "",
+    businessUnit: normalizeBusinessUnit(r.business_unit),
     description: String(r.description ?? ""),
     categoryId: r.category_id === null ? null : Number(r.category_id),
     categoryName: (r.category_name as string) ?? null,
@@ -2507,6 +2646,10 @@ export async function listVariableExpenses(filters: FinanceFilters = {}): Promis
   if (filters.from) {
     values.push(monthToDate(filters.from));
     conditions.push(`v.date >= $${values.length}`);
+  }
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`v.business_unit = $${values.length}`);
   }
   if (filters.to) {
     values.push(monthToDate(addMonths(filters.to, 1)));
@@ -2530,6 +2673,7 @@ export async function listVariableExpenses(filters: FinanceFilters = {}): Promis
 
 export interface VariableExpenseInput {
   date: string;
+  businessUnit?: FinanceBusinessUnit;
   description: string;
   categoryId?: number | null;
   branchId?: number | null;
@@ -2542,8 +2686,8 @@ export async function createVariableExpense(input: VariableExpenseInput): Promis
   await ensureFinanceSchema();
   if (!input.description?.trim()) throw new Error("Descrição é obrigatória.");
   const { rows } = await getPool().query(
-    `INSERT INTO ${SCHEMA}.finance_variable_expenses (date, description, category_id, branch_id, amount, notes, invoice_url)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    `INSERT INTO ${SCHEMA}.finance_variable_expenses (date, description, category_id, branch_id, amount, notes, invoice_url, business_unit)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
     [
       input.date,
       input.description.trim(),
@@ -2552,6 +2696,7 @@ export async function createVariableExpense(input: VariableExpenseInput): Promis
       round2(input.amount ?? 0),
       input.notes?.trim() || null,
       input.invoiceUrl?.trim() || null,
+      normalizeBusinessUnit(input.businessUnit),
     ]
   );
   return Number(rows[0].id);
@@ -2567,6 +2712,7 @@ export async function updateVariableExpense(id: number, input: Partial<VariableE
     amount: input.amount !== undefined ? round2(input.amount) : undefined,
     notes: input.notes,
     invoice_url: input.invoiceUrl,
+    business_unit: input.businessUnit,
   };
   const entries = Object.entries(map).filter(([, v]) => v !== undefined);
   if (entries.length === 0) return;
@@ -2624,10 +2770,34 @@ async function lookupInstallmentRatePct(
   return num(rows[0]?.rate_pct);
 }
 
+/**
+ * Uma parcela combinada com o aluno. Existe porque nem toda venda é parcelada
+ * em fatias iguais: entrada maior, parcela de reforço no meio, uma no Pix e o
+ * resto no cartão são o caso normal, não a exceção.
+ */
+export interface EnrollmentScheduleItem {
+  amount: number;
+  /** Vencimento exato (YYYY-MM-DD); a competência é o mês dele. */
+  dueDate: string;
+  /** Diferencia a entrada das parcelas mensais no cronograma. */
+  type?: "entrada" | "parcela";
+  paymentMethodId?: number | null;
+  cardBrandId?: number | null;
+}
+
 export interface EnrollmentInput {
   student: string;
+  businessUnit?: FinanceBusinessUnit;
   courseId?: number | null;
+  /**
+   * Turma combinada na venda (`academic_classes`). `undefined` preserva o que já
+   * está gravado — é campo de logística, e um formulário que não pergunta turma não
+   * pode desfazer a alocação feita em /turmas.
+   */
+  classId?: number | null;
   totalAmount: number;
+  /** Entrada paga na contratação; ela é abatida antes do cálculo mensal. */
+  downPaymentAmount?: number | null;
   installments: number;
   paymentMethodId?: number | null;
   cardBrandId?: number | null;
@@ -2638,6 +2808,200 @@ export interface EnrollmentInput {
   commissionPct?: number | null;
   branchId?: number | null;
   notes?: string | null;
+  /**
+   * Cronograma combinado parcela a parcela. Quando omitido, mantém o
+   * comportamento antigo: valor dividido em fatias iguais, uma por mês, todas
+   * na forma de pagamento do contrato.
+   */
+  schedule?: EnrollmentScheduleItem[] | null;
+}
+
+interface ResolvedInstallment {
+  amount: number;
+  type: "entrada" | "parcela";
+  /** Null quando a data da venda não tem dia utilizável — mantém o
+   *  comportamento antigo de deixar a parcela sem vencimento. */
+  dueDate: string | null;
+  /** Primeiro dia do mês do vencimento — é a competência da receita. */
+  competence: string;
+  paymentMethodId: number | null;
+  cardBrandId: number | null;
+}
+
+/**
+ * Cronograma efetivo da matrícula: o que o usuário combinou ou, na falta dele,
+ * o padrão de parcelas iguais mês a mês.
+ */
+function resolveSchedule(input: EnrollmentInput, installments: number): ResolvedInstallment[] {
+  const custom = input.schedule?.filter((item) => Number.isFinite(item.amount) && item.amount > 0) ?? [];
+  if (custom.length > 0) {
+    return custom.map((item, index) => {
+      const dueDate = item.dueDate.slice(0, 10);
+      return {
+        amount: round2(item.amount),
+        type: item.type === "entrada" || (index === 0 && num(input.downPaymentAmount) > 0) ? "entrada" : "parcela",
+        dueDate,
+        competence: `${dueDate.slice(0, 7)}-01`,
+        paymentMethodId: item.paymentMethodId ?? input.paymentMethodId ?? null,
+        cardBrandId: item.cardBrandId ?? null,
+      };
+    });
+  }
+
+  const downPaymentAmount = Math.max(0, Math.min(round2(num(input.downPaymentAmount)), round2(input.totalAmount)));
+  const parts = splitInstallments(round2(input.totalAmount - downPaymentAmount), installments);
+  const dueDay = dueDayFromDate(input.saleDate);
+  const regular = parts.map((amount, index) => {
+    const competence = monthToDate(addMonths(input.firstMonth, index));
+    return {
+      amount,
+      type: "parcela" as const,
+      dueDate: dateInMonth(competence, dueDay),
+      competence,
+      paymentMethodId: input.paymentMethodId ?? null,
+      cardBrandId: input.cardBrandId ?? null,
+    };
+  });
+  if (downPaymentAmount <= 0) return regular;
+  const entryDate = input.saleDate.slice(0, 10);
+  return [
+    {
+      amount: downPaymentAmount,
+      type: "entrada",
+      dueDate: entryDate,
+      competence: `${entryDate.slice(0, 7)}-01`,
+      paymentMethodId: input.paymentMethodId ?? null,
+      cardBrandId: input.cardBrandId ?? null,
+    },
+    ...regular,
+  ];
+}
+
+/**
+ * Grava as receitas por parcela da matrícula. Usado na criação e na edição —
+ * os dois caminhos apagam e regeram o cronograma inteiro, então duplicar essa
+ * montagem era o jeito mais fácil de as duas telas discordarem.
+ *
+ * A taxa de cartão é por parcela: no cronograma padrão vale a taxa do número
+ * de parcelas do contrato (comportamento histórico); no cronograma combinado
+ * cada parcela é uma cobrança avulsa e usa a taxa de 1 parcela da própria
+ * bandeira.
+ */
+async function insertEnrollmentRevenues(
+  client: PoolClient,
+  enrollmentId: number,
+  input: EnrollmentInput,
+  schedule: ResolvedInstallment[],
+  contractRatePct: number,
+  courseName: string | null,
+  categoryId: number | null
+): Promise<void> {
+  const isCustom = (input.schedule?.length ?? 0) > 0;
+  const student = input.student.trim();
+  const regularTotal = schedule.filter((item) => item.type === "parcela").length;
+  let regularNumber = 0;
+
+  for (const item of schedule) {
+    const ratePct = isCustom
+      ? await paymentMethodFeePct(client, item.paymentMethodId, item.cardBrandId)
+      : contractRatePct;
+    const installmentNumber = item.type === "entrada" ? 0 : ++regularNumber;
+    const description = item.type === "entrada"
+      ? `Matrícula — ${student}${courseName ? ` (${courseName})` : ""} · entrada`
+      : regularTotal === 1
+        ? `Matrícula — ${student}${courseName ? ` (${courseName})` : ""}`
+        : `Matrícula — ${student}${courseName ? ` (${courseName})` : ""} · parcela ${installmentNumber}/${regularTotal}`;
+    await client.query(
+      `INSERT INTO ${SCHEMA}.finance_revenues
+         (date, description, category_id, origin, student, course_id, branch_id, payment_method_id, card_brand_id,
+          seller_id, amount, fee_amount, status, enrollment_id, installment_number, due_date, business_unit)
+       VALUES ($1, $2, $3, 'Matrícula parcelada', $4, $5, $6, $7, $8, $9, $10, $11, 'previsto', $12, $13, $14, $15)`,
+      [
+        item.competence,
+        description,
+        categoryId,
+        student,
+        input.courseId ?? null,
+        input.branchId ?? null,
+        item.paymentMethodId,
+        item.cardBrandId,
+        input.sellerId ?? null,
+        item.amount,
+        round2((item.amount * ratePct) / 100),
+        enrollmentId,
+        installmentNumber,
+        item.dueDate,
+        normalizeBusinessUnit(input.businessUnit),
+      ]
+    );
+  }
+}
+
+/**
+ * O cronograma tem que fechar com o valor da venda. Deixar passar uma soma
+ * diferente criaria uma matrícula que se diz de R$ 9.000 cobrando R$ 8.700 —
+ * a divergência só apareceria meses depois, na cobrança que faltou.
+ */
+function assertScheduleMatchesTotal(schedule: ResolvedInstallment[], totalAmount: number): void {
+  const sum = round2(schedule.reduce((total, item) => total + item.amount, 0));
+  if (Math.abs(sum - round2(totalAmount)) > 0.01) {
+    throw new Error(
+      `A soma das parcelas (${sum.toFixed(2)}) não bate com o valor da venda (${round2(totalAmount).toFixed(2)}).`
+    );
+  }
+}
+
+/**
+ * Forma de pagamento pelo nome. O quadro do contrato guarda o NOME da forma
+ * (é o que sai impresso), então quem volta do contrato para a matrícula precisa
+ * deste caminho. Sem correspondência devolve `null` — o chamador decide se
+ * mantém a forma que já estava, e nunca troca por uma errada.
+ */
+export async function findPaymentMethodIdByName(name: string | null | undefined): Promise<number | null> {
+  const trimmed = name?.trim();
+  if (!trimmed) return null;
+  await ensureFinanceSchema();
+  const { rows } = await getPool().query(
+    `SELECT id FROM ${SCHEMA}.finance_payment_methods
+      WHERE UPPER(TRIM(name)) = UPPER(TRIM($1))
+      ORDER BY active DESC, id LIMIT 1`,
+    [trimmed]
+  );
+  return rows[0] ? Number(rows[0].id) : null;
+}
+
+/**
+ * Recusa um cronograma mais longo do que a forma de pagamento aceita. O teto
+ * vive no cadastro da forma (Financeiro → Configurações → Formas de Pagamento)
+ * para o servidor e o seletor da tela usarem exatamente o mesmo número; sem esta
+ * checagem, um POST direto passaria por cima do que o `<select>` oferece.
+ */
+function assertInstallmentsWithinMethodCap(
+  method: { name?: string; max_installments?: number | null } | undefined,
+  installments: number
+): void {
+  if (!method?.max_installments) return; // forma sem teto próprio: vale o do sistema
+  const cap = installmentCap(method.max_installments);
+  if (installments > cap) {
+    throw new Error(`${method.name ?? "A forma de pagamento escolhida"} aceita no máximo ${cap}x.`);
+  }
+}
+
+/** Taxa da forma no cronograma; taxas por parcela/bandeira são o fallback. */
+async function paymentMethodFeePct(
+  client: PoolClient,
+  paymentMethodId: number | null,
+  cardBrandId: number | null
+): Promise<number> {
+  if (!paymentMethodId) return 0;
+  const { rows } = await client.query(
+    `SELECT kind, fee_pct FROM ${SCHEMA}.finance_payment_methods WHERE id = $1`,
+    [paymentMethodId]
+  );
+  const methodFeePct = num(rows[0]?.fee_pct);
+  if (methodFeePct > 0) return methodFeePct;
+  if (rows[0]?.kind !== "parcelado") return 0;
+  return lookupInstallmentRatePct(client, 1, cardBrandId);
 }
 
 async function resolveEnrollmentCommissionPct(client: PoolClient, sellerId: number | null | undefined, requested: number | null | undefined): Promise<number> {
@@ -2652,9 +3016,10 @@ async function syncEnrollmentCommission(
   client: PoolClient,
   input: EnrollmentInput,
   enrollmentId: number,
-  effectiveInstallments: number,
+  schedule: ResolvedInstallment[],
   commissionPct: number
 ): Promise<void> {
+  const effectiveInstallments = schedule.length;
   const { rows: existingRows } = await client.query(
     `SELECT id FROM ${SCHEMA}.finance_commissions WHERE enrollment_id = $1 LIMIT 1`,
     [enrollmentId]
@@ -2670,12 +3035,16 @@ async function syncEnrollmentCommission(
   const values = [input.saleDate, input.sellerId, input.student.trim(), input.courseId ?? null, round2(input.totalAmount), commissionPct, methodId, effectiveInstallments, totalCommission, enrollmentId, input.notes?.trim() || null];
   let commissionId = existingId;
   if (commissionId) {
+    // $10 é o id da MATRÍCULA (a lista é montada para o INSERT); a comissão tem
+    // id próprio e vai como $12. Filtrar por $10 aqui fazia a edição escrever em
+    // cima de outra comissão qualquer — a de id igual ao da matrícula — e deixar
+    // esta com vendedor, valor e percentual congelados no que eram antes.
     await client.query(
       `UPDATE ${SCHEMA}.finance_commissions
        SET date = $1, seller_id = $2, student = $3, course_id = $4, sale_amount = $5,
            percent = $6, payment_method_id = $7, installments = $8, total_commission = $9, notes = $11
-       WHERE id = $10`,
-      values
+       WHERE id = $12 AND enrollment_id = $10`,
+      [...values, commissionId]
     );
     await client.query(`DELETE FROM ${SCHEMA}.finance_commission_installments WHERE commission_id = $1`, [commissionId]);
   } else {
@@ -2688,14 +3057,23 @@ async function syncEnrollmentCommission(
     commissionId = Number(rows[0].id);
   }
 
-  // A comissão acompanha o cronograma das parcelas (firstMonth), não o mês da
-  // venda: quando a 1ª parcela cai no mês seguinte, iniciar pela venda jogava
-  // despesa de comissão num mês sem a receita correspondente.
-  for (const [index, amount] of splitInstallments(totalCommission, effectiveInstallments).entries()) {
+  // A comissão acompanha o cronograma das parcelas, não o mês da venda: quando
+  // a 1ª parcela cai no mês seguinte, iniciar pela venda jogava despesa de
+  // comissão num mês sem a receita correspondente. Com parcelas de valores
+  // diferentes, cada fatia da comissão é proporcional à parcela que a gerou —
+  // uma entrada de 50% do contrato paga 50% da comissão.
+  const total = round2(schedule.reduce((sum, item) => sum + item.amount, 0));
+  let distributed = 0;
+  for (const [index, item] of schedule.entries()) {
+    const isLast = index === schedule.length - 1;
+    const share = isLast
+      ? round2(totalCommission - distributed)
+      : round2((totalCommission * item.amount) / (total || 1));
+    distributed = round2(distributed + share);
     await client.query(
       `INSERT INTO ${SCHEMA}.finance_commission_installments (commission_id, month, amount, status)
        VALUES ($1, $2, $3, 'pendente')`,
-      [commissionId, monthToDate(addMonths(input.firstMonth, index)), amount]
+      [commissionId, item.competence, share]
     );
   }
 }
@@ -2704,23 +3082,41 @@ async function syncEnrollmentCommission(
  * Cadastra a matrícula e gera automaticamente uma receita por parcela nos
  * meses correspondentes (categoria Matrícula, com taxa do cartão embutida em
  * fee_amount a partir da tabela de taxas) — sem lançamento manual. A taxa é
- * buscada pela bandeira informada; sem bandeira, usa a taxa padrão (sem
- * bandeira específica) daquele número de parcelas.
+ * buscada pela forma quando ela tem uma configuração própria; sem essa taxa,
+ * formas parceladas usam a bandeira informada e a taxa padrão daquele número
+ * de parcelas.
  */
 export async function createEnrollment(input: EnrollmentInput): Promise<number> {
   await ensureFinanceSchema();
   if (!input.student?.trim()) throw new Error("Aluno é obrigatório.");
   if (!Number.isFinite(input.totalAmount) || input.totalAmount <= 0) throw new Error("Valor do curso inválido.");
-  const requestedInstallments = Math.max(1, Math.min(24, Math.trunc(input.installments || 1)));
+  if (!Number.isFinite(num(input.downPaymentAmount)) || num(input.downPaymentAmount) < 0 || num(input.downPaymentAmount) > input.totalAmount) {
+    throw new Error("O valor da entrada deve estar entre zero e o valor total da matrícula.");
+  }
+  const requestedInstallments = normalizeEnrollmentInstallments(input.installments);
   const cardBrandId = input.cardBrandId ?? null;
+
+  const schedule = resolveSchedule(input, requestedInstallments);
+  assertScheduleMatchesTotal(schedule, input.totalAmount);
+  // Com cronograma combinado, quem manda é ele: o número de parcelas do
+  // contrato é o número de linhas acordadas, não o que veio no seletor.
+  const installments = schedule.length;
 
   const pool = getPool();
   const { rows: methodRows } = input.paymentMethodId
-    ? await pool.query(`SELECT kind FROM ${SCHEMA}.finance_payment_methods WHERE id = $1`, [input.paymentMethodId])
-    : { rows: [] as Array<{ kind: string }> };
+    ? await pool.query(
+        `SELECT name, kind, fee_pct, max_installments FROM ${SCHEMA}.finance_payment_methods WHERE id = $1`,
+        [input.paymentMethodId]
+      )
+    : { rows: [] as Array<{ name: string; kind: string; fee_pct: number; max_installments: number | null }> };
+  assertInstallmentsWithinMethodCap(methodRows[0], requestedInstallments);
   const hasCardInstallmentFee = methodRows[0]?.kind === "parcelado";
-  const installments = requestedInstallments;
-  const ratePct = hasCardInstallmentFee ? await lookupInstallmentRatePct(pool, installments, cardBrandId) : 0;
+  const methodFeePct = num(methodRows[0]?.fee_pct);
+  const ratePct = methodFeePct > 0
+    ? methodFeePct
+    : hasCardInstallmentFee
+      ? await lookupInstallmentRatePct(pool, installments, cardBrandId)
+      : 0;
   const categoryId = await findCategoryId("receita", "Matrícula");
 
   const { rows: courseRows } = input.courseId
@@ -2734,12 +3130,14 @@ export async function createEnrollment(input: EnrollmentInput): Promise<number> 
     const commissionPct = await resolveEnrollmentCommissionPct(client, input.sellerId, input.commissionPct);
     const { rows } = await client.query(
       `INSERT INTO ${SCHEMA}.finance_enrollments
-         (student, course_id, total_amount, installments, payment_method_id, card_brand_id, first_month, sale_date, seller_id, branch_id, rate_pct, notes)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+         (student, course_id, total_amount, down_payment_amount, regular_installments, installments, payment_method_id, card_brand_id, first_month, sale_date, seller_id, branch_id, rate_pct, notes, business_unit, class_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
       [
         input.student.trim(),
         input.courseId ?? null,
         round2(input.totalAmount),
+        round2(num(input.downPaymentAmount)),
+        requestedInstallments,
         installments,
         input.paymentMethodId ?? null,
         cardBrandId,
@@ -2749,42 +3147,14 @@ export async function createEnrollment(input: EnrollmentInput): Promise<number> 
         input.branchId ?? null,
         ratePct,
         input.notes?.trim() || null,
+        normalizeBusinessUnit(input.businessUnit),
+        input.classId ?? null,
       ]
     );
     const enrollmentId = Number(rows[0].id);
 
-    const parts = splitInstallments(input.totalAmount, installments);
-    const dueDay = dueDayFromDate(input.saleDate);
-    for (let i = 0; i < parts.length; i += 1) {
-      const month = addMonths(input.firstMonth, i);
-      const description =
-        installments === 1
-          ? `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""}`
-          : `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""} · parcela ${i + 1}/${installments}`;
-      await client.query(
-        `INSERT INTO ${SCHEMA}.finance_revenues
-           (date, description, category_id, origin, student, course_id, branch_id, payment_method_id, seller_id, amount, fee_amount, status, enrollment_id, installment_number, due_date)
-         VALUES ($1, $2, $3, 'Matrícula parcelada', $4, $5, $6, $7, $8, $9, $10, 'previsto', $11, $12, $13)`,
-        [
-          monthToDate(month),
-          description,
-          categoryId,
-          input.student.trim(),
-          input.courseId ?? null,
-          input.branchId ?? null,
-          input.paymentMethodId ?? null,
-          input.sellerId ?? null,
-          parts[i],
-          round2((parts[i] * ratePct) / 100),
-          enrollmentId,
-          i + 1,
-          // Vencimento no mesmo dia do mês da venda: sem isso toda parcela
-          // vencia no dia 1 e virava "atrasada" já no dia 2 do próprio mês.
-          dateInMonth(monthToDate(month), dueDay),
-        ]
-      );
-    }
-    await syncEnrollmentCommission(client, input, enrollmentId, installments, commissionPct);
+    await insertEnrollmentRevenues(client, enrollmentId, input, schedule, ratePct, courseName, categoryId);
+    await syncEnrollmentCommission(client, input, enrollmentId, schedule, commissionPct);
     await client.query("COMMIT");
     return enrollmentId;
   } catch (error) {
@@ -2795,26 +3165,181 @@ export async function createEnrollment(input: EnrollmentInput): Promise<number> 
   }
 }
 
+function sameAmount(left: unknown, right: unknown): boolean {
+  return Math.abs(round2(num(left)) - round2(num(right))) <= 0.01;
+}
+
+function sameNullableId(left: unknown, right: number | null | undefined): boolean {
+  const normalizedLeft = left === null || left === undefined ? null : Number(left);
+  const normalizedRight = right === null || right === undefined ? null : Number(right);
+  return normalizedLeft === normalizedRight;
+}
+
 /**
- * Atualiza a matrícula e regera do zero as receitas por parcela vinculadas
- * (mesmo comportamento de deleteEnrollment, que já apaga tudo via cascade) —
- * evita ficar com parcelas desalinhadas quando valor, nº de parcelas, mês
- * inicial ou bandeira mudam.
+ * Com recebimentos registrados, a matrícula deixa de ser um rascunho. O
+ * contrato original continua imutável, mas as parcelas ainda sem recebimento
+ * podem ser redistribuídas para registrar uma renegociação real do saldo.
+ */
+function assertPaidEnrollmentContractIsStable(
+  current: Record<string, unknown>,
+  input: EnrollmentInput,
+  requestedInstallments: number,
+  schedule: ResolvedInstallment[]
+): void {
+  const currentFirstMonth = dateToMonth(current.first_month);
+  const currentSaleDate = toIsoDate(current.sale_date) ?? "";
+  const hasChangedTerms =
+    !sameAmount(current.total_amount, input.totalAmount) ||
+    !sameAmount(current.down_payment_amount, num(input.downPaymentAmount)) ||
+    Number(current.regular_installments) !== requestedInstallments ||
+    Number(current.installments) !== schedule.length ||
+    !sameNullableId(current.payment_method_id, input.paymentMethodId) ||
+    !sameNullableId(current.card_brand_id, input.cardBrandId) ||
+    currentFirstMonth !== input.firstMonth ||
+    currentSaleDate !== input.saleDate.slice(0, 10) ||
+    String(current.student ?? "") !== input.student.trim() ||
+    !sameNullableId(current.course_id, input.courseId) ||
+    !sameNullableId(current.seller_id, input.sellerId) ||
+    !sameNullableId(current.branch_id, input.branchId);
+
+  if (hasChangedTerms) {
+    throw new Error("Depois de registrar recebimentos, os dados do contrato permanecem protegidos. Altere apenas o valor ou vencimento das parcelas ainda em aberto.");
+  }
+}
+
+interface EnrollmentRevenueForAdjustment {
+  id: number;
+  installmentNumber: number | null;
+  amount: number;
+  feeAmount: number;
+  dueDate: string;
+  paidAmount: number;
+}
+
+async function updateOpenEnrollmentSchedule(
+  client: PoolClient,
+  enrollmentId: number,
+  input: EnrollmentInput,
+  schedule: ResolvedInstallment[],
+  contractRatePct: number,
+  courseName: string | null,
+  categoryId: number | null
+): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT r.id, r.installment_number, r.amount, r.fee_amount, r.due_date,
+            COALESCE((
+              SELECT SUM(allocation.amount)
+              FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation
+              WHERE allocation.revenue_id = r.id
+            ), 0) AS paid_amount
+       FROM ${SCHEMA}.finance_revenues r
+      WHERE r.enrollment_id = $1
+      ORDER BY CASE WHEN r.installment_number = 0 THEN 0 ELSE 1 END, r.installment_number, r.id
+      FOR UPDATE`,
+    [enrollmentId]
+  );
+  const existing = rows.map((row) => ({
+    id: Number(row.id),
+    installmentNumber: row.installment_number === null || row.installment_number === undefined ? null : Number(row.installment_number),
+    amount: round2(num(row.amount)),
+    feeAmount: round2(num(row.fee_amount)),
+    dueDate: toIsoDate(row.due_date) ?? "",
+    paidAmount: round2(num(row.paid_amount)),
+  })) as EnrollmentRevenueForAdjustment[];
+
+  if (existing.length !== schedule.length) {
+    throw new Error("Não é possível alterar a quantidade de parcelas depois de registrar recebimentos. Ajuste somente as parcelas ainda em aberto.");
+  }
+
+  for (const [index, item] of schedule.entries()) {
+    const previous = existing[index];
+    const expectedType = previous.installmentNumber === 0 ? "entrada" : "parcela";
+    if (item.type !== expectedType) {
+      throw new Error("A estrutura das parcelas não pode ser alterada depois de haver recebimentos.");
+    }
+    if (previous.paidAmount > 0.005 && (!sameAmount(previous.amount, item.amount) || previous.dueDate !== item.dueDate)) {
+      throw new Error("Uma parcela que já recebeu pagamento não pode ter valor ou vencimento alterados.");
+    }
+  }
+
+  const regularTotal = schedule.filter((item) => item.type === "parcela").length;
+  let regularNumber = 0;
+  for (const [index, item] of schedule.entries()) {
+    const previous = existing[index];
+    const installmentNumber = item.type === "entrada" ? 0 : ++regularNumber;
+    const description = item.type === "entrada"
+      ? `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""} · entrada`
+      : regularTotal === 1
+        ? `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""}`
+        : `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""} · parcela ${installmentNumber}/${regularTotal}`;
+    // Os valores já recebidos conservam também sua previsão de taxa original.
+    // Para o saldo aberto, a taxa do contrato acompanha a nova parcela prevista.
+    const feeAmount = previous.paidAmount > 0.005
+      ? previous.feeAmount
+      : round2((item.amount * contractRatePct) / 100);
+    await client.query(
+      `UPDATE ${SCHEMA}.finance_revenues
+          SET date = $2, due_date = $3, description = $4, category_id = $5, origin = 'Matrícula parcelada',
+              student = $6, course_id = $7, branch_id = $8, payment_method_id = $9, card_brand_id = $10,
+              seller_id = $11, amount = $12, fee_amount = $13, installment_number = $14, updated_at = NOW()
+        WHERE id = $1`,
+      [
+        previous.id,
+        item.competence,
+        item.dueDate,
+        description,
+        categoryId,
+        input.student.trim(),
+        input.courseId ?? null,
+        input.branchId ?? null,
+        item.paymentMethodId,
+        item.cardBrandId,
+        input.sellerId ?? null,
+        item.amount,
+        feeAmount,
+        installmentNumber,
+      ]
+    );
+  }
+  await recomputeEnrollmentSchedule(client, enrollmentId);
+}
+
+/**
+ * Atualiza a matrícula. Antes de qualquer recebimento, regera livremente o
+ * cronograma. Depois, conserva as parcelas já recebidas e ajusta em linha
+ * somente o saldo que continua em aberto.
  */
 export async function updateEnrollment(id: number, input: EnrollmentInput): Promise<void> {
   await ensureFinanceSchema();
   if (!input.student?.trim()) throw new Error("Aluno é obrigatório.");
   if (!Number.isFinite(input.totalAmount) || input.totalAmount <= 0) throw new Error("Valor do curso inválido.");
-  const requestedInstallments = Math.max(1, Math.min(24, Math.trunc(input.installments || 1)));
+  if (!Number.isFinite(num(input.downPaymentAmount)) || num(input.downPaymentAmount) < 0 || num(input.downPaymentAmount) > input.totalAmount) {
+    throw new Error("O valor da entrada deve estar entre zero e o valor total da matrícula.");
+  }
+  const requestedInstallments = normalizeEnrollmentInstallments(input.installments);
   const cardBrandId = input.cardBrandId ?? null;
+
+  const schedule = resolveSchedule(input, requestedInstallments);
+  assertScheduleMatchesTotal(schedule, input.totalAmount);
+  // Com cronograma combinado, quem manda é ele: o número de parcelas do
+  // contrato é o número de linhas acordadas, não o que veio no seletor.
+  const installments = schedule.length;
 
   const pool = getPool();
   const { rows: methodRows } = input.paymentMethodId
-    ? await pool.query(`SELECT kind FROM ${SCHEMA}.finance_payment_methods WHERE id = $1`, [input.paymentMethodId])
-    : { rows: [] as Array<{ kind: string }> };
+    ? await pool.query(
+        `SELECT name, kind, fee_pct, max_installments FROM ${SCHEMA}.finance_payment_methods WHERE id = $1`,
+        [input.paymentMethodId]
+      )
+    : { rows: [] as Array<{ name: string; kind: string; fee_pct: number; max_installments: number | null }> };
+  assertInstallmentsWithinMethodCap(methodRows[0], requestedInstallments);
   const hasCardInstallmentFee = methodRows[0]?.kind === "parcelado";
-  const installments = requestedInstallments;
-  const ratePct = hasCardInstallmentFee ? await lookupInstallmentRatePct(pool, installments, cardBrandId) : 0;
+  const methodFeePct = num(methodRows[0]?.fee_pct);
+  const ratePct = methodFeePct > 0
+    ? methodFeePct
+    : hasCardInstallmentFee
+      ? await lookupInstallmentRatePct(pool, installments, cardBrandId)
+      : 0;
   const categoryId = await findCategoryId("receita", "Matrícula");
 
   const { rows: courseRows } = input.courseId
@@ -2825,29 +3350,57 @@ export async function updateEnrollment(id: number, input: EnrollmentInput): Prom
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const { rowCount: enrollmentCount } = await client.query(
-      `SELECT id FROM ${SCHEMA}.finance_enrollments WHERE id = $1 FOR UPDATE`,
+    const { rows: enrollmentRows } = await client.query(
+      `SELECT * FROM ${SCHEMA}.finance_enrollments WHERE id = $1 FOR UPDATE`,
       [id]
     );
-    if (!enrollmentCount) throw new Error("Matrícula não encontrada.");
+    const currentEnrollment = enrollmentRows[0] as Record<string, unknown> | undefined;
+    if (!currentEnrollment) throw new Error("Matrícula não encontrada.");
+    // Unidade de negócio: quem informa manda (a venda do CRM manda a do curso
+    // vendido), quem não informa conserva a que já estava. Normalizar
+    // `undefined` aqui faria toda edição vinda da tela de Matrículas — que não
+    // tem esse campo — devolver a matrícula do Instituto UP para a Voz UP.
+    const enrollment = {
+      ...input,
+      businessUnit: input.businessUnit
+        ? normalizeBusinessUnit(input.businessUnit)
+        : normalizeBusinessUnit(currentEnrollment.business_unit),
+    };
     const { rows: paymentRows } = await client.query(
       `SELECT COUNT(*)::int AS total FROM ${SCHEMA}.finance_enrollment_payments WHERE enrollment_id = $1`,
       [id]
     );
     if (Number(paymentRows[0]?.total ?? 0) > 0) {
-      throw new Error("Esta matrícula já possui pagamentos lançados. Exclua ou ajuste os pagamentos antes de alterar o contrato para preservar o histórico financeiro.");
+      assertPaidEnrollmentContractIsStable(currentEnrollment, input, requestedInstallments, schedule);
+      await updateOpenEnrollmentSchedule(client, id, enrollment, schedule, ratePct, courseName, categoryId);
+      // Turma entra aqui junto com as observações de propósito: contrato com
+      // pagamento tem o dinheiro congelado, mas trocar de horário é rotina e não
+      // pode depender de o aluno ainda não ter pago nada.
+      await client.query(
+        `UPDATE ${SCHEMA}.finance_enrollments
+            SET notes = $1,
+                class_id = CASE WHEN $3::boolean THEN class_id ELSE $4 END
+          WHERE id = $2`,
+        [input.notes?.trim() || null, id, input.classId === undefined, input.classId ?? null]
+      );
+      await client.query("COMMIT");
+      return;
     }
     const commissionPct = await resolveEnrollmentCommissionPct(client, input.sellerId, input.commissionPct);
     const { rowCount } = await client.query(
       `UPDATE ${SCHEMA}.finance_enrollments
-         SET student = $1, course_id = $2, total_amount = $3, installments = $4, payment_method_id = $5,
-             card_brand_id = $6, first_month = $7, sale_date = $8, seller_id = $9, branch_id = $10,
-             rate_pct = $11, notes = $12
-       WHERE id = $13`,
+         SET student = $1, course_id = $2, total_amount = $3, down_payment_amount = $4,
+             regular_installments = $5, installments = $6, payment_method_id = $7,
+             card_brand_id = $8, first_month = $9, sale_date = $10, seller_id = $11, branch_id = $12,
+             rate_pct = $13, notes = $14, business_unit = $18,
+             class_id = CASE WHEN $16::boolean THEN class_id ELSE $17 END
+       WHERE id = $15`,
       [
         input.student.trim(),
         input.courseId ?? null,
         round2(input.totalAmount),
+        round2(num(input.downPaymentAmount)),
+        requestedInstallments,
         installments,
         input.paymentMethodId ?? null,
         cardBrandId,
@@ -2858,42 +3411,17 @@ export async function updateEnrollment(id: number, input: EnrollmentInput): Prom
         ratePct,
         input.notes?.trim() || null,
         id,
+        input.classId === undefined,
+        input.classId ?? null,
+        enrollment.businessUnit,
       ]
     );
     if (!rowCount) throw new Error("Matrícula não encontrada.");
 
     await client.query(`DELETE FROM ${SCHEMA}.finance_revenues WHERE enrollment_id = $1`, [id]);
 
-    const parts = splitInstallments(input.totalAmount, installments);
-    const dueDay = dueDayFromDate(input.saleDate);
-    for (let i = 0; i < parts.length; i += 1) {
-      const month = addMonths(input.firstMonth, i);
-      const description =
-        installments === 1
-          ? `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""}`
-          : `Matrícula — ${input.student.trim()}${courseName ? ` (${courseName})` : ""} · parcela ${i + 1}/${installments}`;
-      await client.query(
-        `INSERT INTO ${SCHEMA}.finance_revenues
-           (date, description, category_id, origin, student, course_id, branch_id, payment_method_id, seller_id, amount, fee_amount, status, enrollment_id, installment_number, due_date)
-         VALUES ($1, $2, $3, 'Matrícula parcelada', $4, $5, $6, $7, $8, $9, $10, 'previsto', $11, $12, $13)`,
-        [
-          monthToDate(month),
-          description,
-          categoryId,
-          input.student.trim(),
-          input.courseId ?? null,
-          input.branchId ?? null,
-          input.paymentMethodId ?? null,
-          input.sellerId ?? null,
-          parts[i],
-          round2((parts[i] * ratePct) / 100),
-          id,
-          i + 1,
-          dateInMonth(monthToDate(month), dueDay),
-        ]
-      );
-    }
-    await syncEnrollmentCommission(client, input, id, installments, commissionPct);
+    await insertEnrollmentRevenues(client, id, enrollment, schedule, ratePct, courseName, categoryId);
+    await syncEnrollmentCommission(client, enrollment, id, schedule, commissionPct);
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -2914,7 +3442,10 @@ function mapEnrollment(r: Record<string, unknown>): FinanceEnrollment {
     student: String(r.student ?? ""),
     courseId: r.course_id === null ? null : Number(r.course_id),
     courseName: (r.course_name as string) ?? null,
+    classId: r.class_id === null || r.class_id === undefined ? null : Number(r.class_id),
     totalAmount: total,
+    downPaymentAmount: num(r.down_payment_amount),
+    regularInstallments: Math.max(1, Number(r.regular_installments ?? r.installments ?? 1)),
     installments: Number(r.installments),
     paymentMethodId: r.payment_method_id === null ? null : Number(r.payment_method_id),
     paymentMethodName: (r.payment_method_name as string) ?? null,
@@ -2937,12 +3468,19 @@ function mapEnrollment(r: Record<string, unknown>): FinanceEnrollment {
     // Receita líquida da matrícula: valor bruto menos taxas de pagamento e comissão do vendedor.
     netTotal: round2(total - feeTotal - commissionTotal),
     notes: (r.notes as string) ?? null,
+    invoiceStatus: (r.invoice_status as EnrollmentInvoiceStatus) ?? "pendente",
+    invoiceNumber: (r.invoice_number as string) ?? null,
+    invoiceIssuedAt: toIsoDate(r.invoice_issued_at),
+    invoiceNotes: (r.invoice_notes as string) ?? null,
+    hasInvoiceFile: Boolean(r.has_invoice),
+    invoiceFilename: (r.invoice_filename as string) ?? null,
   };
 }
 
 const ENROLLMENT_SELECT = `
   SELECT e.*, co.name AS course_name, pm.name AS payment_method_name, s.name AS seller_name, b.name AS branch_name,
          cb.name AS card_brand_name,
+         (e.invoice_file IS NOT NULL) AS has_invoice,
          COALESCE((SELECT percent FROM ${SCHEMA}.finance_commissions cm WHERE cm.enrollment_id = e.id LIMIT 1), 0) AS commission_pct,
          COALESCE((SELECT SUM(fee_amount) FROM ${SCHEMA}.finance_revenues r WHERE r.enrollment_id = e.id), 0) AS fee_total,
          COALESCE(pay.paid_amount, 0) AS paid_amount,
@@ -2979,6 +3517,373 @@ export async function listEnrollmentRevenues(enrollmentId: number): Promise<Fina
     [enrollmentId]
   );
   return rows.map(mapRevenue);
+}
+
+// ── Cobrança: as parcelas vistas pelo vencimento ──────────────────
+
+export interface ReceivableFilters {
+  /** Mês inicial (YYYY-MM) do vencimento. */
+  from?: string;
+  businessUnit?: FinanceBusinessUnit;
+  /** Mês final (YYYY-MM) do vencimento, inclusive. */
+  to?: string;
+  sellerId?: number;
+  courseId?: number;
+  branchId?: number;
+}
+
+/**
+ * Parcelas de matrícula que VENCEM no período — a lista da aba Cobrança.
+ *
+ * A aba Receitas recorta pela competência (`r.date`) porque responde "quanto
+ * este mês faturou". Aqui a pergunta é outra: "o que eu tenho para receber e
+ * cobrar neste mês", e quem manda nisso é o vencimento acordado. Numa venda
+ * em 24x as duas datas caminham juntas, mas cronograma irregular (entrada
+ * hoje, primeira parcela só no mês que vem) separa uma da outra.
+ */
+export async function listReceivables(filters: ReceivableFilters = {}): Promise<FinanceRevenue[]> {
+  await ensureFinanceSchema();
+  const conditions: string[] = ["r.enrollment_id IS NOT NULL", "r.status <> 'cancelado'"];
+  const values: unknown[] = [];
+  if (filters.from) {
+    values.push(monthToDate(filters.from));
+    conditions.push(`COALESCE(r.due_date, r.date) >= $${values.length}`);
+  }
+  if (filters.to) {
+    values.push(monthToDate(addMonths(filters.to, 1)));
+    conditions.push(`COALESCE(r.due_date, r.date) < $${values.length}`);
+  }
+  for (const [key, column] of [
+    ["sellerId", "r.seller_id"],
+    ["courseId", "r.course_id"],
+    ["branchId", "r.branch_id"],
+  ] as const) {
+    const value = filters[key];
+    if (value) {
+      values.push(value);
+      conditions.push(`${column} = $${values.length}`);
+    }
+  }
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`r.business_unit = $${values.length}`);
+  }
+  const { rows } = await getPool().query(
+    `${REVENUE_SELECT} WHERE ${conditions.join(" AND ")}
+     ORDER BY COALESCE(r.due_date, r.date) ASC, r.student ASC NULLS LAST, r.installment_number ASC, r.id ASC
+     LIMIT 2000`,
+    values
+  );
+  return rows.map(mapRevenue);
+}
+
+/**
+ * Fila de inadimplência: parcela vencida com saldo em aberto, de qualquer mês.
+ *
+ * Ignora o filtro de período do topo pelo mesmo motivo da fila de NF — parcela
+ * que venceu em março continua em aberto em agosto, e respeitar o mês
+ * selecionado faria a cobrança sumir sozinha na virada do mês.
+ */
+export async function listOverdueReceivables(): Promise<FinanceRevenue[]> {
+  await ensureFinanceSchema();
+  const { rows } = await getPool().query(
+    `${REVENUE_SELECT}
+      WHERE r.enrollment_id IS NOT NULL
+        AND r.status <> 'cancelado'
+        AND COALESCE(r.due_date, r.date) < CURRENT_DATE
+        AND r.amount - ${ALLOCATED_PAID_SQL} > 0.005
+      ORDER BY COALESCE(r.due_date, r.date) ASC, r.student ASC NULLS LAST, r.id ASC
+      LIMIT 500`
+  );
+  return rows.map(mapRevenue);
+}
+
+/**
+ * Situação de pagamento de cada matrícula: em dia, em atraso, quitada.
+ *
+ * Vive fora do recorte de período de propósito (mesma razão da fila de
+ * inadimplência): parcela que venceu em março continua devida em agosto, e amarrar
+ * isto ao mês selecionado faria o atraso sumir sozinho na virada do mês.
+ *
+ * O saldo de cada parcela sai das ALOCAÇÕES de pagamento, não do status gravado —
+ * `status` só é reescrito quando alguém mexe naquela matrícula ou quando a varredura
+ * roda, e quem simplesmente parou de pagar é justamente quem ninguém tocou.
+ */
+export async function listEnrollmentPaymentHealth(): Promise<EnrollmentPaymentHealth[]> {
+  await ensureFinanceSchema();
+  const { rows } = await getPool().query(
+    `WITH parcelas AS (
+       SELECT r.enrollment_id,
+              COALESCE(r.due_date, r.date) AS due,
+              r.amount AS valor,
+              COALESCE((
+                SELECT SUM(epa.amount)
+                  FROM ${SCHEMA}.finance_enrollment_payment_allocations epa
+                 WHERE epa.revenue_id = r.id
+              ), 0) AS alocado
+         FROM ${SCHEMA}.finance_revenues r
+        WHERE r.enrollment_id IS NOT NULL
+          AND r.status <> 'cancelado'
+     ),
+     saldos AS (
+       SELECT enrollment_id, due,
+              GREATEST(valor - alocado, 0) AS saldo,
+              -- Alocação acima do valor da parcela NÃO quita as seguintes: ela fica
+              -- presa ali. Por isso o "aplicado" é limitado ao valor da parcela e o
+              -- excesso volta como crédito do contrato.
+              LEAST(alocado, valor) AS aplicado
+         FROM parcelas
+     ),
+     agregado AS (
+       SELECT enrollment_id,
+              COUNT(*)::int AS schedule_count,
+              COUNT(*) FILTER (WHERE saldo > 0.005 AND due < CURRENT_DATE)::int AS overdue_count,
+              COALESCE(SUM(saldo) FILTER (WHERE saldo > 0.005 AND due < CURRENT_DATE), 0) AS overdue_amount,
+              COALESCE(SUM(saldo) FILTER (WHERE saldo > 0.005), 0) AS open_amount,
+              COALESCE(SUM(aplicado), 0) AS applied_amount,
+              MIN(due) FILTER (WHERE saldo > 0.005 AND due < CURRENT_DATE) AS oldest_due,
+              MIN(due) FILTER (WHERE saldo > 0.005 AND due >= CURRENT_DATE) AS next_due,
+              (array_agg(saldo ORDER BY due) FILTER (WHERE saldo > 0.005 AND due >= CURRENT_DATE))[1] AS next_amount
+         FROM saldos
+        GROUP BY enrollment_id
+     ),
+     recebido AS (
+       SELECT enrollment_id, COALESCE(SUM(amount), 0) AS paid
+         FROM ${SCHEMA}.finance_enrollment_payments
+        GROUP BY enrollment_id
+     )
+     SELECT a.*, COALESCE(p.paid, 0) AS paid_amount
+       FROM agregado a
+       LEFT JOIN recebido p ON p.enrollment_id = a.enrollment_id`
+  );
+
+  const today = new Date(new Date().toISOString().slice(0, 10));
+  return rows.map((row) => {
+    const overdueCount = Number(row.overdue_count) || 0;
+    const overdueAmount = num(row.overdue_amount);
+    const openAmount = num(row.open_amount);
+    const scheduleCount = Number(row.schedule_count) || 0;
+    const oldestDueDate = toIsoDate(row.oldest_due);
+    // Dinheiro que entrou no contrato e não está fazendo efeito em parcela nenhuma:
+    // pagamento lançado sem selecionar parcela, ou rateio antigo preso na primeira.
+    // Sem descontar isto, a tela acusa de caloteiro quem já pagou — a armadilha
+    // "aluno aparece em atraso mas jurou que pagou" do guia técnico. É conciliação
+    // pendente, não inadimplência, e as duas não podem virar o mesmo aviso.
+    const creditAmount = Math.max(0, round2(num(row.paid_amount) - num(row.applied_amount)));
+    // A classificação em si vive em lib/receivables.ts (pura e testada): é a mesma
+    // pergunta que a aba Cobrança responde, e duas implementações de "atrasado" já
+    // produziram telas discordando entre si.
+    const { status, uncoveredAmount } = classifyPaymentHealth({
+      scheduleCount,
+      openAmount,
+      overdueCount,
+      overdueAmount,
+      creditAmount,
+    });
+
+    return {
+      enrollmentId: Number(row.enrollment_id),
+      status,
+      overdueAmount,
+      uncoveredAmount,
+      creditAmount,
+      overdueCount,
+      oldestDueDate,
+      daysLate: oldestDueDate
+        ? Math.max(0, Math.round((today.getTime() - new Date(oldestDueDate).getTime()) / 86400000))
+        : 0,
+      nextDueDate: toIsoDate(row.next_due),
+      nextAmount: num(row.next_amount),
+      openAmount,
+      scheduleCount,
+    };
+  });
+}
+
+export interface OverdueSweepRow {
+  revenueId: number;
+  enrollmentId: number;
+  student: string | null;
+  dueDate: string;
+  balance: number;
+}
+
+/**
+ * Marca como `atrasado` toda parcela vencida que ainda tem saldo.
+ *
+ * Até isto existir, o status gravado só era refeito por `recomputeEnrollmentSchedule`,
+ * ou seja, quando alguém lançava um pagamento naquela matrícula — quem parou de
+ * pagar nunca era recalculado, justamente o caso que interessa. A tela sempre
+ * calculou o atraso na hora (`receivableStatus`) e por isso parecia certa; o
+ * banco é que ficava para trás, e com ele qualquer relatório ou alerta.
+ *
+ * Devolve só as parcelas que MUDARAM de status nesta passada, para o alerta
+ * avisar uma vez e não repetir a mesma dívida todo dia.
+ */
+export async function markOverdueRevenues(): Promise<OverdueSweepRow[]> {
+  await ensureFinanceSchema();
+  const { rows } = await getPool().query(
+    `UPDATE ${SCHEMA}.finance_revenues r
+        SET status = 'atrasado', updated_at = NOW()
+      WHERE r.enrollment_id IS NOT NULL
+        AND r.status IN ('previsto', 'parcial')
+        AND COALESCE(r.due_date, r.date) < CURRENT_DATE
+        AND r.amount - COALESCE((
+              SELECT SUM(epa.amount)
+                FROM ${SCHEMA}.finance_enrollment_payment_allocations epa
+               WHERE epa.revenue_id = r.id
+            ), 0) > 0.005
+      RETURNING r.id,
+                r.enrollment_id,
+                r.student,
+                COALESCE(r.due_date, r.date) AS due_date,
+                r.amount - COALESCE((
+                  SELECT SUM(epa.amount)
+                    FROM ${SCHEMA}.finance_enrollment_payment_allocations epa
+                   WHERE epa.revenue_id = r.id
+                ), 0) AS balance`
+  );
+  return rows.map((row) => ({
+    revenueId: Number(row.id),
+    enrollmentId: Number(row.enrollment_id),
+    student: (row.student as string) ?? null,
+    dueDate: toIsoDate(row.due_date) ?? "",
+    balance: num(row.balance),
+  }));
+}
+
+// ── Nota fiscal da matrícula ─────────────────────────────────────
+
+/**
+ * Controle manual de emissão da NF da matrícula.
+ *
+ * A emissão acontece fora do CRM (portal da prefeitura / contador); aqui só se
+ * registra o que foi emitido. Por isso NÃO passa por `updateEnrollment`, que
+ * regenera as parcelas do zero e se recusa a rodar quando já existe pagamento
+ * lançado — justamente a matrícula que mais precisa de nota.
+ */
+export interface EnrollmentInvoiceInput {
+  status: EnrollmentInvoiceStatus;
+  number?: string | null;
+  issuedAt?: string | null;
+  notes?: string | null;
+}
+
+const ENROLLMENT_INVOICE_STATUSES: EnrollmentInvoiceStatus[] = ["pendente", "emitida", "dispensada"];
+
+export interface NormalizedEnrollmentInvoice {
+  status: EnrollmentInvoiceStatus;
+  number: string | null;
+  /** Null numa nota emitida significa "use a data de hoje", resolvida no UPDATE. */
+  issuedAt: string | null;
+  notes: string | null;
+}
+
+/**
+ * Regras de preenchimento do controle de NF, separadas do UPDATE para poderem
+ * ser testadas sem banco. Número e data só sobrevivem no status `emitida` — se
+ * ficassem gravados numa matrícula que voltou para pendente, a fila mostraria
+ * uma pendência que já exibe número de nota.
+ */
+export function normalizeEnrollmentInvoiceInput(input: EnrollmentInvoiceInput): NormalizedEnrollmentInvoice {
+  const status = input.status;
+  if (!ENROLLMENT_INVOICE_STATUSES.includes(status)) {
+    throw new Error("Status de nota fiscal inválido.");
+  }
+
+  const notes = input.notes?.trim() || null;
+  const number = input.number?.trim() || null;
+  const issuedAt = input.issuedAt?.trim() || null;
+
+  if (status === "emitida") {
+    if (!number) throw new Error("Informe o número da nota fiscal emitida.");
+    if (issuedAt && !/^\d{4}-\d{2}-\d{2}$/.test(issuedAt)) {
+      throw new Error("Data de emissão inválida.");
+    }
+    return { status, number, issuedAt, notes };
+  }
+
+  // Dispensa sem motivo é o caminho fácil para zerar a fila sem resolver nada.
+  if (status === "dispensada" && !notes) {
+    throw new Error("Explique por que esta matrícula não gera nota fiscal.");
+  }
+
+  return { status, number: null, issuedAt: null, notes };
+}
+
+export async function updateEnrollmentInvoice(id: number, input: EnrollmentInvoiceInput): Promise<void> {
+  await ensureFinanceSchema();
+  const { status, number, issuedAt, notes } = normalizeEnrollmentInvoiceInput(input);
+
+  // Data em branco numa nota emitida vale hoje, e quem decide "hoje" é o banco
+  // (mesmo fuso do resto do módulo) — o que não pode é a linha ficar "emitida"
+  // sem data nenhuma na hora de conferir com o contador.
+  const { rowCount } = await getPool().query(
+    `UPDATE ${SCHEMA}.finance_enrollments
+       SET invoice_status = $2,
+           invoice_number = $3,
+           invoice_issued_at = CASE WHEN $2 = 'emitida' THEN COALESCE($4::date, CURRENT_DATE) ELSE NULL END,
+           invoice_notes = $5
+     WHERE id = $1`,
+    [id, status, number, issuedAt, notes]
+  );
+  if (!rowCount) throw new Error("Matrícula não encontrada.");
+}
+
+export async function saveEnrollmentInvoice(
+  id: number,
+  file: { buffer: Buffer; filename: string; mime: string }
+): Promise<void> {
+  return saveFinanceInvoice("finance_enrollments", id, file);
+}
+
+export async function getEnrollmentInvoice(id: number) {
+  return getFinanceInvoice("finance_enrollments", id);
+}
+
+/**
+ * Fila de cobrança: matrículas com dinheiro já recebido e NF ainda pendente.
+ *
+ * Ignora de propósito o filtro de período da tela — uma venda de março com nota
+ * pendente continua devendo nota em agosto, e some da cobrança se a consulta
+ * respeitar o mês selecionado. A obrigação nasce do primeiro pagamento, não da
+ * data da venda, então é dele que sai a contagem de dias.
+ */
+export async function listPendingInvoiceEnrollments(): Promise<PendingInvoiceEnrollment[]> {
+  await ensureFinanceSchema();
+  const { rows } = await getPool().query(
+    `SELECT e.id, e.student, e.total_amount, e.sale_date,
+            co.name AS course_name, s.name AS seller_name,
+            e.invoice_notes, e.invoice_filename, (e.invoice_file IS NOT NULL) AS has_invoice,
+            pay.paid_amount, pay.first_payment_date,
+            GREATEST(0, (CURRENT_DATE - pay.first_payment_date))::int AS days_waiting
+     FROM ${SCHEMA}.finance_enrollments e
+     LEFT JOIN ${SCHEMA}.finance_courses co ON co.id = e.course_id
+     LEFT JOIN ${SCHEMA}.finance_sellers s ON s.id = e.seller_id
+     JOIN LATERAL (
+       SELECT COALESCE(SUM(ep.amount), 0) AS paid_amount, MIN(ep.payment_date) AS first_payment_date
+       FROM ${SCHEMA}.finance_enrollment_payments ep
+       WHERE ep.enrollment_id = e.id
+       HAVING COALESCE(SUM(ep.amount), 0) > 0
+     ) pay ON TRUE
+     WHERE e.invoice_status = 'pendente'
+     ORDER BY pay.first_payment_date ASC, e.id ASC`
+  );
+
+  return rows.map((r) => ({
+    id: Number(r.id),
+    student: String(r.student ?? ""),
+    courseName: (r.course_name as string) ?? null,
+    sellerName: (r.seller_name as string) ?? null,
+    totalAmount: num(r.total_amount),
+    paidAmount: num(r.paid_amount),
+    saleDate: toIsoDate(r.sale_date) ?? "",
+    firstPaymentDate: toIsoDate(r.first_payment_date) ?? "",
+    daysWaiting: Number(r.days_waiting ?? 0),
+    invoiceNotes: (r.invoice_notes as string) ?? null,
+    hasInvoiceFile: Boolean(r.has_invoice),
+    invoiceFilename: (r.invoice_filename as string) ?? null,
+  }));
 }
 
 // ── Agenda financeira ────────────────────────────────────────────
@@ -3327,6 +4232,13 @@ export async function listEnrollments(filters: FinanceFilters = {}): Promise<Fin
     values.push(filters.courseId);
     conditions.push(`e.course_id = $${values.length}`);
   }
+  // O filtro de unidade do topo do Financeiro já recortava receita, despesa e
+  // comissão, mas passava batido aqui: a carteira de matrículas mostrava a
+  // venda das duas empresas junto mesmo com uma delas selecionada.
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`e.business_unit = $${values.length}`);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await getPool().query(
     `${ENROLLMENT_SELECT} ${where} ORDER BY e.sale_date DESC, e.id DESC LIMIT 1000`,
@@ -3367,6 +4279,15 @@ export interface EnrollmentPaymentInput {
   paymentMethod: RevenuePaymentMethod;
   installments?: number | null;
   cardBrandId?: number | null;
+  /** Parcelas que este recebimento quita; quando vazio, usa a do mês do pagamento. */
+  revenueIds?: number[] | null;
+  /**
+   * Pagando menos que o saldo das parcelas marcadas, quita todas elas e joga a
+   * diferença nas parcelas ainda em aberto. Desligado, vale o rateio em
+   * cascata puro e a última selecionada fica parcial.
+   */
+  redistributeShortfall?: boolean;
+  /** Compatibilidade com clientes antigos que ainda enviam uma única parcela. */
   revenueId?: number | null;
   notes?: string | null;
   asaasPaymentUrl?: string | null;
@@ -3375,6 +4296,7 @@ export interface EnrollmentPaymentInput {
 }
 
 function mapEnrollmentPayment(r: Record<string, unknown>): EnrollmentPayment {
+  const allocations = Array.isArray(r.allocations) ? r.allocations as Array<Record<string, unknown>> : [];
   return {
     id: Number(r.id),
     enrollmentId: Number(r.enrollment_id),
@@ -3382,6 +4304,15 @@ function mapEnrollmentPayment(r: Record<string, unknown>): EnrollmentPayment {
     revenueDescription: (r.revenue_description as string) ?? null,
     revenueDate: toIsoDate(r.revenue_date),
     installmentNumber: r.installment_number === null || r.installment_number === undefined ? null : Number(r.installment_number),
+    allocations: allocations.map((allocation) => ({
+      revenueId: Number(allocation.revenueId),
+      revenueDate: String(allocation.revenueDate ?? ""),
+      installmentNumber: allocation.installmentNumber === null || allocation.installmentNumber === undefined
+        ? null
+        : Number(allocation.installmentNumber),
+      amount: num(allocation.amount),
+    })),
+    scheduleShift: parseScheduleShift(r.schedule_shift),
     amount: num(r.amount),
     paymentDate: toIsoDate(r.payment_date) ?? "",
     paymentMethod: r.payment_method as RevenuePaymentMethod,
@@ -3407,7 +4338,18 @@ function mapEnrollmentPayment(r: Record<string, unknown>): EnrollmentPayment {
 
 const ENROLLMENT_PAYMENT_SELECT = `
   SELECT ep.*, (ep.invoice_file IS NOT NULL) AS has_invoice, cb.name AS card_brand_name,
-         r.description AS revenue_description, r.date AS revenue_date, r.installment_number
+         r.description AS revenue_description, r.date AS revenue_date, r.installment_number,
+         COALESCE((
+           SELECT JSON_AGG(JSON_BUILD_OBJECT(
+             'revenueId', allocation.revenue_id,
+             'revenueDate', revenue.date::text,
+             'installmentNumber', revenue.installment_number,
+             'amount', allocation.amount
+           ) ORDER BY revenue.date, revenue.installment_number, allocation.revenue_id)
+           FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation
+           JOIN ${SCHEMA}.finance_revenues revenue ON revenue.id = allocation.revenue_id
+           WHERE allocation.payment_id = ep.id
+         ), '[]'::json) AS allocations
   FROM ${SCHEMA}.finance_enrollment_payments ep
   LEFT JOIN ${SCHEMA}.finance_card_brands cb ON cb.id = ep.card_brand_id
   LEFT JOIN ${SCHEMA}.finance_revenues r ON r.id = ep.revenue_id
@@ -3423,9 +4365,9 @@ async function lockEnrollmentAndGetBalance(
   client: PoolClient,
   enrollmentId: number,
   excludingPaymentId?: number
-): Promise<{ total: number; paid: number; balance: number }> {
+): Promise<{ total: number; paid: number; balance: number; ratePct: number }> {
   const { rows: enrollmentRows } = await client.query(
-    `SELECT total_amount FROM ${SCHEMA}.finance_enrollments WHERE id = $1 FOR UPDATE`,
+    `SELECT total_amount, rate_pct FROM ${SCHEMA}.finance_enrollments WHERE id = $1 FOR UPDATE`,
     [enrollmentId]
   );
   if (!enrollmentRows[0]) throw new Error("Matrícula não encontrada.");
@@ -3441,7 +4383,12 @@ async function lockEnrollmentAndGetBalance(
   );
   const total = round2(num(enrollmentRows[0].total_amount));
   const paid = round2(num(totalRows[0]?.paid));
-  return { total, paid, balance: Math.max(0, round2(total - paid)) };
+  return {
+    total,
+    paid,
+    balance: Math.max(0, round2(total - paid)),
+    ratePct: num(enrollmentRows[0].rate_pct),
+  };
 }
 
 function assertPaymentFitsBalance(amount: number, balance: number): void {
@@ -3462,35 +4409,266 @@ function normalizeAsaasPaymentUrl(value: string | null | undefined): string | nu
   }
 }
 
-/** Resolve a parcela do recebimento: a escolhida pelo usuário ou a do mês da data. */
-async function lockEnrollmentRevenue(
+/**
+ * Resolve e rateia um recebimento entre parcelas. Sem seleção explícita, usa
+ * a primeira parcela prevista no mês da data do pagamento, preservando o
+ * comportamento anterior. Com duas ou mais parcelas selecionadas, distribui
+ * pela ordem de vencimento até quitar o valor informado.
+ */
+async function resolveEnrollmentPaymentAllocations(
   client: PoolClient,
   enrollmentId: number,
-  revenueId: number | null | undefined,
-  paymentDate: string
-): Promise<number> {
-  const values: unknown[] = revenueId
-    ? [revenueId]
-    : [enrollmentId, monthToDate(paymentDate.slice(0, 7))];
-  const { rows } = await client.query(
-    revenueId
-      ? `SELECT id, enrollment_id, status FROM ${SCHEMA}.finance_revenues WHERE id = $1 FOR UPDATE`
-      : `SELECT id, enrollment_id, status FROM ${SCHEMA}.finance_revenues
-         WHERE enrollment_id = $1 AND date = $2::date
-         ORDER BY installment_number, id LIMIT 1 FOR UPDATE`,
-    values
+  revenueIds: number[] | null | undefined,
+  legacyRevenueId: number | null | undefined,
+  paymentDate: string,
+  amount: number,
+  excludingPaymentId?: number
+): Promise<{ requested: number[]; allocations: Array<{ revenueId: number; amount: number }> }> {
+  const requested = Array.from(
+    new Set(
+      (revenueIds?.length ? revenueIds : legacyRevenueId ? [legacyRevenueId] : [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
   );
-  const revenue = rows[0];
-  if (!revenue || Number(revenue.enrollment_id) !== enrollmentId) {
-    throw new Error(revenueId
-      ? "A parcela selecionada não pertence a esta matrícula."
-      : "Não há parcela prevista para o mês da data do pagamento. Selecione uma parcela de referência.");
+
+  if (requested.length === 0) {
+    const { rows } = await client.query(
+      `SELECT id FROM ${SCHEMA}.finance_revenues
+       WHERE enrollment_id = $1 AND date = $2::date
+       ORDER BY installment_number, id LIMIT 1 FOR UPDATE`,
+      [enrollmentId, monthToDate(paymentDate.slice(0, 7))]
+    );
+    if (!rows[0]) {
+      throw new Error("Não há parcela prevista para o mês da data do pagamento. Selecione as parcelas que serão quitadas.");
+    }
+    requested.push(Number(rows[0].id));
   }
-  if (revenue.status === "cancelado") throw new Error("Não é possível lançar pagamento em uma parcela cancelada.");
-  return Number(revenue.id);
+
+  const allocationValues: unknown[] = [requested, enrollmentId];
+  const excludingSql = excludingPaymentId ? " AND payment_id <> $3" : "";
+  if (excludingPaymentId) allocationValues.push(excludingPaymentId);
+  const { rows } = await client.query(
+    `SELECT r.id, r.enrollment_id, r.status, r.amount, r.date, r.installment_number,
+            COALESCE((
+              SELECT SUM(amount) FROM ${SCHEMA}.finance_enrollment_payment_allocations
+               WHERE revenue_id = r.id${excludingSql}
+            ), 0) AS allocated_amount
+       FROM ${SCHEMA}.finance_revenues r
+      WHERE r.id = ANY($1::bigint[]) AND r.enrollment_id = $2
+      ORDER BY r.date, r.installment_number, r.id
+      FOR UPDATE`,
+    allocationValues
+  );
+  if (rows.length !== requested.length) {
+    throw new Error("Uma das parcelas selecionadas não pertence a esta matrícula.");
+  }
+  let remainingPayment = round2(amount);
+  const allocations: Array<{ revenueId: number; amount: number }> = [];
+  for (const revenue of rows) {
+    if (revenue.status === "cancelado") throw new Error("Não é possível lançar pagamento em uma parcela cancelada.");
+    const available = Math.max(0, round2(num(revenue.amount) - num(revenue.allocated_amount)));
+    if (available <= 0) continue;
+    const allocated = Math.min(available, remainingPayment);
+    if (allocated > 0) {
+      allocations.push({ revenueId: Number(revenue.id), amount: round2(allocated) });
+      remainingPayment = round2(remainingPayment - allocated);
+    }
+  }
+  if (remainingPayment > 0.0001) {
+    throw new Error("O valor informado é maior que o saldo das parcelas selecionadas.");
+  }
+  if (allocations.length === 0) throw new Error("As parcelas selecionadas já estão quitadas.");
+  return { requested, allocations };
 }
 
-/** Recalcula cada parcela somente com os pagamentos diretamente vinculados. */
+// ── Remanejamento do saldo das parcelas selecionadas ──────────────
+
+/** Linha do cronograma como o remanejamento a enxerga, em ordem cronológica. */
+export interface EnrollmentScheduleLine {
+  revenueId: number;
+  amount: number;
+  /** Soma de TODOS os rateios gravados para esta parcela, deste e de outros pagamentos. */
+  allocated: number;
+  /** A parcela foi marcada no recebimento que está sendo lançado. */
+  selected: boolean;
+  cancelled: boolean;
+  /** Entrada é 0; ela não absorve diferença porque é um fato passado do contrato. */
+  installmentNumber: number | null;
+}
+
+/** Valor de uma parcela antes e depois do remanejamento, para poder desfazer. */
+export interface ScheduleShiftEntry {
+  revenueId: number;
+  before: number;
+  after: number;
+}
+
+/**
+ * Quando o recebimento é menor que o saldo das parcelas selecionadas, cada uma
+ * delas fica quitada pelo que efetivamente recebeu e a diferença é remanejada,
+ * em partes iguais, para as parcelas ainda intocadas. O valor do contrato não
+ * muda — é adiamento de dívida, não desconto.
+ *
+ * Devolve lista vazia (mantendo o rateio em cascata, que deixa a última
+ * selecionada parcial) em duas situações:
+ * - não sobrou parcela em aberto para absorver a diferença;
+ * - a parcela selecionada não recebeu um centavo — quitá-la seria fabricar
+ *   quitação, então ela continua aberta pelo valor cheio.
+ */
+export function planShortfallRedistribution(lines: EnrollmentScheduleLine[]): ScheduleShiftEntry[] {
+  const settled = lines.filter(
+    (line) => line.selected && !line.cancelled && line.allocated > 0.005 && line.amount - line.allocated > 0.005
+  );
+  const shortfall = round2(settled.reduce((total, line) => total + (line.amount - line.allocated), 0));
+  if (shortfall <= 0.005) return [];
+
+  const absorbers = lines.filter(
+    (line) => !line.selected && !line.cancelled && line.allocated <= 0.005 && (line.installmentNumber ?? 0) > 0
+  );
+  if (absorbers.length === 0) return [];
+
+  const shares = splitInstallments(
+    round2(absorbers.reduce((total, line) => total + line.amount, 0) + shortfall),
+    absorbers.length
+  );
+  return [
+    ...settled.map((line) => ({ revenueId: line.revenueId, before: round2(line.amount), after: round2(line.allocated) })),
+    ...absorbers.map((line, index) => ({ revenueId: line.revenueId, before: round2(line.amount), after: shares[index] })),
+  ].filter((entry) => Math.abs(entry.before - entry.after) > 0.005);
+}
+
+function parseScheduleShift(value: unknown): ScheduleShiftEntry[] {
+  const raw = typeof value === "string" ? JSON.parse(value) as unknown : value;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => item as Record<string, unknown>)
+    .filter((item) => item && Number.isInteger(Number(item.revenueId)))
+    .map((item) => ({ revenueId: Number(item.revenueId), before: num(item.before), after: num(item.after) }));
+}
+
+async function loadEnrollmentScheduleLines(
+  client: PoolClient,
+  enrollmentId: number,
+  selectedRevenueIds: number[]
+): Promise<EnrollmentScheduleLine[]> {
+  const { rows } = await client.query(
+    `SELECT r.id, r.amount, r.status, r.installment_number,
+            COALESCE((
+              SELECT SUM(allocation.amount)
+              FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation
+              WHERE allocation.revenue_id = r.id
+            ), 0) AS allocated
+       FROM ${SCHEMA}.finance_revenues r
+      WHERE r.enrollment_id = $1
+      ORDER BY CASE WHEN r.installment_number = 0 THEN 0 ELSE 1 END, r.installment_number, r.id
+      FOR UPDATE`,
+    [enrollmentId]
+  );
+  const selected = new Set(selectedRevenueIds);
+  return rows.map((row) => ({
+    revenueId: Number(row.id),
+    amount: round2(num(row.amount)),
+    allocated: round2(num(row.allocated)),
+    selected: selected.has(Number(row.id)),
+    cancelled: row.status === "cancelado",
+    installmentNumber: row.installment_number === null || row.installment_number === undefined
+      ? null
+      : Number(row.installment_number),
+  }));
+}
+
+/**
+ * Grava os novos valores. Parcela que já recebeu dinheiro conserva a taxa
+ * prevista original — mesma regra da renegociação manual em
+ * `updateOpenEnrollmentSchedule`; a que continua aberta recalcula pela taxa
+ * do contrato.
+ */
+async function writeEnrollmentScheduleAmounts(
+  client: PoolClient,
+  entries: ScheduleShiftEntry[],
+  ratePct: number,
+  field: "before" | "after"
+): Promise<void> {
+  for (const entry of entries) {
+    await client.query(
+      `UPDATE ${SCHEMA}.finance_revenues
+          SET amount = $2,
+              fee_amount = CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation
+                  WHERE allocation.revenue_id = ${SCHEMA}.finance_revenues.id
+                ) THEN fee_amount
+                ELSE ROUND($2::numeric * $3::numeric / 100, 2)
+              END,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [entry.revenueId, entry[field], ratePct]
+    );
+  }
+}
+
+async function applyEnrollmentScheduleShift(
+  client: PoolClient,
+  paymentId: number,
+  entries: ScheduleShiftEntry[],
+  ratePct: number
+): Promise<void> {
+  await writeEnrollmentScheduleAmounts(client, entries, ratePct, "after");
+  await client.query(
+    `UPDATE ${SCHEMA}.finance_enrollment_payments SET schedule_shift = $2::jsonb WHERE id = $1`,
+    [paymentId, entries.length > 0 ? JSON.stringify(entries) : null]
+  );
+}
+
+/**
+ * Desfaz o remanejamento gravado num pagamento. É tudo ou nada: se qualquer
+ * parcela envolvida já foi mexida depois (renegociação manual no editor, ou
+ * outro pagamento que ocupou o valor novo), o cronograma fica como está —
+ * voltar só uma parte quebraria a invariante "soma das parcelas = contrato".
+ */
+async function revertEnrollmentScheduleShift(
+  client: PoolClient,
+  paymentId: number,
+  ratePct: number
+): Promise<boolean> {
+  const { rows } = await client.query(
+    `SELECT schedule_shift FROM ${SCHEMA}.finance_enrollment_payments WHERE id = $1`,
+    [paymentId]
+  );
+  const entries = parseScheduleShift(rows[0]?.schedule_shift);
+  if (entries.length === 0) return true;
+
+  const { rows: currentRows } = await client.query(
+    `SELECT r.id, r.amount,
+            COALESCE((
+              SELECT SUM(allocation.amount)
+              FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation
+              WHERE allocation.revenue_id = r.id AND allocation.payment_id <> $2
+            ), 0) AS allocated_by_others
+       FROM ${SCHEMA}.finance_revenues r
+      WHERE r.id = ANY($1::bigint[])
+      FOR UPDATE`,
+    [entries.map((entry) => entry.revenueId), paymentId]
+  );
+  const current = new Map(currentRows.map((row) => [Number(row.id), row]));
+  const canRevert = entries.every((entry) => {
+    const row = current.get(entry.revenueId);
+    if (!row) return false;
+    return Math.abs(num(row.amount) - entry.after) <= 0.005
+      && entry.before >= num(row.allocated_by_others) - 0.005;
+  });
+  if (!canRevert) return false;
+
+  await writeEnrollmentScheduleAmounts(client, entries, ratePct, "before");
+  await client.query(
+    `UPDATE ${SCHEMA}.finance_enrollment_payments SET schedule_shift = NULL WHERE id = $1`,
+    [paymentId]
+  );
+  return true;
+}
+
+/** Recalcula cada parcela com a soma de todos os rateios que a quitam. */
 async function recomputeEnrollmentSchedule(client: PoolClient, enrollmentId: number): Promise<void> {
   await client.query(
     `WITH calc AS (
@@ -3504,7 +4682,7 @@ async function recomputeEnrollmentSchedule(client: PoolClient, enrollmentId: num
        FROM ${SCHEMA}.finance_revenues r
        LEFT JOIN LATERAL (
          SELECT COALESCE(SUM(amount), 0) AS paid
-         FROM ${SCHEMA}.finance_enrollment_payments ep WHERE ep.revenue_id = r.id
+         FROM ${SCHEMA}.finance_enrollment_payment_allocations allocation WHERE allocation.revenue_id = r.id
        ) p ON TRUE
        WHERE r.enrollment_id = $1 AND r.status <> 'cancelado'
      )
@@ -3548,9 +4726,16 @@ export async function createEnrollmentPayment(
   const client = await getPool().connect();
   try {
     await client.query("BEGIN");
-    const { balance } = await lockEnrollmentAndGetBalance(client, enrollmentId);
+    const { balance, ratePct } = await lockEnrollmentAndGetBalance(client, enrollmentId);
     assertPaymentFitsBalance(amount, balance);
-    const revenueId = await lockEnrollmentRevenue(client, enrollmentId, input.revenueId, input.paymentDate);
+    const { requested, allocations } = await resolveEnrollmentPaymentAllocations(
+      client,
+      enrollmentId,
+      input.revenueIds,
+      input.revenueId,
+      input.paymentDate,
+      amount
+    );
 
     const { feePct, feeAmount, netAmount } = await calculatePaymentFee(client, {
       method,
@@ -3570,7 +4755,7 @@ export async function createEnrollmentPayment(
        RETURNING id`,
       [
         enrollmentId,
-        revenueId,
+        allocations[0].revenueId,
         amount,
         input.paymentDate,
         method,
@@ -3587,12 +4772,24 @@ export async function createEnrollmentPayment(
         input.createdByName?.trim() || null,
       ]
     );
+    const paymentId = Number(rows[0].id);
+    for (const allocation of allocations) {
+      await client.query(
+        `INSERT INTO ${SCHEMA}.finance_enrollment_payment_allocations (payment_id, revenue_id, amount)
+         VALUES ($1, $2, $3)`,
+        [paymentId, allocation.revenueId, allocation.amount]
+      );
+    }
+    if (input.redistributeShortfall !== false) {
+      const lines = await loadEnrollmentScheduleLines(client, enrollmentId, requested);
+      await applyEnrollmentScheduleShift(client, paymentId, planShortfallRedistribution(lines), ratePct);
+    }
     await recomputeEnrollmentSchedule(client, enrollmentId);
     await client.query("COMMIT");
 
     const enrollment = await getEnrollmentById(enrollmentId);
     if (!enrollment) throw new Error("Matrícula não encontrada após lançamento.");
-    return { id: Number(rows[0].id), enrollment };
+    return { id: paymentId, enrollment };
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;
@@ -3626,14 +4823,40 @@ export async function updateEnrollmentPayment(
     const installments = input.installments === undefined ? current.installments : input.installments;
     const cardBrandId = input.cardBrandId === undefined ? current.card_brand_id : input.cardBrandId;
     const oldRevenueId = current.revenue_id === null || current.revenue_id === undefined ? null : Number(current.revenue_id);
-    const revenueId = input.revenueId === undefined ? oldRevenueId : input.revenueId;
     const asaasPaymentUrl = input.asaasPaymentUrl === undefined
       ? normalizeAsaasPaymentUrl((current.asaas_payment_url as string | null | undefined) ?? null)
       : normalizeAsaasPaymentUrl(input.asaasPaymentUrl);
     const enrollmentId = Number(current.enrollment_id);
-    const { balance } = await lockEnrollmentAndGetBalance(client, enrollmentId, paymentId);
+    const { balance, ratePct } = await lockEnrollmentAndGetBalance(client, enrollmentId, paymentId);
+    // O rateio é refeito do zero, então o cronograma precisa voltar ao que era
+    // antes deste pagamento — senão o remanejamento seria aplicado duas vezes.
+    if (!(await revertEnrollmentScheduleShift(client, paymentId, ratePct))) {
+      throw new Error(
+        "O cronograma foi renegociado depois deste pagamento, então ele não pode mais ser editado aqui. Exclua o pagamento e lance de novo, ou ajuste as parcelas no editor da matrícula."
+      );
+    }
     assertPaymentFitsBalance(amount, balance);
-    const resolvedRevenueId = await lockEnrollmentRevenue(client, enrollmentId, revenueId, paymentDate);
+    const currentAllocationRows = await client.query(
+      `SELECT revenue_id FROM ${SCHEMA}.finance_enrollment_payment_allocations WHERE payment_id = $1 ORDER BY revenue_id`,
+      [paymentId]
+    );
+    const preservedRevenueIds = currentAllocationRows.rows.length > 0
+      ? currentAllocationRows.rows.map((row) => Number(row.revenue_id))
+      : oldRevenueId ? [oldRevenueId] : [];
+    const requestedRevenueIds = input.revenueIds !== undefined
+      ? input.revenueIds
+      : input.revenueId !== undefined
+        ? input.revenueId === null ? [] : [input.revenueId]
+        : preservedRevenueIds;
+    const { requested, allocations } = await resolveEnrollmentPaymentAllocations(
+      client,
+      enrollmentId,
+      requestedRevenueIds,
+      null,
+      paymentDate,
+      amount,
+      paymentId
+    );
 
     const { feePct, feeAmount, netAmount } = await calculatePaymentFee(client, {
       method,
@@ -3650,7 +4873,7 @@ export async function updateEnrollmentPayment(
        WHERE id = $1`,
       [
         paymentId,
-        resolvedRevenueId,
+        allocations[0].revenueId,
         amount,
         paymentDate,
         method,
@@ -3665,6 +4888,18 @@ export async function updateEnrollmentPayment(
         round2((amount * commissionPct) / 100),
       ]
     );
+    await client.query(`DELETE FROM ${SCHEMA}.finance_enrollment_payment_allocations WHERE payment_id = $1`, [paymentId]);
+    for (const allocation of allocations) {
+      await client.query(
+        `INSERT INTO ${SCHEMA}.finance_enrollment_payment_allocations (payment_id, revenue_id, amount)
+         VALUES ($1, $2, $3)`,
+        [paymentId, allocation.revenueId, allocation.amount]
+      );
+    }
+    if (input.redistributeShortfall !== false) {
+      const lines = await loadEnrollmentScheduleLines(client, enrollmentId, requested);
+      await applyEnrollmentScheduleShift(client, paymentId, planShortfallRedistribution(lines), ratePct);
+    }
     await recomputeEnrollmentSchedule(client, enrollmentId);
     await client.query("COMMIT");
 
@@ -3690,7 +4925,11 @@ export async function deleteEnrollmentPayment(paymentId: number): Promise<Financ
     );
     const enrollmentId = paymentRows[0]?.enrollment_id ? Number(paymentRows[0].enrollment_id) : null;
     if (!enrollmentId) throw new Error("Pagamento não encontrado.");
-    await lockEnrollmentAndGetBalance(client, enrollmentId);
+    const { ratePct } = await lockEnrollmentAndGetBalance(client, enrollmentId);
+    // Se o remanejamento não puder mais ser desfeito (parcela mexida depois),
+    // o cronograma renegociado permanece: a soma das parcelas continua igual
+    // ao contrato, e desfazer pela metade é que deixaria a matrícula torta.
+    await revertEnrollmentScheduleShift(client, paymentId, ratePct);
     await client.query(`DELETE FROM ${SCHEMA}.finance_enrollment_payments WHERE id = $1`, [paymentId]);
     await recomputeEnrollmentSchedule(client, enrollmentId);
     await client.query("COMMIT");
@@ -3833,6 +5072,16 @@ export async function listCommissions(filters: FinanceFilters = {}): Promise<Fin
   if (filters.sellerId) {
     values.push(filters.sellerId);
     conditions.push(`cm.seller_id = $${values.length}`);
+  }
+  // Mesma regra do resumo (ver commissionBusinessUnitSql): a comissão segue a
+  // unidade da matrícula que a gerou, e comissão lançada à mão conta como
+  // VozUP. Sem isto, a lista mostrava a comissão das duas empresas junto
+  // enquanto o resumo logo acima já mostrava só a da unidade escolhida.
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`COALESCE((
+      SELECT e.business_unit FROM ${SCHEMA}.finance_enrollments e WHERE e.id = cm.enrollment_id
+    ), 'vozup') = $${values.length}`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await getPool().query(
@@ -4051,6 +5300,17 @@ export async function getBranchItemInvoice(
 
 // ── Resumos (dashboard, fluxo de caixa, trimestral) ──────────────
 
+/**
+ * Recorte por unidade de negócio, para qualquer tabela que tenha a coluna.
+ * Sem filtro escolhido, soma as duas — "Tudo" é ausência de condição, nunca
+ * `= 'vozup'`.
+ */
+function businessUnitSql(filters: FinanceFilters, values: unknown[], alias = ""): string {
+  if (!filters.businessUnit) return "";
+  values.push(filters.businessUnit);
+  return ` AND ${alias}business_unit = $${values.length}`;
+}
+
 function buildRevenueFilterSql(filters: FinanceFilters, values: unknown[]): string {
   const conditions: string[] = [];
   for (const [key, column] of [
@@ -4066,7 +5326,8 @@ function buildRevenueFilterSql(filters: FinanceFilters, values: unknown[]): stri
       conditions.push(`${column} = $${values.length}`);
     }
   }
-  return conditions.length ? ` AND ${conditions.join(" AND ")}` : "";
+  const base = conditions.length ? ` AND ${conditions.join(" AND ")}` : "";
+  return base + businessUnitSql(filters, values, "r.");
 }
 
 /** Filtros aplicáveis a uma matrícula quando o lançamento é um pagamento real. */
@@ -4084,7 +5345,29 @@ function buildEnrollmentFilterSql(filters: FinanceFilters, values: unknown[]): s
       conditions.push(`${column} = $${values.length}`);
     }
   }
+  // Sem isto, o recebimento de uma matrícula da VozUP aparecia como "entrou"
+  // na visão do Instituto UP: o dinheiro real vem daqui, não da parcela.
+  if (filters.businessUnit) {
+    values.push(filters.businessUnit);
+    conditions.push(`e.business_unit = $${values.length}`);
+  }
   return conditions.length ? ` AND ${conditions.join(" AND ")}` : "";
+}
+
+/**
+ * Comissão segue a unidade da matrícula que a gerou. Comissão lançada à mão,
+ * sem matrícula vinculada, conta como VozUP — era a única operação até a
+ * separação existir.
+ */
+function commissionBusinessUnitSql(filters: FinanceFilters, values: unknown[], alias = "ci"): string {
+  if (!filters.businessUnit) return "";
+  values.push(filters.businessUnit);
+  return ` AND COALESCE((
+    SELECT e.business_unit FROM ${SCHEMA}.finance_enrollments e
+      JOIN ${SCHEMA}.finance_commissions c2 ON c2.enrollment_id = e.id
+     WHERE c2.id = ${alias}.commission_id
+     LIMIT 1
+  ), 'vozup') = $${values.length}`;
 }
 
 /** Totais mensais consolidados entre `from` e `to` (inclusive), mês a mês. */
@@ -4110,7 +5393,12 @@ export async function getMonthlyTotals(
   // (curso, vendedor, forma de pagamento, categoria de receita) não existem nas
   // tabelas de gasto. A tela avisa isso ao ativar um filtro desses.
   const expenseBranchValues: unknown[] = [fromDate, toDate];
-  const expenseBranchSql = filters.branchId ? ` AND branch_id = $${expenseBranchValues.push(filters.branchId)}` : "";
+  const expenseBranchSql =
+    (filters.branchId ? ` AND branch_id = $${expenseBranchValues.push(filters.branchId)}` : "") +
+    businessUnitSql(filters, expenseBranchValues);
+  // Fixas não têm unidade física, mas têm unidade de negócio.
+  const fixedValues: unknown[] = [fromDate, toDate, FIXED_EXPENSES_START_DATE];
+  const fixedBusinessUnitSql = businessUnitSql(filters, fixedValues);
   const enrollmentValues: unknown[] = [fromDate, toDate];
   const enrollmentFilterSql = buildEnrollmentFilterSql(filters, enrollmentValues);
   const [revenues, fixed, variable, commissions, branchSetup, enrollments] = await Promise.all([
@@ -4134,8 +5422,8 @@ export async function getMonthlyTotals(
     pool.query(
       `SELECT month, COALESCE(SUM(amount + COALESCE(benefits_amount, 0)), 0) AS total
        FROM ${SCHEMA}.finance_fixed_expenses
-       WHERE month >= $1 AND month < $2 AND month >= $3::date GROUP BY month`,
-      [fromDate, toDate, FIXED_EXPENSES_START_DATE]
+       WHERE month >= $1 AND month < $2 AND month >= $3::date${fixedBusinessUnitSql} GROUP BY month`,
+      fixedValues
     ),
     pool.query(
       // Variáveis são gastos pontuais reais e entram desde a data do lançamento.
@@ -4146,11 +5434,16 @@ export async function getMonthlyTotals(
        GROUP BY 1`,
       expenseBranchValues
     ),
-    pool.query(
-      `SELECT month, COALESCE(SUM(amount), 0) AS total
-       FROM ${SCHEMA}.finance_commission_installments WHERE month >= $1 AND month < $2 GROUP BY month`,
-      [fromDate, toDate]
-    ),
+    (() => {
+      const values: unknown[] = [fromDate, toDate];
+      const unitSql = commissionBusinessUnitSql(filters, values);
+      return pool.query(
+        `SELECT month, COALESCE(SUM(amount), 0) AS total
+           FROM ${SCHEMA}.finance_commission_installments ci
+          WHERE month >= $1 AND month < $2${unitSql} GROUP BY month`,
+        values
+      );
+    })(),
     pool.query(
       `SELECT date_trunc('month', date)::date AS month, COALESCE(SUM(amount), 0) AS total
        FROM ${SCHEMA}.finance_branch_items WHERE date IS NOT NULL AND date >= $1 AND date < $2${expenseBranchSql} GROUP BY 1`,
@@ -4479,8 +5772,11 @@ async function getFinanceCashOverview(
   const enrollmentPaymentValues: unknown[] = [fromDate, toDate];
   const enrollmentPaymentFilterSql = buildEnrollmentFilterSql(filters, enrollmentPaymentValues);
 
-  const branchFilter = filters.branchId ? " AND branch_id = $3" : "";
   const branchValues: unknown[] = filters.branchId ? [fromDate, toDate, filters.branchId] : [fromDate, toDate];
+  const branchFilter =
+    (filters.branchId ? " AND branch_id = $3" : "") + businessUnitSql(filters, branchValues);
+  const cashFixedValues: unknown[] = [fromDate, toDate, FIXED_EXPENSES_START_DATE];
+  const cashFixedBusinessUnitSql = businessUnitSql(filters, cashFixedValues);
 
   const commissionConditions: string[] = [];
   const commissionValues: unknown[] = [fromDate, toDate];
@@ -4495,7 +5791,9 @@ async function getFinanceCashOverview(
       commissionConditions.push(`${column} = $${commissionValues.length}`);
     }
   }
-  const commissionFilterSql = commissionConditions.length ? ` AND ${commissionConditions.join(" AND ")}` : "";
+  const commissionFilterSql =
+    (commissionConditions.length ? ` AND ${commissionConditions.join(" AND ")}` : "") +
+    commissionBusinessUnitSql(filters, commissionValues);
 
   const [revenues, enrollmentPayments, fixed, variable, commissions, branch] = await Promise.all([
     // Receitas "legacy" (matrícula/lançamento antigo) mantêm exatamente o
@@ -4539,8 +5837,8 @@ async function getFinanceCashOverview(
           COALESCE(SUM(amount + COALESCE(benefits_amount, 0)) FILTER (WHERE status = 'pago'), 0) AS paid,
           COALESCE(SUM(amount + COALESCE(benefits_amount, 0)) FILTER (WHERE status <> 'pago'), 0) AS to_pay
        FROM ${SCHEMA}.finance_fixed_expenses
-       WHERE month >= $1 AND month < $2 AND month >= $3::date`,
-      [fromDate, toDate, FIXED_EXPENSES_START_DATE]
+       WHERE month >= $1 AND month < $2 AND month >= $3::date${cashFixedBusinessUnitSql}`,
+      cashFixedValues
     ),
     pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS paid
@@ -4623,7 +5921,9 @@ async function getFinanceAlerts(fromDate: string, toDate: string, filters: Finan
       commissionConditions.push(`${column} = $${commissionValues.length}`);
     }
   }
-  const commissionFilterSql = commissionConditions.length ? ` AND ${commissionConditions.join(" AND ")}` : "";
+  const commissionFilterSql =
+    (commissionConditions.length ? ` AND ${commissionConditions.join(" AND ")}` : "") +
+    commissionBusinessUnitSql(filters, commissionValues);
 
   const [dueSoonBills, overdueBills, overdueRevenues, pendingCommissions] = await Promise.all([
     pool.query(
@@ -4772,6 +6072,16 @@ export async function getFinanceDashboardSummary(
   const previousToDate = monthToDate(addMonths(previousTo, 1));
   const distributionValues: unknown[] = [fromDate, toDate];
   const revenueFilterSql = buildRevenueFilterSql(filters, distributionValues);
+  // A distribuição de despesas soma três fontes numa consulta só (fixas,
+  // comissões e variáveis); cada uma precisa do seu recorte de unidade, e os
+  // três compartilham a mesma lista de parâmetros.
+  const distUnitSql = (() => {
+    const values: unknown[] = [fromDate, toDate];
+    const fixed = businessUnitSql(filters, values, "f.");
+    const commission = commissionBusinessUnitSql(filters, values);
+    const variable = businessUnitSql(filters, values, "v.");
+    return { values, fixed, commission, variable };
+  })();
 
   const [expenseDistribution, revenueByCourse, revenueByBranch, commissionBySeller, paidCommissions, cashBalance, cashOverview, alerts, allTimeSpend] =
     await Promise.all([
@@ -4779,17 +6089,17 @@ export async function getFinanceDashboardSummary(
         `SELECT COALESCE(c.name, 'Sem categoria') AS name, SUM(f.amount + COALESCE(f.benefits_amount, 0)) AS value
          FROM ${SCHEMA}.finance_fixed_expenses f
          LEFT JOIN ${SCHEMA}.finance_categories c ON c.id = f.category_id
-         WHERE f.month >= $1 AND f.month < $2 AND f.month >= '${FIXED_EXPENSES_START_DATE}'::date
+         WHERE f.month >= $1 AND f.month < $2 AND f.month >= '${FIXED_EXPENSES_START_DATE}'::date${distUnitSql.fixed}
          GROUP BY 1
          UNION ALL
          SELECT '${COMMISSION_EXPENSE_LABEL}' AS name, COALESCE(SUM(amount), 0) AS value
-         FROM ${SCHEMA}.finance_commission_installments WHERE month >= $1 AND month < $2
+         FROM ${SCHEMA}.finance_commission_installments ci WHERE month >= $1 AND month < $2${distUnitSql.commission}
          UNION ALL
          SELECT COALESCE(c.name, 'Variáveis') AS name, SUM(v.amount) AS value
          FROM ${SCHEMA}.finance_variable_expenses v
          LEFT JOIN ${SCHEMA}.finance_categories c ON c.id = v.category_id
-         WHERE v.date >= $1 AND v.date < $2 GROUP BY 1`,
-        [fromDate, toDate]
+         WHERE v.date >= $1 AND v.date < $2${distUnitSql.variable} GROUP BY 1`,
+        distUnitSql.values
       ),
       getDistribution(
         `SELECT COALESCE(co.name, 'Sem curso') AS name, SUM(r.amount) AS value
@@ -4815,12 +6125,19 @@ export async function getFinanceDashboardSummary(
          WHERE ci.month >= $1 AND ci.month < $2 GROUP BY 1 ORDER BY 2 DESC`,
         [fromDate, toDate]
       ),
-      getPool().query(
-        `SELECT COALESCE(SUM(amount), 0) AS total,
-                (SELECT COALESCE(SUM(amount), 0) FROM ${SCHEMA}.finance_commission_installments WHERE month >= $3 AND month < $4 AND status = 'pago') AS prev_total
-         FROM ${SCHEMA}.finance_commission_installments WHERE month >= $1 AND month < $2 AND status = 'pago'`,
-        [fromDate, toDate, previousFromDate, previousToDate]
-      ),
+      (() => {
+          const values: unknown[] = [fromDate, toDate, previousFromDate, previousToDate];
+          const unitSql = commissionBusinessUnitSql(filters, values);
+          const prevUnitSql = commissionBusinessUnitSql(filters, values, "ci_prev");
+          return getPool().query(
+            `SELECT COALESCE(SUM(amount), 0) AS total,
+                    (SELECT COALESCE(SUM(amount), 0) FROM ${SCHEMA}.finance_commission_installments ci_prev
+                      WHERE month >= $3 AND month < $4 AND status = 'pago'${prevUnitSql}) AS prev_total
+             FROM ${SCHEMA}.finance_commission_installments ci
+             WHERE month >= $1 AND month < $2 AND status = 'pago'${unitSql}`,
+            values
+          );
+        })(),
       getCashBalance(),
       getFinanceCashOverview(fromDate, toDate, filters, current),
       getFinanceAlerts(fromDate, toDate, filters),
@@ -4834,10 +6151,15 @@ export async function getFinanceDashboardSummary(
   const legacyValues: unknown[] = [fromDate, toDate];
   const legacyRevenueFilterSql = buildRevenueFilterSql(filters, legacyValues);
   const [commissionsGeneratedLegacyRow, cardFeesLegacyRow, revenuePaymentsAggRow, enrollmentPaymentsAggRow] = await Promise.all([
-    getPool().query(
-      `SELECT COALESCE(SUM(amount), 0) AS total FROM ${SCHEMA}.finance_commission_installments WHERE month >= $1 AND month < $2`,
-      [fromDate, toDate]
-    ),
+    (() => {
+        const values: unknown[] = [fromDate, toDate];
+        const unitSql = commissionBusinessUnitSql(filters, values);
+        return getPool().query(
+          `SELECT COALESCE(SUM(amount), 0) AS total FROM ${SCHEMA}.finance_commission_installments ci
+            WHERE month >= $1 AND month < $2${unitSql}`,
+          values
+        );
+      })(),
     getPool().query(
       `SELECT COALESCE(SUM(r.fee_amount), 0) AS total
        FROM ${SCHEMA}.finance_revenues r

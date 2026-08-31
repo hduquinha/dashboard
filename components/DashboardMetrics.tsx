@@ -1,4 +1,6 @@
-import { Users, TrendingUp, Award, Target } from "lucide-react";
+import { Users, TrendingUp, GraduationCap, UserPlus } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
+import type { LucideIcon } from "lucide-react";
 
 interface DashboardMetricsProps {
   totalLeads: number;
@@ -7,39 +9,45 @@ interface DashboardMetricsProps {
   graduados: number;
 }
 
+interface Metric {
+  label: string;
+  value: string;
+  change: string;
+  icon: LucideIcon;
+  tone: IconTileTone;
+}
+
 export default function DashboardMetrics({ totalLeads, newLeadsToday, conversionRate, graduados }: DashboardMetricsProps) {
-  const metrics = [
+  // Um ícone por indicador — nada de dois cartões com o mesmo desenho, que é o
+  // que fazia a linha de KPIs parecer repetida à primeira vista.
+  const metrics: Metric[] = [
     {
       label: "Total na Rede",
       value: totalLeads.toLocaleString(),
       change: "base atual",
       icon: Users,
-      color: "text-[rgb(var(--blue-11))]",
-      bg: "bg-[rgb(var(--blue-3))]",
+      tone: "brand",
     },
     {
       label: "Novos Leads (Hoje)",
       value: newLeadsToday.toLocaleString(),
       change: "desde 00h",
-      icon: Target,
-      color: "text-[rgb(var(--teal-9))]",
-      bg: "bg-[rgb(224_248_243)]",
+      icon: UserPlus,
+      tone: "teal",
     },
     {
       label: "Taxa de Conversão",
       value: `${conversionRate}%`,
       change: "presença aprovada",
       icon: TrendingUp,
-      color: "text-[rgb(var(--blue-11))]",
-      bg: "bg-[rgb(var(--blue-3))]",
+      tone: "amber",
     },
     {
       label: "Graduados",
       value: graduados.toLocaleString(),
       change: "validados",
-      icon: Award,
-      color: "text-[rgb(var(--slate-12))]",
-      bg: "bg-[rgb(var(--slate-3))]",
+      icon: GraduationCap,
+      tone: "slate",
     },
   ];
 
@@ -57,9 +65,7 @@ export default function DashboardMetrics({ totalLeads, newLeadsToday, conversion
               {metric.change}
             </span>
           </div>
-          <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${metric.bg}`}>
-            <metric.icon className={`h-6 w-6 ${metric.color}`} />
-          </div>
+          <IconTile icon={metric.icon} tone={metric.tone} size="lg" solid />
         </div>
       ))}
     </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckSquare, RefreshCw, Users } from "lucide-react";
+import { CheckCircle2, CheckSquare, RefreshCw, RotateCcw, Search, Users, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -24,9 +24,16 @@ import { STAGE_COLOR_CLASSES } from "@/lib/stageColors";
 import { buildWhatsAppWebUrl, humanizeName, openWhatsAppOnMobile } from "@/lib/utils";
 import { CopyPhoneButton } from "@/components/CopyPhoneButton";
 import { CloseLeadModal } from "@/components/CloseLeadModal";
+import { ObjectionModal } from "@/components/ObjectionModal";
+import { RegisterSaleModal } from "@/components/RegisterSaleModal";
+import { isSaleStage } from "@/lib/saleStage";
+import { FUNNEL_BOARDS, type FunnelBoard } from "@/lib/funnelBoards";
+import { ScheduleTaskModal } from "@/components/ScheduleTaskModal";
+import { isScheduledStage } from "@/lib/scheduleStage";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 import { computeDropPosition } from "@/lib/leadPosition";
 import { describeLeadSource } from "@/lib/leadFields";
+import { useAutoRefresh } from "@/components/useAutoRefresh";
 
 /* ── Stage config ───────────────────────────────────────── */
 // As colunas do board vêm de fora (etapas do funil selecionado) — cada
@@ -38,6 +45,16 @@ function stageConfig(stage: FunnelStage | undefined) {
 }
 
 const COLUMN_DROPPABLE_PREFIX = "column:";
+
+/**
+ * Vendedor sem a permissão "Registrar venda" movia o card para Fechado e não
+ * acontecia nada: nem modal, nem aviso. O lead ficava marcado como ganho, sem
+ * matrícula e sem contrato, e a equipe achava que o sistema tinha engolido a
+ * venda. O card continua se movendo — o que não pode é o silêncio.
+ */
+const SEM_PERMISSAO_VENDA =
+  "Este lead foi para Fechado, mas você não tem permissão para registrar a venda. " +
+  "Peça a um administrador para marcar “Registrar venda” no seu usuário (Administração → Usuários).";
 
 /* ── Types ──────────────────────────────────────────────── */
 
@@ -68,8 +85,16 @@ interface CrmKanbanViewProps {
   refreshToken?: number;
   /** Mostra "Fechar lead" no menu do card (fechou curso / sem continuidade). */
   allowCloseLead?: boolean;
+  /** Abre o registro de venda quando o lead chega na etapa Fechado. */
+  allowRegisterSale?: boolean;
   /** Vendedores disponíveis para o repasse em massa (supervisores). */
   sellers?: CommercialSeller[];
+  /**
+   * Quadro da Triagem de Leads: funis de trabalho para onde o card pode ser
+   * "aprovado". Com a lista preenchida, cada card ganha a ação Aprovar — o lead
+   * sai da triagem e nasce no Kanban de quem aprovou, mantendo o responsável.
+   */
+  approveFunnels?: Array<{ id: number; name: string }>;
 }
 
 /* ── Helpers ─────────────────────────────────────────────── */
@@ -143,18 +168,26 @@ function KanbanCardBody({
   isOverlay,
   stages,
   onRequestClose,
+  onRequestSale,
   isBulkSelected,
   onToggleBulkSelection,
   onSellerChange,
   sellers,
+  approveFunnels,
+  onApprove,
 }: Omit<KanbanCardVisualProps, "onSelect"> & {
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  onRequestSale?: (lead: InscricaoItem) => void;
   sellers?: CommercialSeller[];
+  approveFunnels?: Array<{ id: number; name: string }>;
+  onApprove?: (funnelId: number) => void;
 }) {
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const cfg = stageConfig(stages.find((s) => s.key === currentStage));
+  /** Funil repartido em quadros: o menu de mover mostra de qual quadro é cada coluna. */
+  const hasMultipleBoards = new Set(stages.map((s) => s.board)).size > 1;
   const training = trainingLabel(lead);
   const origem = describeLeadSource(lead.payload).origem;
   const attempts = lead.commercial?.contactAttempts ?? 0;
@@ -225,21 +258,59 @@ function KanbanCardBody({
             </button>
             {showMenu && (
               <div className="absolute right-0 top-7 z-50 w-44 overflow-hidden rounded-xl border border-neutral-200 bg-white shadow-xl">
+                {onApprove && approveFunnels && approveFunnels.length > 0 && (
+                  <>
+                    <p className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-neutral-400">
+                      Aprovar e mandar para
+                    </p>
+                    {approveFunnels.map((funnel) => (
+                      <button
+                        key={funnel.id}
+                        type="button"
+                        onClick={() => { onApprove(funnel.id); setShowMenu(false); }}
+                        className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50"
+                      >
+                        <CheckCircle2 className="h-3 w-3" />
+                        {funnel.name}
+                      </button>
+                    ))}
+                    <div className="my-1 border-t border-neutral-100" />
+                  </>
+                )}
                 <p className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-widest text-neutral-400">
                   Mover para
                 </p>
-                {stages.filter((s) => s.key !== currentStage).map((s) => {
-                  const c = stageConfig(s);
+                {/* O menu lista o funil inteiro, quadro a quadro: é por aqui que
+                    um card sai de um quadro e entra em outro (e volta). O nome
+                    do quadro aparece junto para ninguém mandar um lead para o
+                    pós-venda achando que é mais uma coluna do funil. */}
+                {FUNNEL_BOARDS.map((board) => {
+                  const boardOptions = stages.filter(
+                    (s) => s.board === board.key && s.key !== currentStage
+                  );
+                  if (boardOptions.length === 0) return null;
                   return (
-                    <button
-                      key={s.key}
-                      type="button"
-                      onClick={() => { onStageChange(s.key); setShowMenu(false); }}
-                      className="flex w-full items-center gap-2.5 px-3 py-2 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50"
-                    >
-                      <span className={`h-2.5 w-2.5 rounded-full ${c.dotColor}`} />
-                      {c.label}
-                    </button>
+                    <div key={board.key}>
+                      {hasMultipleBoards && (
+                        <p className="px-3 pt-1.5 text-[9px] font-semibold uppercase tracking-widest text-neutral-300">
+                          {board.label}
+                        </p>
+                      )}
+                      {boardOptions.map((s) => {
+                        const c = stageConfig(s);
+                        return (
+                          <button
+                            key={s.key}
+                            type="button"
+                            onClick={() => { onStageChange(s.key); setShowMenu(false); }}
+                            className="flex w-full items-center gap-2.5 px-3 py-2 text-[11px] font-medium text-neutral-700 hover:bg-neutral-50"
+                          >
+                            <span className={`h-2.5 w-2.5 rounded-full ${c.dotColor}`} />
+                            {c.label}
+                          </button>
+                        );
+                      })}
+                    </div>
                   );
                 })}
                 {onSellerChange && sellers && sellers.length > 0 && (
@@ -263,6 +334,19 @@ function KanbanCardBody({
                         </button>
                       ))}
                     </div>
+                  </>
+                )}
+                {onRequestSale && (
+                  <>
+                    <div className="my-1 border-t border-neutral-100" />
+                    <button
+                      type="button"
+                      onClick={() => { onRequestSale(lead); setShowMenu(false); }}
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                      {lead.commercial?.closedValue ? "Editar venda…" : "Registrar venda…"}
+                    </button>
                   </>
                 )}
                 {onRequestClose && (
@@ -318,6 +402,37 @@ function KanbanCardBody({
         </p>
       )}
 
+      {/* Repique: quantas vezes este lead já caiu no Desinteresse. Fica sempre
+          visível, inclusive quando ele volta a ser trabalhado — é o aviso de
+          "esse aqui já disse não antes". */}
+      {(lead.commercial?.repiqueCount ?? 0) > 0 && (
+        <p
+          className="mt-1.5 flex items-center gap-1 truncate rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-bold text-rose-700"
+          title={
+            lead.commercial?.lastObjection
+              ? `Última objeção: ${lead.commercial.lastObjection}`
+              : "Sem objeção registrada"
+          }
+        >
+          <RotateCcw className="h-2.5 w-2.5 flex-shrink-0" />
+          Repique {lead.commercial!.repiqueCount}x
+          {lead.commercial?.lastObjection ? (
+            <span className="truncate font-medium text-rose-600">· {lead.commercial.lastObjection}</span>
+          ) : null}
+        </p>
+      )}
+
+      {/* Venda registrada — o valor fechado aparece direto no card. */}
+      {lead.commercial?.closedValue ? (
+        <p
+          className="mt-1.5 truncate rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700"
+          title={lead.commercial.closedCourse ?? undefined}
+        >
+          {lead.commercial.closedValue.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+          {lead.commercial.closedCourse ? ` · ${lead.commercial.closedCourse}` : ""}
+        </p>
+      ) : null}
+
       {/* Training + date */}
       <div className="mt-1 flex flex-wrap items-center gap-1">
         {training && (
@@ -371,6 +486,26 @@ function KanbanCardBody({
           +
         </button>
       </div>
+
+      {/* Triagem: aprovar é a ação principal do card, então fica visível e não
+          escondida no menu — um clique tira o contato da lista fria e cria o
+          card no Kanban de trabalho de quem aprovou. */}
+      {!isOverlay && onApprove && approveFunnels && approveFunnels.length > 0 && (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onApprove(approveFunnels[0].id); }}
+          title={
+            approveFunnels.length > 1
+              ? `Aprovar e mandar para ${approveFunnels[0].name} (outros funis no menu ⋮)`
+              : `Aprovar e mandar para ${approveFunnels[0].name}`
+          }
+          className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-md bg-emerald-600 py-1.5 text-[11px] font-bold text-white transition hover:bg-emerald-700"
+        >
+          <CheckCircle2 className="h-3 w-3" />
+          Aprovar
+        </button>
+      )}
     </div>
   );
 }
@@ -385,14 +520,20 @@ function KanbanCard({
   currentStage,
   stages,
   onRequestClose,
+  onRequestSale,
   isBulkSelected,
   onToggleBulkSelection,
   onSellerChange,
   sellers,
+  approveFunnels,
+  onApprove,
 }: KanbanCardVisualProps & {
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  onRequestSale?: (lead: InscricaoItem) => void;
   sellers?: CommercialSeller[];
+  approveFunnels?: Array<{ id: number; name: string }>;
+  onApprove?: (funnelId: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: lead.id,
@@ -415,10 +556,13 @@ function KanbanCard({
         currentStage={currentStage}
         stages={stages}
         onRequestClose={onRequestClose}
+        onRequestSale={onRequestSale}
         isBulkSelected={isBulkSelected}
         onToggleBulkSelection={onToggleBulkSelection}
         onSellerChange={onSellerChange}
         sellers={sellers}
+        approveFunnels={approveFunnels}
+        onApprove={onApprove}
       />
     </div>
   );
@@ -459,10 +603,13 @@ function KanbanColumn({
   onAttemptsChange,
   stages,
   onRequestClose,
+  onRequestSale,
   bulkSelectedIds,
   onToggleBulkSelection,
   onSellerChange,
   sellers,
+  approveFunnels,
+  onApprove,
 }: {
   stage: FunnelStage;
   leads: InscricaoItem[];
@@ -473,10 +620,13 @@ function KanbanColumn({
   onAttemptsChange: (leadId: number, delta: 1 | -1) => void;
   stages: FunnelStage[];
   onRequestClose?: (lead: InscricaoItem) => void;
+  onRequestSale?: (lead: InscricaoItem) => void;
   bulkSelectedIds: Set<number>;
   onToggleBulkSelection: (leadId: number) => void;
   onSellerChange?: (leadId: number, sellerId: number) => void;
   sellers?: CommercialSeller[];
+  approveFunnels?: Array<{ id: number; name: string }>;
+  onApprove?: (leadId: number, funnelId: number) => void;
 }) {
   const cfg = stageConfig(stage);
   const { setNodeRef, isOver } = useDroppable({ id: `${COLUMN_DROPPABLE_PREFIX}${stage.key}` });
@@ -514,10 +664,13 @@ function KanbanColumn({
                 currentStage={stage.key}
                 stages={stages}
                 onRequestClose={onRequestClose}
+                onRequestSale={onRequestSale}
                 isBulkSelected={bulkSelectedIds.has(lead.id)}
                 onToggleBulkSelection={() => onToggleBulkSelection(lead.id)}
                 onSellerChange={onSellerChange ? (sellerId) => onSellerChange(lead.id, sellerId) : undefined}
                 sellers={sellers}
+                approveFunnels={approveFunnels}
+                onApprove={onApprove ? (funnelId) => onApprove(lead.id, funnelId) : undefined}
               />
             ))
           )}
@@ -547,20 +700,82 @@ export function CrmKanbanView({
   filterId,
   refreshToken,
   allowCloseLead,
+  allowRegisterSale,
   sellers = [],
+  approveFunnels,
 }: CrmKanbanViewProps) {
   const [data, setData] = useState<KanbanBoard | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<number | null>(null);
   const [closingLead, setClosingLead] = useState<InscricaoItem | null>(null);
+  const [saleLead, setSaleLead] = useState<InscricaoItem | null>(null);
+  /**
+   * A venda foi pedida pelo MOVIMENTO do card para Fechado (e não pelo menu do
+   * card). Nesse caso o modal não pode ser fechado sem salvar: o lead já está
+   * marcado como ganho e sem a venda ele fica sem matrícula nem contrato.
+   */
+  const [saleRequired, setSaleRequired] = useState(false);
+  // Lead que acabou de cair no repique (coluna de perda) e ainda não teve a
+  // objeção registrada.
+  const [objectionLead, setObjectionLead] = useState<InscricaoItem | null>(null);
+  // Lead que acabou de entrar em "Agendado" e ainda não tem tarefa com data.
+  // Guarda-se a etapa de origem porque cancelar o modal **desfaz o movimento**:
+  // a operação não admite lead em Agendado sem compromisso marcado.
+  const [scheduleLead, setScheduleLead] = useState<{
+    lead: InscricaoItem;
+    fromStage: CommercialStage;
+  } | null>(null);
+  // Etapa de onde o card saiu, capturada no inicio do arrasto: em handleDragEnd
+  // o lead ja foi movido otimisticamente por handleDragOver, entao sem isso nao
+  // da pra saber se ele acabou de ENTRAR em Fechado ou so foi reordenado la.
+  const dragOriginStageRef = useRef<string | null>(null);
+  // Busca do quadro: `search` é o que está digitado, `appliedSearch` é o que já
+  // foi para o servidor. Sem essa separação, cada tecla viraria uma requisição.
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
   const [bulkSelectedIds, setBulkSelectedIds] = useState<Set<number>>(() => new Set());
   const [bulkStage, setBulkStage] = useState("");
   const [bulkSellerId, setBulkSellerId] = useState("");
   const [bulkSaving, setBulkSaving] = useState(false);
+  /**
+   * Quadro aberto. As colunas de um funil são repartidas em quadros
+   * (Prospecção / Clientes / Em espera, ver lib/funnelBoards.ts) — é o mesmo
+   * funil e as mesmas etapas, o que muda é o que fica na frente do vendedor.
+   */
+  const [activeBoard, setActiveBoard] = useState<FunnelBoard>("principal");
 
-  const stageKeys = stages.map((stage) => stage.key);
+  useEffect(() => {
+    const termo = search.trim();
+    // Menos de 2 letras não filtra nada: evita recarregar o quadro inteiro
+    // enquanto a pessoa ainda está no começo do nome.
+    const alvo = termo.length >= 2 ? termo : "";
+    if (alvo === appliedSearch) return;
+    const timer = setTimeout(() => setAppliedSearch(alvo), 350);
+    return () => clearTimeout(timer);
+  }, [search, appliedSearch]);
+
+  // Quadros que este funil realmente tem — funil sem etapa de pós-venda nem de
+  // espera continua com um quadro só e nenhuma aba na tela.
+  const availableBoards = FUNNEL_BOARDS.filter((board) =>
+    stages.some((stage) => stage.board === board.key)
+  );
+  const currentBoard = availableBoards.some((board) => board.key === activeBoard)
+    ? activeBoard
+    : availableBoards[0]?.key ?? "principal";
+  /** Colunas desenhadas agora. `stages` (o funil inteiro) continua indo para o
+   *  menu do card, que é como se manda um lead de um quadro para o outro. */
+  const boardStages = stages.filter((stage) => stage.board === currentBoard);
+  /** Coluna de espera do funil, se a operação montou uma. É o destino do
+   *  "tirar do quadro" oferecido quando o lead cai no Desinteresse. */
+  const holdStage = stages.find((stage) => stage.board === "espera") ?? null;
+  const stageKeys = boardStages.map((stage) => stage.key);
   const stagesKey = stageKeys.join(",");
+
+  /** Coluna de perda do funil (no Funil VozUP é a "Desinteresse") = repique. */
+  function isLostStage(key: string | null): boolean {
+    return Boolean(key) && stages.some((stage) => stage.key === key && stage.kind === "lost");
+  }
 
   // Mouse e toque separados: no celular o drag só começa com pressão longa
   // (250ms), senão qualquer tentativa de rolar o board arrastaria um card.
@@ -578,6 +793,7 @@ export function CrmKanbanView({
     if (stagesKey) params.set("stages", stagesKey);
     if (assignedOnly) params.set("assignedOnly", "1");
     if (filterId) params.set("filterId", String(filterId));
+    if (appliedSearch) params.set("q", appliedSearch);
     // Supervisors: pass sellerEmail only if explicitly filtering by one seller
     if (isSupervisor && assignedSellerEmail) {
       params.set("assignedSellerEmail", assignedSellerEmail);
@@ -592,9 +808,19 @@ export function CrmKanbanView({
     } finally {
       setLoading(false);
     }
-  }, [produto, assignedSellerEmail, isSupervisor, stagesKey, funnelId, filterId, assignedOnly]);
+  }, [produto, assignedSellerEmail, isSupervisor, stagesKey, funnelId, filterId, assignedOnly, appliedSearch]);
 
   useEffect(() => { fetchData(); }, [fetchData, refreshToken]);
+
+  // Board vivo: lead distribuído, movido por outro vendedor ou fechado aparece
+  // sem F5. Pausa durante arrasto, seleção em massa e com qualquer modal aberto
+  // — refazer os dados nessas horas descarta o que a pessoa está fazendo.
+  useAutoRefresh(() => { void fetchData(); }, {
+    paused:
+      activeId !== null ||
+      bulkSelectedIds.size > 0 ||
+      Boolean(saleLead || objectionLead || scheduleLead || closingLead),
+  });
 
   const toggleBulkSelection = useCallback((leadId: number) => {
     setBulkSelectedIds((current) => {
@@ -634,7 +860,7 @@ export function CrmKanbanView({
   }, [bulkSelectedIds, bulkStage, bulkSellerId, fetchData, onLeadMoved]);
 
   const persistMove = useCallback(
-    async (leadId: number, stage: CommercialStage, position: number) => {
+    async (leadId: number, stage: CommercialStage, position: number | null) => {
       try {
         const res = await fetch(`/api/commercial/leads/${leadId}/stage`, {
           method: "PATCH",
@@ -659,7 +885,23 @@ export function CrmKanbanView({
       if (!fromStage || fromStage === stage) return current;
       const lead = current[fromStage].leads.find((l) => l.id === leadId);
       if (!lead) return current;
-      const targetLeads = current[stage].leads;
+
+      // Etapa de outro quadro (ex.: Desinteresse → Em espera): o card some
+      // daqui e reaparece na aba de destino. Sem posição: entre quadros não
+      // existe ordem para preservar.
+      const targetColumn = current[stage];
+      if (!targetColumn) {
+        void persistMove(leadId, stage, null);
+        return {
+          ...current,
+          [fromStage]: {
+            leads: current[fromStage].leads.filter((l) => l.id !== leadId),
+            total: Math.max(0, current[fromStage].total - 1),
+          },
+        };
+      }
+
+      const targetLeads = targetColumn.leads;
       const maxPos = targetLeads.length > 0 ? Math.max(...targetLeads.map(leadPosition)) : null;
       const position = computeDropPosition(maxPos, null);
       const movedLead: InscricaoItem = {
@@ -667,6 +909,23 @@ export function CrmKanbanView({
         commercial: lead.commercial ? { ...lead.commercial, stage, position } : lead.commercial,
       };
       void persistMove(leadId, stage, position);
+      if (isSaleStage(stage) && !isSaleStage(fromStage)) {
+        if (allowRegisterSale) {
+          setSaleRequired(true);
+          setTimeout(() => setSaleLead(movedLead), 0);
+        } else {
+          setError(SEM_PERMISSAO_VENDA);
+        }
+      }
+      // Foi pro repique: pede a objeção na hora, que é quando o vendedor ainda
+      // lembra do que ouviu.
+      if (isLostStage(stage) && !isLostStage(fromStage)) {
+        setTimeout(() => setObjectionLead(movedLead), 0);
+      }
+      // Entrou em Agendado: cobra a tarefa com data antes de deixar o lead ali.
+      if (isScheduledStage(stage) && !isScheduledStage(fromStage)) {
+        setTimeout(() => setScheduleLead({ lead: movedLead, fromStage }), 0);
+      }
       return {
         ...current,
         [fromStage]: {
@@ -680,7 +939,7 @@ export function CrmKanbanView({
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [persistMove, stagesKey]);
+  }, [persistMove, stagesKey, allowRegisterSale]);
 
   const persistAttempts = useCallback(
     async (leadId: number, delta: 1 | -1) => {
@@ -715,6 +974,40 @@ export function CrmKanbanView({
     }
   }, [fetchData, onLeadMoved]);
 
+  /**
+   * Aprovação da triagem: o lead troca de funil, então ele some deste quadro
+   * (a pasta Triagem) e aparece no Kanban de trabalho. Some da tela na hora,
+   * sem esperar o refetch, senão o card fica ali "aprovado" confundindo.
+   */
+  const handleApprove = useCallback(async (leadId: number, targetFunnelId: number) => {
+    setData((current) => {
+      if (!current) return current;
+      const stage = findStageOfLead(current, stageKeys, leadId);
+      if (!stage) return current;
+      return {
+        ...current,
+        [stage]: {
+          leads: current[stage].leads.filter((lead) => lead.id !== leadId),
+          total: Math.max(0, current[stage].total - 1),
+        },
+      };
+    });
+    try {
+      const res = await fetch(`/api/commercial/leads/${leadId}/approve-triage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ funnelId: targetFunnelId }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error ?? "Não foi possível aprovar o lead.");
+      onLeadMoved?.();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Não foi possível aprovar o lead.");
+      await fetchData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fetchData, onLeadMoved, stagesKey]);
+
   const handleAttemptsChange = useCallback(
     (leadId: number, delta: 1 | -1) => {
       setData((current) => {
@@ -743,8 +1036,14 @@ export function CrmKanbanView({
   );
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
-    setActiveId(Number(event.active.id));
-  }, []);
+    const leadId = Number(event.active.id);
+    setActiveId(leadId);
+    setData((current) => {
+      dragOriginStageRef.current = current ? findStageOfLead(current, stageKeys, leadId) : null;
+      return current;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stagesKey]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event;
@@ -826,15 +1125,40 @@ export function CrmKanbanView({
 
       void persistMove(leadId, stage, position);
 
+      // Chegou em Fechado: e aqui que a venda existe. Pede o treinamento e o
+      // valor na hora, senao o card fica "fechado" sem ninguem saber por quanto.
+      if (isSaleStage(stage) && !isSaleStage(dragOriginStageRef.current)) {
+        if (allowRegisterSale) {
+          const soldLead = finalLeads[finalIndex];
+          setSaleRequired(true);
+          setTimeout(() => setSaleLead(soldLead), 0);
+        } else {
+          setError(SEM_PERMISSAO_VENDA);
+        }
+      }
+      if (isLostStage(stage) && !isLostStage(dragOriginStageRef.current)) {
+        const lostLead = finalLeads[finalIndex];
+        setTimeout(() => setObjectionLead(lostLead), 0);
+      }
+      if (isScheduledStage(stage) && !isScheduledStage(dragOriginStageRef.current)) {
+        const scheduled = finalLeads[finalIndex];
+        const origin = dragOriginStageRef.current as CommercialStage | null;
+        if (origin) setTimeout(() => setScheduleLead({ lead: scheduled, fromStage: origin }), 0);
+      }
+      dragOriginStageRef.current = null;
+
       return {
         ...current,
         [stage]: { leads: finalLeads, total: current[stage].total },
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [persistMove, stagesKey]);
+  }, [persistMove, stagesKey, allowRegisterSale]);
 
-  if (loading) {
+  // Spinner de tela cheia só na primeira carga. Recarregar com o quadro já na
+  // tela (busca, atualizar) mantém o board: senão o campo de busca desmonta a
+  // cada tecla e a pessoa perde o cursor no meio da palavra.
+  if (loading && !data) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <div className="h-6 w-6 animate-spin rounded-full border-2 border-neutral-200 border-t-neutral-600" />
@@ -867,10 +1191,61 @@ export function CrmKanbanView({
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       {/* Toolbar */}
-      <div className="flex flex-shrink-0 items-center justify-between border-b border-neutral-100 bg-white px-4 py-2">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-neutral-100 bg-white px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Quadros do funil. Só aparece quando o funil tem mais de um: para
+              quem não montou pós-venda nem espera, a tela é a de sempre. */}
+          {availableBoards.length > 1 && (
+            <div className="flex items-center gap-0.5 rounded-lg bg-neutral-100 p-0.5">
+              {availableBoards.map((board) => (
+                <button
+                  key={board.key}
+                  type="button"
+                  onClick={() => {
+                    setActiveBoard(board.key);
+                    // A seleção em massa é dos cards que estavam na tela.
+                    setBulkSelectedIds(new Set());
+                  }}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                    board.key === currentBoard
+                      ? "bg-white text-neutral-900 shadow-sm"
+                      : "text-neutral-500 hover:text-neutral-800"
+                  }`}
+                >
+                  {board.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Busca do quadro: procura no funil inteiro, não só nos cards que já
+              estão carregados na coluna. */}
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-neutral-400" />
+            <input
+              type="search"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar lead no quadro…"
+              aria-label="Buscar lead no quadro"
+              className="h-8 w-52 rounded-lg border border-neutral-200 bg-white pl-8 pr-7 text-[12px] text-neutral-700 outline-none transition focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 sm:w-64"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label="Limpar busca"
+                className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
           <p className="text-[11px] text-neutral-400">
-            {totalLeads.toLocaleString("pt-BR")} leads no pipeline
+            {loading
+              ? "Buscando…"
+              : appliedSearch
+              ? `${totalLeads.toLocaleString("pt-BR")} ${totalLeads === 1 ? "resultado" : "resultados"} para “${appliedSearch}”`
+              : `${totalLeads.toLocaleString("pt-BR")} leads no pipeline`}
           </p>
           {isSupervisor && !assignedSellerEmail && (
             <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
@@ -898,7 +1273,7 @@ export function CrmKanbanView({
                 aria-label="Mover selecionados de categoria"
               >
                 <option value="">Mover de categoria…</option>
-                {stages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}
+                {boardStages.map((stage) => <option key={stage.key} value={stage.key}>{stage.label}</option>)}
               </select>
               <button type="button" disabled={!bulkStage || bulkSaving} onClick={() => void applyBulkChange("stage")} className="rounded-lg bg-cyan-600 px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-40">
                 Mover
@@ -942,8 +1317,28 @@ export function CrmKanbanView({
         onDragOver={handleDragOver}
         onDragEnd={handleDragEnd}
       >
-        <div className="flex flex-1 gap-3 overflow-x-auto p-3">
-          {stages.map((stage) => {
+        {appliedSearch && totalLeads === 0 && !loading ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
+            <Search className="h-5 w-5 text-neutral-300" />
+            <p className="text-sm font-semibold text-neutral-600">
+              Nenhum lead encontrado para “{appliedSearch}”
+            </p>
+            <p className="max-w-sm text-[11px] text-neutral-400">
+              A busca procura por nome, telefone, e-mail, cidade, profissão e treinamento — dentro
+              deste funil e dos leads que você enxerga.
+            </p>
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              className="mt-1 rounded-lg border border-neutral-200 px-3 py-1.5 text-[11px] font-semibold text-neutral-600 transition hover:bg-neutral-50"
+            >
+              Limpar busca
+            </button>
+          </div>
+        ) : null}
+
+        <div className={`flex flex-1 gap-3 overflow-x-auto p-3 ${appliedSearch && totalLeads === 0 && !loading ? "hidden" : ""}`}>
+          {boardStages.map((stage) => {
             const stageData = data[stage.key];
             if (!stageData) return null;
             return (
@@ -958,10 +1353,22 @@ export function CrmKanbanView({
                 onAttemptsChange={handleAttemptsChange}
                 stages={stages}
                 onRequestClose={allowCloseLead ? setClosingLead : undefined}
+                onRequestSale={
+                  allowRegisterSale && isSaleStage(stage.key)
+                    ? (lead) => {
+                        // Aberto pelo menu: pode ser correção de uma venda já
+                        // registrada, então dá para sair sem salvar.
+                        setSaleRequired(false);
+                        setSaleLead(lead);
+                      }
+                    : undefined
+                }
                 bulkSelectedIds={bulkSelectedIds}
                 onToggleBulkSelection={toggleBulkSelection}
                 onSellerChange={isSupervisor ? handleSellerChange : undefined}
                 sellers={isSupervisor ? sellers : undefined}
+                approveFunnels={approveFunnels}
+                onApprove={approveFunnels && approveFunnels.length > 0 ? handleApprove : undefined}
               />
             );
           })}
@@ -972,6 +1379,120 @@ export function CrmKanbanView({
           ) : null}
         </DragOverlay>
       </DndContext>
+
+      {saleLead && (
+        <RegisterSaleModal
+          lead={{ id: saleLead.id, nome: saleLead.nome }}
+          required={saleRequired}
+          onCancel={() => setSaleLead(null)}
+          onSaved={(leadId, amount, courseName) => {
+            setSaleLead(null);
+            setSaleRequired(false);
+            // O card passa a mostrar o valor sem esperar um refetch do board.
+            setData((current) => {
+              if (!current) return current;
+              const stage = findStageOfLead(current, stageKeys, leadId);
+              if (!stage) return current;
+              return {
+                ...current,
+                [stage]: {
+                  ...current[stage],
+                  leads: current[stage].leads.map((lead) =>
+                    lead.id === leadId && lead.commercial
+                      ? {
+                          ...lead,
+                          commercial: {
+                            ...lead.commercial,
+                            closedValue: amount > 0 ? amount : null,
+                            closedCourse: courseName,
+                          },
+                        }
+                      : lead
+                  ),
+                },
+              };
+            });
+            onLeadMoved?.();
+          }}
+        />
+      )}
+
+      {scheduleLead && (
+        <ScheduleTaskModal
+          lead={{ id: scheduleLead.lead.id, nome: scheduleLead.lead.nome }}
+          onCreated={() => {
+            setScheduleLead(null);
+            void fetchData();
+          }}
+          onCancel={() => {
+            // Desfaz de verdade: o servidor já gravou "Agendado" quando o card
+            // se moveu, então não basta fechar o modal — é preciso devolver o
+            // lead à etapa anterior, senão ele fica lá sem compromisso.
+            const { lead, fromStage } = scheduleLead;
+            setScheduleLead(null);
+            void persistMove(lead.id, fromStage, 0).then(() => fetchData());
+          }}
+        />
+      )}
+
+      {objectionLead && (
+        <ObjectionModal
+          lead={{
+            id: objectionLead.id,
+            nome: objectionLead.nome,
+            // O card local ainda tem a contagem de antes do movimento — o
+            // servidor já somou esta entrada.
+            repiqueCount: (objectionLead.commercial?.repiqueCount ?? 0) + 1,
+            lastObjection: objectionLead.commercial?.lastObjection ?? null,
+          }}
+          holdStage={holdStage ? { key: holdStage.key, label: holdStage.label } : null}
+          onSkip={(hold) => {
+            const leadId = objectionLead.id;
+            setObjectionLead(null);
+            if (hold && holdStage) {
+              void handleStageChange(leadId, holdStage.key);
+              return;
+            }
+            // Mesmo sem objeção, a etiqueta de repique mudou no servidor.
+            void fetchData();
+          }}
+          onSaved={(leadId, objection, hold) => {
+            setObjectionLead(null);
+            // Escolheu tirar do quadro: o card sai do Desinteresse e vai para a
+            // coluna de espera — o motivo já ficou registrado na ficha.
+            if (hold && holdStage) {
+              void handleStageChange(leadId, holdStage.key);
+              onLeadMoved?.();
+              return;
+            }
+            setData((current) => {
+              if (!current) return current;
+              const stage = findStageOfLead(current, stageKeys, leadId);
+              if (!stage) return current;
+              return {
+                ...current,
+                [stage]: {
+                  ...current[stage],
+                  leads: current[stage].leads.map((lead) =>
+                    lead.id === leadId && lead.commercial
+                      ? {
+                          ...lead,
+                          commercial: {
+                            ...lead.commercial,
+                            repiqueCount: lead.commercial.repiqueCount + 1,
+                            lastObjection: objection || lead.commercial.lastObjection,
+                            lastObjectionAt: new Date().toISOString(),
+                          },
+                        }
+                      : lead
+                  ),
+                },
+              };
+            });
+            onLeadMoved?.();
+          }}
+        />
+      )}
 
       {closingLead && (
         <CloseLeadModal

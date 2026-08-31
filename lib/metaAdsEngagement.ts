@@ -95,6 +95,32 @@ export function landingPageCompletion(metrics: EngagementMetrics): number | null
   return metrics.linkClicks > 0 ? (metrics.landingPageViews / metrics.linkClicks) * 100 : null;
 }
 
+/** Domínios em que o nosso pixel roda — só neles pode existir "página carregada". */
+const OWN_SITE_HOSTS = ["escolavozup.com"];
+
+/**
+ * O anúncio manda o clique para um site nosso?
+ *
+ * "Página carregada" (`landing_page_view`) só é contabilizada pela Meta quando o
+ * pixel dispara no destino. Anúncio que leva para o perfil do Instagram, para o
+ * Messenger ou para o formulário nativo NUNCA vai gerar esse evento — não por
+ * lentidão, mas porque a pessoa não passa por página nossa.
+ *
+ * Misturar os dois tipos no mesmo cálculo produz um alerta que mente: em
+ * 02/08/2026 uma campanha de visitas ao perfil escalou, levou 535 cliques com 6
+ * "páginas carregadas", e a tela passou a acusar perda na landing page — que
+ * naquele mesmo período estava convertendo 64% a 76%, dentro do normal.
+ */
+export function isOwnSiteDestination(landingUrl: string | null | undefined): boolean {
+  if (!landingUrl) return false;
+  try {
+    const host = new URL(landingUrl).hostname.toLowerCase();
+    return OWN_SITE_HOSTS.some((own) => host === own || host.endsWith(`.${own}`));
+  } catch {
+    return false;
+  }
+}
+
 /** Custo por resultado de engajamento: gasto ÷ interações com a publicação. */
 export function costPerEngagement(spend: number, metrics: EngagementMetrics): number | null {
   return metrics.postEngagement > 0 ? spend / metrics.postEngagement : null;

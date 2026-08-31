@@ -1,3 +1,5 @@
+import type { FunnelBoard } from "@/lib/funnelBoards";
+
 export type MetaAdsStatusFilter = "active" | "inactive" | "all";
 
 /**
@@ -22,7 +24,8 @@ export type CampanhasTab =
   | "anuncios"
   | "leads"
   | "rendimento"
-  | "vendedores";
+  | "vendedores"
+  | "google";
 
 /** Para que serve a campanha, segundo o objetivo declarado na Meta. Separa o
  * que é para TRAZER LEAD do que é para APARECER — misturar os dois numa média
@@ -165,6 +168,9 @@ export interface FunnelStageDef {
   key: string;
   label: string;
   kind: FunnelStageKind;
+  /** Quadro do Kanban a que a etapa pertence (ver lib/funnelBoards.ts).
+   *  Ausente = quadro principal, que é o caso de todo funil sem pós-venda. */
+  board?: FunnelBoard;
 }
 
 export interface FunnelStagePoint extends FunnelStageDef {
@@ -366,6 +372,11 @@ export interface AdLeadSummary {
   telefone: string | null;
   email: string | null;
   criadoEm: string;
+  /** Cidade do lead: informada no formulário ou estimada pelo IP no cadastro
+   * (ver lib/leadGeo). Null no histórico anterior à estimativa. */
+  cidade: string | null;
+  /** DDD do telefone (dois dígitos) — a localização que sempre existe. */
+  ddd: string | null;
   stageLabel: string | null;
   stageKind: FunnelStageKind | null;
   /** Em qual das quatro caixas este envio caiu (ver LeadBucket em lib/metaAds).
@@ -408,6 +419,8 @@ export interface AdLeadDetail extends AdLeadSummary, CreativeVisual {
   landingUrl: string | null;
   stageKey: string | null;
   sellerName: string | null;
+  /** Objeção registrada quando o lead foi para o repique; null = perda sem motivo. */
+  lastObjection: string | null;
   /** Etapas pelas quais o lead passou em algum momento (histórico de
    * commercial_events + etapa atual), não só onde ele está agora. */
   etapasAlcancadas: string[];

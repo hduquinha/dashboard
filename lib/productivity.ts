@@ -687,6 +687,7 @@ export async function listProductivityLeadAgents(): Promise<ProductivityLeadAgen
   const members = await listTeamMembers();
 
   return members
+    .filter((member) => member.isSeller)
     .map((member) => ({
       id: member.id,
       chatwootUserId: member.id,

@@ -7,6 +7,8 @@ import type { NetworkNode, NetworkTreeFocus, NetworkTreeStats } from "@/lib/netw
 import type { TrainingOption } from "@/types/training";
 import type { Recruiter } from "@/lib/recruiters";
 import { humanizeName } from "@/lib/utils";
+import { Magnet, UserRound } from "lucide-react";
+import IconTile from "@/components/IconTile";
 
 interface NetworkTreeProps {
   roots: NetworkNode[];
@@ -117,13 +119,13 @@ function NetworkTreeInner({
           }`}
           aria-pressed={isFocus}
         >
-          <span
-            className={`mb-2 inline-flex h-10 w-10 items-center justify-center rounded-full text-lg ${
-              node.tipo === "recrutador" ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"
-            }`}
-          >
-            {node.tipo === "recrutador" ? "👤" : "🧲"}
-          </span>
+          <IconTile
+            icon={node.tipo === "recrutador" ? UserRound : Magnet}
+            tone={node.tipo === "recrutador" ? "teal" : "brand"}
+            size="md"
+            solid
+            className="mb-2 !rounded-full"
+          />
           <span className="text-sm font-semibold text-neutral-900">{node.displayName}</span>
           <div className="mt-2 text-[11px] text-neutral-600">
             {node.recrutadorNome ? <p>Indicador: {humanizeName(node.recrutadorNome)}</p> : null}

@@ -32,7 +32,14 @@ import type {
   SellerAdPerformance,
   SyncRunSummary,
 } from "@/types/metaAds";
+import {
+  LEAD_LOCATION_COLUMNS,
+  LEAD_LOCATION_KEY,
+  leadLocationLabel,
+  type LeadLocationOption,
+} from "@/lib/leadLocation";
 import { getDefaultFunnel } from "@/lib/funnels";
+import { normalizeFunnelBoard } from "@/lib/funnelBoards";
 
 const GRAPH_API_VERSION = "v21.0";
 const SCHEMA = "meta_ads";
@@ -298,6 +305,23 @@ async function ensureMetaAdsSchemaOnce(): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_meta_ad_name_history_name ON ${SCHEMA}.ad_name_history(name_lower);
 
+    -- Todo nome que cada CAMPANHA já teve, pelo mesmo motivo do histórico de
+    -- anúncio — só que aqui o estrago é maior: toda camada de atribuição parte
+    -- do nome da campanha para achar onde procurar o anúncio. Renomear a
+    -- campanha órfã todo lead que chegar depois com a URL antiga em cache
+    -- (em 07/08/2026, "LP FALAR EM PÚBLICO" virou "LP | FALAR EM PÚBLICO" e
+    -- levou 8 pessoas junto).
+    CREATE TABLE IF NOT EXISTS ${SCHEMA}.campaign_name_history (
+      campaign_id   TEXT NOT NULL REFERENCES ${SCHEMA}.campaigns(campaign_id) ON DELETE CASCADE,
+      name_lower    TEXT NOT NULL,
+      name          TEXT NOT NULL,
+      first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (campaign_id, name_lower)
+    );
+    CREATE INDEX IF NOT EXISTS idx_meta_campaign_name_history_name
+      ON ${SCHEMA}.campaign_name_history(name_lower);
+
     -- Atribuição lead → anúncio CONGELADA no momento em que foi resolvida.
     -- A resolução por UTM depende do NOME atual do anúncio/conjunto/campanha;
     -- renomear ou excluir um anúncio quebra retroativamente o vínculo de todos
@@ -552,6 +576,12 @@ async function upsertCampaigns(rows: CampaignApiRow[], adAccountId: string): Pro
           row.created_time ?? null,
           row.updated_time ?? null,
         ]
+      );
+      await client.query(
+        `INSERT INTO ${SCHEMA}.campaign_name_history (campaign_id, name_lower, name)
+         VALUES ($1, LOWER($2), $2)
+         ON CONFLICT (campaign_id, name_lower) DO UPDATE SET last_seen_at = NOW()`,
+        [row.id, row.name]
       );
     }
     await client.query("COMMIT");
@@ -1467,6 +1497,24 @@ function buildScopeParams(filters: MetaAdsFilters): ScopeParams {
  * da Meta e 1 cadastro. A janela de 7 dias é a mesma que a Meta usa para
  * atribuir clique → conversão.
  */
+/**
+ * A campanha que o lead carimbou na UTM, aceitando o nome ATUAL ou qualquer
+ * nome que ela já teve. Sem isso, renomear a campanha na Meta órfã todo lead
+ * que chegar depois com a URL antiga em cache — e como toda camada de
+ * atribuição parte da campanha para saber onde procurar o anúncio, o lead não
+ * cai em lugar nenhum: some da tela inteira.
+ */
+function campaignMatchesUtm(campaignAlias: string): string {
+  return `(
+    LOWER(${campaignAlias}.name) = LOWER(TRIM(i.payload->>'utm_campaign'))
+    OR EXISTS (
+      SELECT 1 FROM ${SCHEMA}.campaign_name_history ch
+      WHERE ch.campaign_id = ${campaignAlias}.campaign_id
+        AND ch.name_lower = LOWER(TRIM(i.payload->>'utm_campaign'))
+    )
+  )`;
+}
+
 function deliveredNearLead(adAlias: string): string {
   return `EXISTS (
     SELECT 1 FROM ${SCHEMA}.ad_insights_daily ins
@@ -1481,9 +1529,17 @@ function deliveredNearLead(adAlias: string): string {
 const ATTR_FROZEN = `(SELECT la.ad_id FROM ${SCHEMA}.lead_ad_attribution la WHERE la.inscricao_id = i.id)`;
 /** Camada 2 — Lead Ads: a própria ingestão da Graph API gravou o ad_id. */
 const ATTR_DIRECT = `NULLIF(TRIM(i.payload->>'ad_id'), '')`;
-/** Camada 3 — criativo carimbou {{ad.id}} em vez de {{ad.name}}. */
+/** Camada 3 — o id do anúncio veio carimbado na URL, em `utm_id={{ad.id}}` ou
+ * em `utm_content` (criativo que usou {{ad.id}} no lugar de {{ad.name}}).
+ *
+ * É a única camada imune a renomeação de qualquer coisa: id não muda. Enquanto
+ * os anúncios não carimbarem `utm_id`, o resto da cascata segue necessário. */
 const ATTR_BY_ID = `(SELECT a2.ad_id FROM ${SCHEMA}.ads a2
-    WHERE a2.ad_id = NULLIF(TRIM(i.payload->>'utm_content'), '') AND NOT a2.is_placeholder)`;
+    WHERE NOT a2.is_placeholder
+      AND a2.ad_id IN (
+        NULLIF(TRIM(i.payload->>'utm_id'), ''),
+        NULLIF(TRIM(i.payload->>'utm_content'), '')
+      ))`;
 /** Camada 4 — anúncio + conjunto + campanha pelo nome (o caso normal). */
 const ATTR_EXACT = `(SELECT MIN(a2.ad_id)
      FROM ${SCHEMA}.ads a2
@@ -1493,7 +1549,7 @@ const ATTR_EXACT = `(SELECT MIN(a2.ad_id)
       AND NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL
       AND LOWER(a2.name) = LOWER(TRIM(i.payload->>'utm_content'))
       AND (NULLIF(TRIM(i.payload->>'utm_term'), '') IS NULL OR LOWER(s2.name) = LOWER(TRIM(i.payload->>'utm_term')))
-      AND (NULLIF(TRIM(i.payload->>'utm_campaign'), '') IS NULL OR LOWER(c2.name) = LOWER(TRIM(i.payload->>'utm_campaign')))
+      AND (NULLIF(TRIM(i.payload->>'utm_campaign'), '') IS NULL OR ${campaignMatchesUtm("c2")})
       AND ${deliveredNearLead("a2")})`;
 /** Camada 6 — o nome que o lead gravou é um nome ANTIGO deste anúncio. Só vale
  * dentro da campanha do UTM, porque o mesmo código de criativo é reciclado
@@ -1507,7 +1563,7 @@ const ATTR_HISTORIC_NAME = `(SELECT MIN(h.ad_id)
       AND NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL
       AND NULLIF(TRIM(i.payload->>'utm_campaign'), '') IS NOT NULL
       AND h.name_lower = LOWER(TRIM(i.payload->>'utm_content'))
-      AND LOWER(c2.name) = LOWER(TRIM(i.payload->>'utm_campaign'))
+      AND ${campaignMatchesUtm("c2")}
       AND ${deliveredNearLead("a2")})`;
 
 /** Camada 5 — anúncio + campanha: salva quando só o CONJUNTO foi renomeado. */
@@ -1518,7 +1574,7 @@ const ATTR_NAME_IN_CAMPAIGN = `(SELECT MIN(a2.ad_id)
       AND NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL
       AND NULLIF(TRIM(i.payload->>'utm_campaign'), '') IS NOT NULL
       AND LOWER(a2.name) = LOWER(TRIM(i.payload->>'utm_content'))
-      AND LOWER(c2.name) = LOWER(TRIM(i.payload->>'utm_campaign'))
+      AND ${campaignMatchesUtm("c2")}
       AND ${deliveredNearLead("a2")})`;
 
 /** Exportado para que a conciliação de matrículas use EXATAMENTE a mesma regra
@@ -1610,7 +1666,9 @@ function leadCountsAsPerson(fromPlaceholder: string): string {
 
 // Pré-filtro barato: só roda a resolução por UTM em leads que têm algum sinal
 // de anúncio (ad_id direto ou utm_content com o nome do criativo).
-const LEAD_HAS_AD_SIGNAL = `(NULLIF(TRIM(i.payload->>'ad_id'), '') IS NOT NULL OR NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL)`;
+const LEAD_HAS_AD_SIGNAL = `(NULLIF(TRIM(i.payload->>'ad_id'), '') IS NOT NULL
+  OR NULLIF(TRIM(i.payload->>'utm_id'), '') IS NOT NULL
+  OR NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL)`;
 
 /** Anúncio placeholder tem que se anunciar como tal em toda listagem: sem isso
  * ele parece um anúncio real que gastou R$ 0 e mesmo assim trouxe cadastro. */
@@ -1651,7 +1709,7 @@ export async function reconcileLeadAttribution(): Promise<{ rows: number }> {
              NULLIF(TRIM(i.payload->>'utm_term'), '') AS adset_name,
              (i.criado_em AT TIME ZONE '${META_ADS_TIME_ZONE}')::date AS dia,
              (SELECT MIN(c.campaign_id) FROM ${SCHEMA}.campaigns c
-               WHERE LOWER(c.name) = LOWER(TRIM(i.payload->>'utm_campaign'))) AS campaign_id
+               WHERE ${campaignMatchesUtm("c")}) AS campaign_id
       FROM inscricoes.inscricoes i
       WHERE i.criado_em >= NOW() - INTERVAL '${ATTRIBUTION_LOOKBACK_DAYS} days'
         AND NULLIF(TRIM(i.payload->>'utm_content'), '') IS NOT NULL
@@ -1715,6 +1773,37 @@ export async function reconcileLeadAttribution(): Promise<{ rows: number }> {
       SELECT o.inscricao_id, ${deliveryMatch}, 'entrega_no_dia'
       FROM orphans o
       WHERE o.campaign_id IS NOT NULL AND ${deliveryMatch} IS NOT NULL
+      ON CONFLICT (inscricao_id) DO NOTHING
+    `);
+
+    // Rede de segurança para a campanha que o UTM cita e que não existe nem no
+    // histórico (renomeada antes de passarmos a guardar nomes, ou apagada):
+    // procura o anúncio pelo NOME entre os que entregaram na janela de 7 dias
+    // do lead — a mesma janela de clique da Meta. Só aceita quando sobra UMA
+    // campanha candidata; havendo duas, o mesmo criativo está rodando em
+    // campanhas diferentes e escolher seria chutar em qual delas creditar.
+    const { rowCount: byUniqueDelivery } = await client.query(`
+      WITH ${orphanCte},
+      candidatos AS (
+        SELECT o.inscricao_id,
+               COUNT(DISTINCT a.campaign_id) AS campanhas,
+               (ARRAY_AGG(a.ad_id ORDER BY ins.leads_meta DESC NULLS LAST, ins.spend DESC NULLS LAST))[1] AS ad_id
+        FROM orphans o
+        JOIN ${SCHEMA}.ads a ON LOWER(a.name) = LOWER(o.ad_name) AND NOT a.is_placeholder
+        JOIN LATERAL (
+          SELECT MAX(ins2.leads_meta) AS leads_meta, MAX(ins2.spend) AS spend
+          FROM ${SCHEMA}.ad_insights_daily ins2
+          WHERE ins2.ad_id = a.ad_id
+            AND (ins2.spend > 0 OR ins2.impressions > 0)
+            AND ins2.date BETWEEN o.dia - 7 AND o.dia
+        ) ins ON ins.spend IS NOT NULL OR ins.leads_meta IS NOT NULL
+        WHERE o.campaign_id IS NULL
+        GROUP BY o.inscricao_id
+      )
+      INSERT INTO ${SCHEMA}.lead_ad_attribution (inscricao_id, ad_id, method)
+      SELECT inscricao_id, ad_id, 'entrega_campanha_renomeada'
+      FROM candidatos
+      WHERE campanhas = 1 AND ad_id IS NOT NULL
       ON CONFLICT (inscricao_id) DO NOTHING
     `);
 
@@ -1789,7 +1878,7 @@ export async function reconcileLeadAttribution(): Promise<{ rows: number }> {
     `);
 
     await client.query("COMMIT");
-    return { rows: (byDelivery ?? 0) + (ads ?? 0) + (frozen ?? 0) };
+    return { rows: (byDelivery ?? 0) + (byUniqueDelivery ?? 0) + (ads ?? 0) + (frozen ?? 0) };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
     throw error;
@@ -1855,7 +1944,40 @@ interface AdRowQueryResult {
   action_totals: Record<string, string> | null;
 }
 
-function mapAdRow(row: AdRowQueryResult, stageKindByKey: Map<string, FunnelStageKind>): AdRow {
+/**
+ * Quais etapas contam como "contato qualificado".
+ *
+ * Qualificado é quem PASSOU da primeira tentativa de contato — não é todo mundo
+ * que ainda não foi descartado. A régua antiga (qualquer etapa de tipo
+ * normal/won) incluía a fila de quem tinha acabado de cair no funil e nunca
+ * recebeu ligação: em 10/08/2026 os dois únicos cadastros do dia estavam em
+ * "Tentativas", sem ninguém ter falado com eles, e a tela anunciava "100% das
+ * pessoas novas" qualificadas para quem lê relatório.
+ *
+ * A regra é posicional, não por chave fixa, porque os funis são editáveis: fica
+ * de fora a PRIMEIRA etapa normal do funil (a fila de chegada). Etapa de venda
+ * (`won`) entra sempre, mesmo que alguém a coloque logo no começo.
+ */
+export function buildQualifiedStageKeys(stages: FunnelStageDef[]): Set<string> {
+  const firstNormal = stages
+    .filter((stage) => stage.kind === "normal")
+    .sort((left, right) => left.position - right.position)[0];
+  return new Set(
+    stages
+      .filter(
+        (stage) =>
+          stage.kind === "won" ||
+          (stage.kind === "normal" && (!firstNormal || stage.position > firstNormal.position))
+      )
+      .map((stage) => stage.key)
+  );
+}
+
+function mapAdRow(
+  row: AdRowQueryResult,
+  stageKindByKey: Map<string, FunnelStageKind>,
+  qualifiedStageKeys: Set<string>
+): AdRow {
   const stageCounts: Record<string, number> = {};
   let leadsQualificados = 0;
   let leadsFechados = 0;
@@ -1863,7 +1985,7 @@ function mapAdRow(row: AdRowQueryResult, stageKindByKey: Map<string, FunnelStage
     const count = toNumber(rawCount);
     stageCounts[key] = count;
     const kind = stageKindByKey.get(key);
-    if (kind === "normal" || kind === "won") leadsQualificados += count;
+    if (qualifiedStageKeys.has(key)) leadsQualificados += count;
     if (kind === "won") leadsFechados += count;
   }
 
@@ -1916,8 +2038,8 @@ function mapAdRow(row: AdRowQueryResult, stageKindByKey: Map<string, FunnelStage
  * as colunas de etapa da tabela e do gráfico de funil. */
 export async function getDefaultFunnelStages(): Promise<FunnelStageDef[]> {
   const pool = getPool();
-  const { rows } = await pool.query<{ position: number; key: string; label: string; kind: string }>(`
-    SELECT fs.position, fs.key, fs.label, fs.kind
+  const { rows } = await pool.query<{ position: number; key: string; label: string; kind: string; board: string }>(`
+    SELECT fs.position, fs.key, fs.label, fs.kind, fs.board
     FROM dashboard.funnel_stages fs
     JOIN dashboard.funnels f ON f.id = fs.funnel_id
     WHERE f.is_default = true
@@ -1928,6 +2050,7 @@ export async function getDefaultFunnelStages(): Promise<FunnelStageDef[]> {
     key: row.key,
     label: row.label,
     kind: row.kind as FunnelStageKind,
+    board: normalizeFunnelBoard(row.board),
   }));
 }
 
@@ -1963,7 +2086,8 @@ export async function getAdIdsForScope(filters: MetaAdsFilters, campaignId?: str
  * falta ad_id em leads orgânicos do mesmo formulário) — por isso a UI
  * mostra as duas colunas lado a lado em vez de uma só. leadsQualificados/
  * leadsFechados/cacReal são derivados de stageCounts em JS (não em SQL) a
- * partir do kind de cada etapa, para não duplicar essa classificação.
+ * partir do kind e da posição de cada etapa (ver buildQualifiedStageKeys),
+ * para não duplicar essa classificação.
  */
 export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]> {
   await ensureMetaAdsSchema();
@@ -1977,6 +2101,7 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
     kind: stage.kind,
   }));
   const stageKindByKey = new Map(stageDefs.map((s) => [s.key, s.kind]));
+  const qualifiedStageKeys = buildQualifiedStageKeys(stageDefs);
 
   const { rows } = await pool.query<AdRowQueryResult>(
     `
@@ -2088,7 +2213,7 @@ export async function getAdsHierarchy(filters: MetaAdsFilters): Promise<AdRow[]>
     [...scope.values, filters.from, filters.to, vozupFunnel.id, TRACKED_ACTION_TYPES]
   );
 
-  return rows.map((row) => mapAdRow(row, stageKindByKey));
+  return rows.map((row) => mapAdRow(row, stageKindByKey, qualifiedStageKeys));
 }
 
 /**
@@ -2115,9 +2240,10 @@ export async function getFunnelBreakdown(
   const pool = getPool();
   const { rows: leadRows } = await pool.query<{
     inscricao_id: number;
+    commercial_stage: string | null;
     commercial_stage_kind: string | null;
   }>(
-    `SELECT i.id AS inscricao_id, cl.commercial_stage_kind
+    `SELECT i.id AS inscricao_id, cl.commercial_stage, cl.commercial_stage_kind
      FROM inscricoes.inscricoes i
      JOIN dashboard.commercial_leads cl ON cl.inscricao_id = i.id AND cl.funnel_id = $4
      WHERE ${LEAD_HAS_AD_SIGNAL}
@@ -2163,13 +2289,21 @@ export async function getFunnelBreakdown(
     maxSequentialPositionByLead.set(inscricaoId, maxPosition);
   }
 
-  const wonCount = leadRows.filter((r) => r.commercial_stage_kind === "won").length;
-  const lostCount = leadRows.filter((r) => r.commercial_stage_kind === "lost").length;
+  // Ganho e perda contam por ONDE o lead está agora — cada lead numa etapa só.
+  // Somar por `kind` repetia o mesmo total em toda coluna `won`/`lost`, o que
+  // só não aparecia enquanto o funil tinha uma de cada; com o quadro de
+  // Clientes e o de espera, "Desinteresse: 22" virava "Em espera: 22" também.
+  const currentStageCount = new Map<string, number>();
+  for (const row of leadRows) {
+    if (!row.commercial_stage) continue;
+    currentStageCount.set(row.commercial_stage, (currentStageCount.get(row.commercial_stage) ?? 0) + 1);
+  }
   const sequentialPositions = Array.from(maxSequentialPositionByLead.values());
 
   return stageDefs.map((stage) => {
-    if (stage.kind === "won") return { ...stage, count: wonCount };
-    if (stage.kind === "lost") return { ...stage, count: lostCount };
+    if (stage.kind === "won" || stage.kind === "lost") {
+      return { ...stage, count: currentStageCount.get(stage.key) ?? 0 };
+    }
     const count = sequentialPositions.filter((maxPosition) => maxPosition >= stage.position).length;
     return { ...stage, count };
   });
@@ -2198,9 +2332,12 @@ export async function getLeadsForAds(
     stage_label: string | null;
     stage_kind: string | null;
     bucket: LeadBucket;
+    cidade: string | null;
+    ddd: string | null;
   }>(
     `SELECT i.id, i.payload->>'nome' AS nome, i.payload->>'telefone' AS telefone, i.payload->>'email' AS email,
             i.criado_em, fs.label AS stage_label, cl.commercial_stage_kind AS stage_kind,
+            ${LEAD_LOCATION_COLUMNS},
             ${leadBucketExpr("$2")} AS bucket
      FROM inscricoes.inscricoes i
      LEFT JOIN dashboard.commercial_leads cl
@@ -2234,6 +2371,8 @@ export async function getLeadsForAds(
     stageKind: (row.stage_kind as FunnelStageKind | null) ?? null,
     bucket: row.bucket,
     isReturning: row.bucket !== "novo",
+    cidade: row.cidade,
+    ddd: row.ddd,
   }));
 }
 
@@ -2264,7 +2403,7 @@ const LEAD_COMMERCIAL_JOIN_ID = `CASE
  */
 export async function getRecentAdLeads(
   filters: Pick<MetaAdsFilters, "from" | "to">,
-  options: { scopedAdIds?: string[]; limit?: number } = {}
+  options: { scopedAdIds?: string[]; limit?: number; location?: string | null } = {}
 ): Promise<RecentAdLead[]> {
   await ensureMetaAdsSchema();
   const pool = getPool();
@@ -2275,6 +2414,14 @@ export async function getRecentAdLeads(
   if (options.scopedAdIds && options.scopedAdIds.length > 0) {
     values.push(options.scopedAdIds);
     scopeClause = `AND la.ad_id = ANY($${values.length}::text[])`;
+  }
+  // O recorte de localização entra no SQL, não depois: com LIMIT, filtrar no
+  // navegador devolveria "os leads dessa cidade entre os 80 últimos", não os
+  // 80 últimos daquela cidade.
+  let locationClause = "";
+  if (options.location) {
+    values.push(options.location);
+    locationClause = `AND ${LEAD_LOCATION_KEY} = $${values.length}`;
   }
   values.push(limit);
   const limitPlaceholder = `$${values.length}`;
@@ -2295,12 +2442,15 @@ export async function getRecentAdLeads(
     image_url: string | null;
     video_id: string | null;
     seller_name: string | null;
+    cidade: string | null;
+    ddd: string | null;
   }>(
     `WITH lead_ad AS (
        SELECT i.id, i.criado_em,
               i.payload->>'nome' AS nome,
               i.payload->>'telefone' AS telefone,
               i.payload->>'email' AS email,
+              ${LEAD_LOCATION_COLUMNS},
               ${leadBucketExpr("$1")} AS bucket,
               ${LEAD_COMMERCIAL_JOIN_ID} AS commercial_id,
               ${LEAD_AD_ID} AS ad_id
@@ -2313,14 +2463,14 @@ export async function getRecentAdLeads(
             c.name AS campaign_name, s.name AS adset_name, a.name AS ad_name,
             a.thumbnail_url, a.image_url, a.video_id,
             fs.label AS stage_label, cl.commercial_stage_kind AS stage_kind,
-            cl.assigned_seller_name AS seller_name
+            cl.assigned_seller_name AS seller_name, la.cidade, la.ddd
      FROM lead_ad la
      JOIN ${SCHEMA}.ads a ON a.ad_id = la.ad_id
      JOIN ${SCHEMA}.adsets s ON s.adset_id = a.adset_id
      JOIN ${SCHEMA}.campaigns c ON c.campaign_id = a.campaign_id
      LEFT JOIN dashboard.commercial_leads cl ON cl.inscricao_id = la.commercial_id AND cl.funnel_id = $3
      LEFT JOIN dashboard.funnel_stages fs ON fs.funnel_id = cl.funnel_id AND fs.key = cl.commercial_stage
-     WHERE la.ad_id IS NOT NULL ${scopeClause}
+     WHERE la.ad_id IS NOT NULL ${scopeClause} ${locationClause}
      ORDER BY la.criado_em DESC
      LIMIT ${limitPlaceholder}`,
     values
@@ -2343,6 +2493,8 @@ export async function getRecentAdLeads(
     imageUrl: row.image_url,
     videoId: row.video_id,
     sellerName: row.seller_name,
+    cidade: row.cidade,
+    ddd: row.ddd,
   }));
 }
 
@@ -2365,7 +2517,8 @@ export async function getRecentAdLeads(
  */
 export async function getAdLeadDetails(
   filters: Pick<MetaAdsFilters, "from" | "to">,
-  scopedAdIds?: string[]
+  scopedAdIds?: string[],
+  location?: string | null
 ): Promise<AdLeadDetail[]> {
   await ensureMetaAdsSchema();
   const pool = getPool();
@@ -2376,6 +2529,11 @@ export async function getAdLeadDetails(
     if (scopedAdIds.length === 0) return [];
     values.push(scopedAdIds);
     scopeClause = `AND la.ad_id = ANY($${values.length}::text[])`;
+  }
+  let locationClause = "";
+  if (location) {
+    values.push(location);
+    locationClause = `AND ${LEAD_LOCATION_KEY} = $${values.length}`;
   }
 
   const { rows } = await pool.query<{
@@ -2399,14 +2557,18 @@ export async function getAdLeadDetails(
     stage_label: string | null;
     stage_kind: string | null;
     seller_name: string | null;
+    last_objection: string | null;
     bucket: LeadBucket;
     reached_stages: string[] | null;
+    cidade: string | null;
+    ddd: string | null;
   }>(
     `WITH lead_ad AS (
        SELECT i.id, i.criado_em,
               i.payload->>'nome' AS nome,
               i.payload->>'telefone' AS telefone,
               i.payload->>'email' AS email,
+              ${LEAD_LOCATION_COLUMNS},
               ${leadBucketExpr("$1")} AS bucket,
               ${LEAD_COMMERCIAL_JOIN_ID} AS commercial_id,
               ${LEAD_AD_ID} AS ad_id
@@ -2423,7 +2585,8 @@ export async function getAdLeadDetails(
             s.name AS adset_name, c.name AS campaign_name,
             cl.commercial_stage AS stage_key, fs.label AS stage_label,
             cl.commercial_stage_kind AS stage_kind, cl.assigned_seller_name AS seller_name,
-            ev.reached_stages
+            cl.last_objection,
+            ev.reached_stages, la.cidade, la.ddd
      FROM lead_ad la
      JOIN ${SCHEMA}.ads a ON a.ad_id = la.ad_id
      JOIN ${SCHEMA}.adsets s ON s.adset_id = a.adset_id
@@ -2437,7 +2600,7 @@ export async function getAdLeadDetails(
          AND e.event_type = 'stage_changed'
          AND e.to_stage IS NOT NULL
      ) ev ON TRUE
-     WHERE la.ad_id IS NOT NULL ${scopeClause}
+     WHERE la.ad_id IS NOT NULL ${scopeClause} ${locationClause}
      ORDER BY la.criado_em DESC`,
     values
   );
@@ -2466,11 +2629,70 @@ export async function getAdLeadDetails(
       stageLabel: row.stage_label,
       stageKind: (row.stage_kind as FunnelStageKind | null) ?? null,
       sellerName: row.seller_name,
+      lastObjection: row.last_objection,
       bucket: row.bucket,
       isReturning: row.bucket !== "novo",
+      cidade: row.cidade,
+      ddd: row.ddd,
       etapasAlcancadas: Array.from(etapas),
     };
   });
+}
+
+/**
+ * Localizações presentes nos leads de anúncio do período, com quantos leads
+ * caíram em cada uma. Alimenta o seletor de localização e já é, sozinha, a
+ * resposta para "quanto está chegando de fora da nossa praça".
+ *
+ * Usa o mesmo CTE e o mesmo JOIN com os anúncios das abas de lead — se o
+ * universo fosse outro, a soma das opções não bateria com a contagem da aba
+ * e o seletor viraria uma terceira versão da verdade.
+ */
+export async function getAdLeadLocations(
+  filters: Pick<MetaAdsFilters, "from" | "to">,
+  scopedAdIds?: string[]
+): Promise<LeadLocationOption[]> {
+  await ensureMetaAdsSchema();
+  const pool = getPool();
+  const values: unknown[] = [filters.from, filters.to];
+  let scopeClause = "";
+  if (scopedAdIds) {
+    if (scopedAdIds.length === 0) return [];
+    values.push(scopedAdIds);
+    scopeClause = `AND la.ad_id = ANY($${values.length}::text[])`;
+  }
+
+  const { rows } = await pool.query<{
+    key: string;
+    cidade: string | null;
+    ddd: string | null;
+    leads: string;
+  }>(
+    `WITH lead_ad AS (
+       SELECT ${LEAD_LOCATION_COLUMNS},
+              ${LEAD_AD_ID} AS ad_id
+       FROM inscricoes.inscricoes i
+       WHERE ${LEAD_HAS_AD_SIGNAL}
+         AND ${LEAD_NOT_EXCLUDED}
+         AND ${leadCreatedInPeriod("$1", "$2")}
+     )
+     SELECT ${LEAD_LOCATION_KEY} AS key,
+            MIN(la.cidade) AS cidade,
+            MIN(la.ddd) AS ddd,
+            COUNT(*) AS leads
+     FROM lead_ad la
+     JOIN ${SCHEMA}.ads a ON a.ad_id = la.ad_id
+     WHERE la.ad_id IS NOT NULL ${scopeClause}
+     GROUP BY 1
+     ORDER BY COUNT(*) DESC, 1`,
+    values
+  );
+
+  return rows.map((row) => ({
+    key: row.key,
+    label: leadLocationLabel(row),
+    leads: Number(row.leads),
+  }));
 }
 
 /**
@@ -2488,6 +2710,21 @@ export async function getSellerAdPerformance(
   const pool = getPool();
   const vozupFunnel = await getDefaultFunnel();
   const values: unknown[] = [filters.from, filters.to, vozupFunnel.id];
+  // Mesma régua de "qualificado" do painel (ver buildQualifiedStageKeys): quem
+  // está só na fila de chegada não conta para nenhuma das duas telas.
+  values.push(
+    Array.from(
+      buildQualifiedStageKeys(
+        vozupFunnel.stages.map((stage) => ({
+          position: stage.position,
+          key: stage.key,
+          label: stage.label,
+          kind: stage.kind,
+        }))
+      )
+    )
+  );
+  const qualifiedParam = `$${values.length}`;
   let scopeClause = "";
   if (options.scopedAdIds && options.scopedAdIds.length > 0) {
     values.push(options.scopedAdIds);
@@ -2520,7 +2757,7 @@ export async function getSellerAdPerformance(
      SELECT cl.assigned_seller_name AS seller_name,
             cl.assigned_seller_email AS seller_email,
             COUNT(*)::text AS total_leads,
-            COUNT(*) FILTER (WHERE cl.commercial_stage_kind IN ('normal','won'))::text AS qualificados,
+            COUNT(*) FILTER (WHERE cl.commercial_stage = ANY(${qualifiedParam}::text[]))::text AS qualificados,
             COUNT(*) FILTER (WHERE cl.commercial_stage_kind = 'won')::text AS ganhos,
             COUNT(*) FILTER (WHERE cl.commercial_stage_kind = 'lost')::text AS perdidos,
             COALESCE(SUM(cl.closed_value) FILTER (WHERE cl.commercial_stage_kind = 'won'), 0)::text AS valor_fechado

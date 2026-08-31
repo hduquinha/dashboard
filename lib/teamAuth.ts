@@ -22,6 +22,10 @@ export interface TeamMember {
   priorityLevel: number;
   permissions: PermissionKey[];
   distributionPosition: number;
+  /** Define se aparece como destino de repasse e distribuição de leads. */
+  isSeller: boolean;
+  /** Define se aparece como professor das turmas (mesma ideia de `isSeller`). */
+  isTeacher: boolean;
   /** Quando true, a secao "Leads VozUP" fica oculta e /vozup bloqueado para este usuario. */
   institutoUpOnly: boolean;
   passwordResetPromptSeenAt: string | null;
@@ -39,6 +43,8 @@ interface TeamMemberRow {
   priority_level: number;
   permissions: unknown;
   distribution_position: number;
+  is_seller: boolean;
+  is_teacher: boolean;
   instituto_up_only: boolean;
   password_reset_prompt_seen_at: string | null;
   created_at: string;
@@ -57,6 +63,8 @@ function mapRow(row: TeamMemberRow): TeamMember {
       institutoUpOnly: row.instituto_up_only,
     }),
     distributionPosition: row.distribution_position,
+    isSeller: row.is_seller,
+    isTeacher: Boolean(row.is_teacher),
     institutoUpOnly: row.instituto_up_only,
     passwordResetPromptSeenAt: row.password_reset_prompt_seen_at,
     createdAt: row.created_at,
@@ -97,6 +105,8 @@ export async function ensureTeamSchema(): Promise<void> {
       priority_level INTEGER NOT NULL DEFAULT 0,
       permissions JSONB,
       distribution_position INTEGER NOT NULL DEFAULT 0,
+      is_seller BOOLEAN NOT NULL DEFAULT true,
+      is_teacher BOOLEAN NOT NULL DEFAULT false,
       instituto_up_only BOOLEAN NOT NULL DEFAULT false,
       password_reset_prompt_seen_at TIMESTAMP WITH TIME ZONE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
@@ -106,6 +116,11 @@ export async function ensureTeamSchema(): Promise<void> {
     ALTER TABLE ${SCHEMA}.team_members
       ADD COLUMN IF NOT EXISTS priority_level INTEGER NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS permissions JSONB,
+      ADD COLUMN IF NOT EXISTS is_seller BOOLEAN NOT NULL DEFAULT true,
+      -- Professor é papel do USUÁRIO, não cadastro à parte: a lista de
+      -- professores da turma sai daqui. Nasce falso — marcar quem dá aula é
+      -- decisão de quem administra, não padrão.
+      ADD COLUMN IF NOT EXISTS is_teacher BOOLEAN NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS instituto_up_only BOOLEAN NOT NULL DEFAULT false,
       ADD COLUMN IF NOT EXISTS password_reset_prompt_seen_at TIMESTAMP WITH TIME ZONE;
 
@@ -197,6 +212,9 @@ export interface CreateTeamMemberInput {
   role: TeamRole;
   priorityLevel?: number;
   permissions?: PermissionKey[];
+  /** Novos perfis só entram na distribuição quando forem marcados explicitamente. */
+  isSeller?: boolean;
+  isTeacher?: boolean;
   institutoUpOnly?: boolean;
 }
 
@@ -212,9 +230,9 @@ export async function createTeamMember(input: CreateTeamMemberInput): Promise<Te
   const passwordHash = await hashPassword(input.password);
   const { rows } = await getPool().query<TeamMemberRow>(
     `INSERT INTO ${SCHEMA}.team_members (
-       email, name, password_hash, role, priority_level, permissions, instituto_up_only
+       email, name, password_hash, role, priority_level, permissions, is_seller, instituto_up_only
      )
-     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
      RETURNING *`,
     [
       normalizeEmail(input.email),
@@ -223,6 +241,8 @@ export async function createTeamMember(input: CreateTeamMemberInput): Promise<Te
       role,
       priorityLevel,
       JSON.stringify(permissions),
+      input.isSeller ?? false,
+      input.isTeacher ?? false,
       input.institutoUpOnly ?? false,
     ]
   );
@@ -237,6 +257,8 @@ export interface UpdateTeamMemberInput {
   priorityLevel?: number;
   permissions?: PermissionKey[];
   distributionPosition?: number;
+  isSeller?: boolean;
+  isTeacher?: boolean;
   institutoUpOnly?: boolean;
 }
 
@@ -261,6 +283,14 @@ export async function updateTeamMember(id: number, input: UpdateTeamMemberInput)
   if (input.distributionPosition !== undefined) {
     values.push(input.distributionPosition);
     sets.push(`distribution_position = $${values.length}`);
+  }
+  if (input.isSeller !== undefined) {
+    values.push(input.isSeller);
+    sets.push(`is_seller = $${values.length}`);
+  }
+  if (input.isTeacher !== undefined) {
+    values.push(input.isTeacher);
+    sets.push(`is_teacher = $${values.length}`);
   }
   if (input.priorityLevel !== undefined) {
     values.push(input.priorityLevel);

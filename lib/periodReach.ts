@@ -26,7 +26,14 @@ export interface ResolvedReach {
 function fromRow(row: PeriodReachRow, impressions: number): ResolvedReach {
   return {
     reach: row.reach,
-    frequency: row.frequency ?? (row.reach > 0 ? impressions / row.reach : null),
+    // A frequência precisa fechar com os dois números que aparecem ao lado dela
+    // na tela: impressões ÷ pessoas. A frequência publicada pela Meta é
+    // calculada sobre as impressões DELA, que num dia em andamento ficam alguns
+    // pontos à frente da soma dos anúncios que a tela mostra — usá-la aqui
+    // deixava a conta visivelmente errada (10/08/2026: 2.359 ÷ 2.077 = 1,14, e
+    // o rodapé dizia 1,15). A da Meta fica de reserva para quando não há
+    // impressões no recorte.
+    frequency: impressions > 0 && row.reach > 0 ? impressions / row.reach : row.frequency,
     exact: true,
   };
 }

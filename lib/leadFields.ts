@@ -132,6 +132,9 @@ export const FORM_TRACKING_KEYS = new Set<string>([
   "utm_content", "utmContent",
   "utm_term", "utmTerm",
   "gclid", "fbclid",
+  // Click id do ChatGPT Ads (OpenAI): chega na URL como `?oppref=` e é o que
+  // prova que o lead veio de anúncio de lá. Ver trafficSource.ts na landing.
+  "oppref", "chat_ads_event_id",
 ]);
 
 export function addableLeadFields(): LeadFieldDef[] {

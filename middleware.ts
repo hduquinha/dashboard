@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
 import { canAccessDashboardPath, canViewNavLink } from "@/lib/permissions";
-import { NAV_LINKS } from "@/lib/navLinks";
+import { ALL_NAV_LINKS } from "@/lib/navLinks";
 
 // Roda no runtime Node.js (nao Edge) porque lib/auth.ts usa node:crypto
 // para decifrar o cookie de sessao (AES-256-GCM).
@@ -12,8 +12,10 @@ export const config = {
     "/crm/:path*",
     "/vozup/:path*",
     "/financeiro/:path*",
+    "/matriculas/:path*",
     "/documentos/:path*",
     "/treinamentos/:path*",
+    "/catalogo/:path*",
     "/produtividade/:path*",
     "/distribuicao/:path*",
     "/recrutadores/:path*",
@@ -24,13 +26,18 @@ export const config = {
     "/encontro-online/:path*",
     "/usuarios/:path*",
     "/tarefas/:path*",
+    "/alunos/:path*",
+    "/turmas/:path*",
+    // "/contrato/:token" (singular) fica FORA de proposito: e a pagina publica
+    // de assinatura, aberta pelo aluno sem login. So a tela do CRM e protegida.
+    "/contratos/:path*",
   ],
 };
 
 /** Home ("/") nunca teve permissao dedicada — usuarios restritos a uma unica
  *  tela (ex.: acesso so ao mapa de rotas) precisam ser desviados dela. */
 function firstAccessiblePath(user: Parameters<typeof canViewNavLink>[0]): string | null {
-  const link = NAV_LINKS.find((candidate) => candidate.href !== "/" && canViewNavLink(user, candidate.key));
+  const link = ALL_NAV_LINKS.find((candidate) => candidate.href !== "/" && canViewNavLink(user, candidate.key));
   return link?.href ?? null;
 }
 

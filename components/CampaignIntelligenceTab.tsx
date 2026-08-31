@@ -6,7 +6,7 @@ import CampaignScopeSelect from "@/components/CampaignScopeSelect";
 import { formatCurrency, formatNullableCurrency, formatNumber, formatPercent } from "@/lib/campaignFormat";
 import { scopeAds } from "@/lib/campaignScope";
 import { groupAdsByCreative } from "@/lib/creativeGroups";
-import { costPerEngagement, landingPageCompletion } from "@/lib/metaAdsEngagement";
+import { costPerEngagement, isOwnSiteDestination, landingPageCompletion } from "@/lib/metaAdsEngagement";
 import { reachHint, resolveScopeReach } from "@/lib/periodReach";
 import type { CampaignGroup, EngagementMetrics, PeriodReachData } from "@/types/metaAds";
 
@@ -31,6 +31,10 @@ interface Totals extends EngagementMetrics {
   qualificados: number;
   vendas: number;
   valorFechado: number;
+  /** Cliques e páginas carregadas apenas dos anúncios que levam a um site
+   *  nosso — o resto não tem como registrar carregamento de página. */
+  siteLinkClicks: number;
+  siteLandingPageViews: number;
 }
 
 const EMPTY_TOTALS: Totals = {
@@ -46,6 +50,10 @@ const EMPTY_TOTALS: Totals = {
   videoViews: 0,
   linkClicks: 0,
   landingPageViews: 0,
+  // Subconjunto que leva a uma página nossa — é o único em que "página
+  // carregada" pode existir (ver isOwnSiteDestination).
+  siteLinkClicks: 0,
+  siteLandingPageViews: 0,
   postEngagement: 0,
   pageEngagement: 0,
   reactions: 0,
@@ -70,7 +78,30 @@ function MetricCard({ label, value, hint, tone = "blue" }: { label: string; valu
   );
 }
 
-function FunnelStep({ label, value, previous, accent }: { label: string; value: number; previous: number | null; accent: string }) {
+/**
+ * Uma etapa do funil.
+ *
+ * `baseLabel` existe porque nem toda etapa é calculada sobre a etapa desenhada
+ * logo acima dela: "página carregada" só pode sair dos cliques que apontam para
+ * uma página nossa, e as etapas comerciais saem das pessoas novas. Sem dizer
+ * isso, a linha "70,83% avançaram da etapa anterior" embaixo de "Cliques no
+ * link 45" convidava a fazer 17÷45 e concluir que a tela erra a conta.
+ */
+function FunnelStep({
+  label,
+  value,
+  previous,
+  accent,
+  baseLabel,
+  hint,
+}: {
+  label: string;
+  value: number;
+  previous: number | null;
+  accent: string;
+  baseLabel?: string;
+  hint?: string;
+}) {
   const conversion = previous === null ? null : percent(value, previous);
   const width = previous && previous > 0 ? Math.max(8, (value / previous) * 100) : value > 0 ? 100 : 0;
   return (
@@ -78,7 +109,10 @@ function FunnelStep({ label, value, previous, accent }: { label: string; value: 
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="text-sm font-semibold text-[rgb(var(--slate-12))]">{label}</p>
-          <p className="text-xs text-[rgb(var(--slate-9))]">{conversion === null ? "Início do funil" : `${formatPercent(conversion)} avançaram da etapa anterior`}</p>
+          <p className="text-xs text-[rgb(var(--slate-9))]">
+            {conversion === null ? "Início do funil" : `${formatPercent(conversion)} ${baseLabel ?? "avançaram da etapa anterior"}`}
+          </p>
+          {hint ? <p className="text-[11px] leading-snug text-[rgb(var(--slate-9))]">{hint}</p> : null}
         </div>
         <p className="text-base font-semibold tabular-nums text-[rgb(var(--slate-12))]">{formatNumber(value)}</p>
       </div>
@@ -127,6 +161,10 @@ export default function CampaignIntelligenceTab({
       total.videoViews += ad.videoViews;
       total.linkClicks += ad.linkClicks;
       total.landingPageViews += ad.landingPageViews;
+      if (isOwnSiteDestination(ad.landingUrl)) {
+        total.siteLinkClicks += ad.linkClicks;
+        total.siteLandingPageViews += ad.landingPageViews;
+      }
       total.postEngagement += ad.postEngagement;
       total.pageEngagement += ad.pageEngagement;
       total.reactions += ad.reactions;
@@ -169,11 +207,18 @@ export default function CampaignIntelligenceTab({
         tone: "info",
       });
     }
-    const completion = landingPageCompletion(totals);
-    if (completion !== null && completion < 70) {
+    // Só entra no cálculo o anúncio que leva a uma página nossa: quem manda para
+    // o perfil do Instagram ou para o formulário nativo não tem como registrar
+    // "página carregada", e somá-lo aqui acusaria uma lentidão que não existe.
+    const completion = landingPageCompletion({
+      ...totals,
+      linkClicks: totals.siteLinkClicks,
+      landingPageViews: totals.siteLandingPageViews,
+    });
+    if (completion !== null && totals.siteLinkClicks >= 30 && completion < 70) {
       result.push({
         title: "Perda entre clique e página",
-        detail: `Só ${formatPercent(completion)} dos cliques no link abriram a página. Vale revisar velocidade, link e experiência mobile da landing page.`,
+        detail: `Só ${formatPercent(completion)} dos cliques que apontam para o site abriram a página. Vale revisar velocidade, link e experiência mobile da landing page.`,
         tone: "warning",
       });
     }
@@ -197,8 +242,14 @@ export default function CampaignIntelligenceTab({
     impressions: totals.impressions,
   });
   const frequency = scopeReach.frequency;
-  const roas = totals.spend > 0 ? totals.valorFechado / totals.spend : null;
+  // Sem valor fechado registrado não existe ROAS: mostrar "0×" em âmbar dizia
+  // "investiu e não voltou nada" quando o certo é "não há esse dado ainda".
+  const roas = totals.spend > 0 && totals.valorFechado > 0 ? totals.valorFechado / totals.spend : null;
   const lpCompletion = landingPageCompletion(totals);
+  // Cliques que a Meta conta como "no link" mas que não levam a página nossa
+  // (perfil no Instagram, direct): entram no total, não na base da etapa
+  // seguinte.
+  const offSiteLinkClicks = Math.max(0, totals.linkClicks - totals.siteLinkClicks);
 
   return (
     <section aria-labelledby="campaign-intelligence-heading" className="space-y-6">
@@ -224,8 +275,18 @@ export default function CampaignIntelligenceTab({
         />
         <MetricCard label="CTR e CPC" value={formatPercent(ctr)} hint={`CPC: ${formatNullableCurrency(totals.clicks > 0 ? totals.spend / totals.clicks : null)}.`} />
         <MetricCard label="Cadastros" value={formatNumber(totals.cadastros)} hint={`Custo: ${formatNullableCurrency(totals.cadastros > 0 ? totals.spend / totals.cadastros : null)}.`} tone="teal" />
-        <MetricCard label="Contatos qualificados" value={formatNumber(totals.qualificados)} hint={`${formatPercent(percent(totals.qualificados, totals.contatos))} das pessoas novas.`} tone="teal" />
-        <MetricCard label="ROAS real" value={roas === null ? "—" : `${roas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}×`} hint={`${formatCurrency(totals.valorFechado)} em valor fechado.`} tone={roas !== null && roas < 1 ? "amber" : "teal"} />
+        <MetricCard
+          label="Contatos qualificados"
+          value={formatNumber(totals.qualificados)}
+          hint={`${formatPercent(percent(totals.qualificados, totals.contatos))} das pessoas novas passaram da primeira tentativa de contato.`}
+          tone="teal"
+        />
+        <MetricCard
+          label="ROAS real"
+          value={roas === null ? "—" : `${roas.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}×`}
+          hint={roas === null ? "Nenhuma venda com valor registrado neste período." : `${formatCurrency(totals.valorFechado)} em valor fechado.`}
+          tone={roas === null ? "blue" : roas < 1 ? "amber" : "teal"}
+        />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
@@ -234,17 +295,45 @@ export default function CampaignIntelligenceTab({
             <FileBarChart className="h-5 w-5 text-[rgb(var(--blue-9))]" />
             <div>
               <h3 className="font-semibold text-[rgb(var(--slate-12))]">Funil de aquisição e venda</h3>
-              <p className="text-xs text-[rgb(var(--slate-9))]">Cada etapa mostra a taxa de avanço da anterior.</p>
+              <p className="text-xs text-[rgb(var(--slate-9))]">Cada etapa mostra a taxa de avanço e sobre qual base ela foi calculada.</p>
             </div>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <FunnelStep label="Impressões" value={totals.impressions} previous={null} accent="bg-blue-500" />
             <FunnelStep label="Cliques" value={totals.clicks} previous={totals.impressions} accent="bg-sky-500" />
             <FunnelStep label="Cliques no link" value={totals.linkClicks} previous={totals.clicks} accent="bg-cyan-500" />
-            <FunnelStep label="Página carregada" value={totals.landingPageViews} previous={totals.linkClicks} accent="bg-teal-500" />
-            <FunnelStep label="Cadastros no CRM" value={totals.cadastros} previous={totals.landingPageViews || totals.linkClicks} accent="bg-emerald-500" />
-            <FunnelStep label="Qualificados" value={totals.qualificados} previous={totals.contatos} accent="bg-violet-500" />
-            <FunnelStep label="Vendas fechadas" value={totals.vendas} previous={totals.contatos} accent="bg-fuchsia-500" />
+            <FunnelStep
+              label="Página carregada"
+              value={totals.siteLandingPageViews}
+              previous={totals.siteLinkClicks}
+              accent="bg-teal-500"
+              baseLabel={`dos ${formatNumber(totals.siteLinkClicks)} cliques que levam a uma página nossa`}
+              hint={
+                offSiteLinkClicks > 0
+                  ? `Fora da conta: ${formatNumber(offSiteLinkClicks)} cliques foram para destinos sem página nossa (perfil no Instagram, direct), onde a Meta não registra carregamento.`
+                  : undefined
+              }
+            />
+            <FunnelStep
+              label="Cadastros no CRM"
+              value={totals.cadastros}
+              previous={totals.siteLandingPageViews || totals.siteLinkClicks}
+              accent="bg-emerald-500"
+            />
+            <FunnelStep
+              label="Qualificados"
+              value={totals.qualificados}
+              previous={totals.contatos}
+              accent="bg-violet-500"
+              baseLabel="das pessoas novas do período"
+            />
+            <FunnelStep
+              label="Vendas fechadas"
+              value={totals.vendas}
+              previous={totals.contatos}
+              accent="bg-fuchsia-500"
+              baseLabel="das pessoas novas do período"
+            />
           </div>
         </article>
 

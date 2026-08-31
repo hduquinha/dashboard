@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ArrivalQueueCounts } from "@/types/commercial";
 import type { AppNotification, AppNotificationFeed } from "@/types/notifications";
 
 const POLL_INTERVAL_MS = 45_000;
@@ -12,6 +13,8 @@ export interface UseAppNotificationsResult {
   items: AppNotification[];
   unread: number;
   toasts: AppNotification[];
+  /** Leads esperando na Chegada de Leads; nulo para quem nao distribui. */
+  arrivalQueue: ArrivalQueueCounts | null;
   dismissToast: (id: number) => void;
   markRead: (ids?: number[]) => Promise<void>;
   refresh: () => void;
@@ -27,6 +30,7 @@ export function useAppNotifications(enabled = true): UseAppNotificationsResult {
   const [items, setItems] = useState<AppNotification[]>([]);
   const [unread, setUnread] = useState(0);
   const [toasts, setToasts] = useState<AppNotification[]>([]);
+  const [arrivalQueue, setArrivalQueue] = useState<ArrivalQueueCounts | null>(null);
   // Maior id ja conhecido: o que passar disso e novidade e vira toast. Na
   // primeira carga so define a linha de base (senao quem abre o dashboard com
   // 20 pendencias antigas leva 20 avisos na cara).
@@ -43,6 +47,7 @@ export function useAppNotifications(enabled = true): UseAppNotificationsResult {
 
       setItems(feed.items);
       setUnread(feed.unread ?? 0);
+      setArrivalQueue(feed.arrivalQueue ?? null);
 
       const highestId = feed.items.reduce((max, item) => Math.max(max, item.id), 0);
       if (baselineIdRef.current === null) {
@@ -128,5 +133,5 @@ export function useAppNotifications(enabled = true): UseAppNotificationsResult {
     [load]
   );
 
-  return { items, unread, toasts, dismissToast, markRead, refresh: () => void load() };
+  return { items, unread, toasts, arrivalQueue, dismissToast, markRead, refresh: () => void load() };
 }

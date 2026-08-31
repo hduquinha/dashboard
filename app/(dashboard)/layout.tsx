@@ -2,8 +2,10 @@ import { ReactNode } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import DashboardLayoutClient from "@/components/DashboardLayoutClient";
-import { assertToken, DASHBOARD_COOKIE_NAME, getDashboardSession } from "@/lib/auth";
+import { assertToken, DASHBOARD_COOKIE_NAME } from "@/lib/auth";
+import { getFreshDashboardSession } from "@/lib/dashboardSession";
 import { listDuplicateSuspects } from "@/lib/db";
+import { canReceiveNewLeadNotifications } from "@/lib/leadNotificationAudience";
 import { ttlCache } from "@/lib/serverCache";
 import { getTeamMemberById } from "@/lib/teamAuth";
 
@@ -43,7 +45,10 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
     redirect("/login");
   }
 
-  const session = getDashboardSession(token);
+  const session = await getFreshDashboardSession(token);
+  if (!session) {
+    redirect("/login");
+  }
   const currentMember = session?.user ? await getTeamMemberById(session.user.id) : null;
 
   let duplicateCount = 0;
@@ -57,6 +62,7 @@ export default async function DashboardLayout({ children }: DashboardLayoutProps
   return (
     <DashboardLayoutClient
       currentUser={session?.user ?? null}
+      canReceiveNewLeadNotifications={canReceiveNewLeadNotifications(session?.user)}
       duplicateCount={duplicateCount}
       showPasswordResetPrompt={Boolean(currentMember && !currentMember.passwordResetPromptSeenAt)}
     >

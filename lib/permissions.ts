@@ -36,6 +36,8 @@ export const PERMISSION_GROUPS = [
       { key: "view.reports", label: "Relatorios", description: "Rankings, graficos e exportacoes." },
       { key: "view.encontro", label: "Encontro Online", description: "Presenca da aula gravada." },
       { key: "view.tasks", label: "Tarefas", description: "Gerenciador de tarefas (setores, quadros kanban e cards)." },
+      { key: "view.catalog", label: "Treinamentos e Valores", description: "Tabela de precos dos treinamentos e quanto cada um faturou." },
+      { key: "view.coupons", label: "Cupons", description: "Cupons de cortesia do Encontro Online, validade e quem ja usou." },
     ],
   },
   {
@@ -57,6 +59,9 @@ export const PERMISSION_GROUPS = [
       { key: "crm.manage_temperature", label: "Temperatura", description: "Alterar estrelas do lead." },
       { key: "crm.import", label: "Importar", description: "Importar planilhas e listas." },
       { key: "crm.export", label: "Exportar", description: "Exportar dados e relatorios." },
+      { key: "crm.register_sale", label: "Registrar venda", description: "Informar treinamento e valor ao mover o lead para Fechado; gera a matricula no Financeiro." },
+      { key: "catalog.manage", label: "Editar tabela de precos", description: "Criar treinamentos e alterar os valores padrao do catalogo." },
+      { key: "coupons.manage", label: "Gerenciar cupons", description: "Criar, editar e desativar cupons de cortesia — cada cupom e uma entrada gratuita." },
     ],
   },
   {
@@ -88,6 +93,22 @@ export const PERMISSION_GROUPS = [
       { key: "field.edit.training", label: "Treinamento", description: "Treinamento e aula vinculada." },
       { key: "field.edit.source", label: "Origem", description: "Indicador, origem e campanha." },
       { key: "field.edit.extra", label: "Campos extras", description: "Campos dinamicos do payload." },
+    ],
+  },
+  {
+    key: "academico",
+    label: "Academico",
+    description: "Alunos matriculados, turmas e cobranca da mensalidade.",
+    permissions: [
+      { key: "view.students", label: "Alunos", description: "Ver a Gestao de Alunos e a ficha do aluno." },
+      { key: "students.manage", label: "Cadastrar/editar aluno", description: "Criar aluno, editar ficha e converter lead em aluno." },
+      { key: "students.delete", label: "Excluir aluno", description: "Remover cadastro de aluno sem contrato." },
+      { key: "view.classes", label: "Turmas", description: "Ver turmas, grade de horario e alunos alocados." },
+      { key: "classes.manage", label: "Gerenciar turmas", description: "Criar/editar turma, horario, sala e alocar aluno." },
+      { key: "finance.payment_links", label: "Links de pagamento", description: "Gerar link de cobranca e marcar como pago." },
+      { key: "finance.invoices", label: "Notas fiscais", description: "Controle manual de emissao de nota fiscal." },
+      { key: "view.contracts", label: "Contratos digitais", description: "Ver os contratos de matricula e o andamento das assinaturas." },
+      { key: "contracts.manage", label: "Gerenciar contratos", description: "Gerar contrato, completar dados do signatario, reemitir link e cancelar." },
     ],
   },
   {
@@ -123,6 +144,8 @@ export type PermissionKey =
   | "view.reports"
   | "view.encontro"
   | "view.tasks"
+  | "view.catalog"
+  | "view.coupons"
   | "crm.view_all_leads"
   | "crm.create_leads"
   | "distribution.add_lead"
@@ -137,6 +160,18 @@ export type PermissionKey =
   | "crm.manage_temperature"
   | "crm.import"
   | "crm.export"
+  | "crm.register_sale"
+  | "catalog.manage"
+  | "coupons.manage"
+  | "view.students"
+  | "students.manage"
+  | "students.delete"
+  | "view.classes"
+  | "classes.manage"
+  | "finance.payment_links"
+  | "finance.invoices"
+  | "view.contracts"
+  | "contracts.manage"
   | "field.view.phone"
   | "field.view.email"
   | "field.view.city"
@@ -181,6 +216,28 @@ export const DEFAULT_PRIORITY_BY_ROLE: Record<TeamRole, number> = {
   member: 10,
 };
 
+/**
+ * Poderes que pertencem ao lado VozUP do sistema e por isso somem para quem
+ * está marcado como "somente Instituto UP" — inclui tudo que expõe dinheiro
+ * (financeiro, campanhas e a tabela de preços dos treinamentos).
+ */
+const VOZUP_ONLY_PERMISSIONS = new Set<PermissionKey>([
+  "view.vozup",
+  "view.finance",
+  "view.campaigns",
+  "view.catalog",
+  "catalog.manage",
+  "view.students",
+  "students.manage",
+  "students.delete",
+  "view.classes",
+  "classes.manage",
+  "finance.payment_links",
+  "finance.invoices",
+  "view.contracts",
+  "contracts.manage",
+]);
+
 const ADMIN_EXCLUDED = new Set<PermissionKey>([
   "admin.users",
   "admin.permissions",
@@ -192,7 +249,9 @@ const MEMBER_PERMISSIONS: PermissionKey[] = [
   "view.crm",
   "view.vozup",
   "view.tasks",
+  "view.catalog",
   "crm.create_leads",
+  "crm.register_sale",
   "crm.edit_leads",
   "crm.update_stage",
   "crm.manage_notes",
@@ -249,7 +308,7 @@ export function defaultPermissionsForRole(
         : MEMBER_PERMISSIONS;
 
   return options.institutoUpOnly
-    ? base.filter((key) => key !== "view.vozup" && key !== "view.finance" && key !== "view.campaigns")
+    ? base.filter((key) => !VOZUP_ONLY_PERMISSIONS.has(key))
     : [...base];
 }
 
@@ -266,7 +325,7 @@ export function effectivePermissionsForRole(
   if (Array.isArray(storedPermissions)) {
     const normalized = normalizePermissionList(storedPermissions);
     return options.institutoUpOnly
-      ? normalized.filter((key) => key !== "view.vozup" && key !== "view.finance" && key !== "view.campaigns")
+      ? normalized.filter((key) => !VOZUP_ONLY_PERMISSIONS.has(key))
       : normalized;
   }
 
@@ -306,16 +365,10 @@ export function hasPermission(
   }
 
   if (isSuperMaster(user)) {
-    return (
-      (permission !== "view.vozup" && permission !== "view.finance" && permission !== "view.campaigns") ||
-      !user.institutoUpOnly
-    );
+    return !VOZUP_ONLY_PERMISSIONS.has(permission) || !user.institutoUpOnly;
   }
 
-  if (
-    (permission === "view.vozup" || permission === "view.finance" || permission === "view.campaigns") &&
-    user.institutoUpOnly
-  ) {
+  if (VOZUP_ONLY_PERMISSIONS.has(permission) && user.institutoUpOnly) {
     return false;
   }
 
@@ -340,24 +393,34 @@ export const NAV_PERMISSION_BY_KEY: Record<string, PermissionKey | undefined> = 
   "encontro-online": "view.encontro",
   tarefas: "view.tasks",
   "tarefas-auditoria": "view.tasks",
+  catalogo: "view.catalog",
+  cupons: "view.coupons",
   rede: "view.network",
   "vozup-leads": "view.vozup",
   "vozup-rotas": "view.vozup_rotas",
   "vozup-auditoria": "admin.audit",
   "vozup-financeiro": "view.finance",
+  matriculas: "view.finance",
   campanhas: "view.campaigns",
   documentos: "view.vozup",
   usuarios: "admin.users",
   funis: "crm.manage_funnels",
+  alunos: "view.students",
+  turmas: "view.classes",
+  chamada: "view.classes",
+  contratos: "view.contracts",
 };
 
 const PATH_PERMISSION_RULES: Array<{ prefix: string; permission: PermissionKey }> = [
   { prefix: "/crm", permission: "view.crm" },
   { prefix: "/vozup", permission: "view.vozup" },
   { prefix: "/financeiro", permission: "view.finance" },
+  { prefix: "/matriculas", permission: "view.finance" },
   { prefix: "/campanhas", permission: "view.campaigns" },
   { prefix: "/documentos", permission: "view.vozup" },
   { prefix: "/treinamentos", permission: "view.trainings" },
+  { prefix: "/catalogo", permission: "view.catalog" },
+  { prefix: "/cupons", permission: "view.coupons" },
   { prefix: "/produtividade", permission: "view.productivity" },
   { prefix: "/distribuicao", permission: "view.distribution" },
   { prefix: "/recrutadores", permission: "view.recruiters" },
@@ -369,6 +432,10 @@ const PATH_PERMISSION_RULES: Array<{ prefix: string; permission: PermissionKey }
   { prefix: "/tarefas", permission: "view.tasks" },
   { prefix: "/usuarios", permission: "admin.users" },
   { prefix: "/funis", permission: "crm.manage_funnels" },
+  { prefix: "/alunos", permission: "view.students" },
+  { prefix: "/turmas", permission: "view.classes" },
+  { prefix: "/chamada", permission: "view.classes" },
+  { prefix: "/contratos", permission: "view.contracts" },
 ];
 
 export function canViewNavLink(

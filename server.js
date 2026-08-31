@@ -212,3 +212,27 @@ if (cluster.isPrimary && process.env.TASK_AUTOMATIONS_ENABLED !== "false") {
   setInterval(triggerTaskAutomations, tasksIntervalMs);
   setTimeout(triggerTaskAutomations, 25_000);
 }
+
+// Cobranca: marca as parcelas de matricula que venceram e continuam em aberto,
+// e avisa quem cuida do financeiro. Ate isto existir, nenhum ciclo olhava o
+// relogio do dinheiro — o status da parcela so era refeito quando alguem
+// lancava um pagamento naquela matricula, ou seja, nunca para quem parou de
+// pagar. Intervalo longo de proposito: vencimento muda de dia, nao de minuto.
+if (cluster.isPrimary && process.env.FINANCE_OVERDUE_ENABLED !== "false") {
+  const overdueIntervalMs = Number.parseInt(process.env.FINANCE_OVERDUE_INTERVAL_MS || "3600000", 10);
+  const overdueToken = process.env.DASHBOARD_TOKEN || "";
+  const overdueUrl = `http://127.0.0.1:${port}/api/internal/finance-overdue`;
+
+  const triggerFinanceOverdue = () => {
+    if (!overdueToken) return;
+    fetch(overdueUrl, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${overdueToken}` },
+    }).catch((err) => {
+      console.error("[dashboard] finance overdue trigger failed:", err?.message || err);
+    });
+  };
+
+  setInterval(triggerFinanceOverdue, overdueIntervalMs);
+  setTimeout(triggerFinanceOverdue, 30_000);
+}

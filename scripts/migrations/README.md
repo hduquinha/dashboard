@@ -43,6 +43,20 @@ Scripts de migração para o schema normalizado do banco PostgreSQL.
 19. **[019_finance_receipts_alignment.sql](019_finance_receipts_alignment.sql)** — Recria o cronograma de contratos que ficaram sem parcelas, dá vencimento às parcelas no dia da venda, alinha os meses da comissão ao cronograma do contrato, grava a comissão de cada recebimento e recalcula o status das parcelas pela cascata dos pagamentos.
 20. **[020_link_enrollment_payments_to_installments.sql](020_link_enrollment_payments_to_installments.sql)** — Vincula pagamentos antigos à parcela do mês correspondente e recalcula o status individual de cada parcela.
 
+21. **[021_funil_triagem.sql](021_funil_triagem.sql)** — Cria o funil "Triagem" (`dashboard.funnels.is_triage`) para listas frias/importadas: o lead fica trabalhável no Kanban desse funil, mas não aparece no CRM geral até ser movido para outro funil.
+22. **[022_academic_core.sql](022_academic_core.sql)** — Cria aluno matriculado, responsável legal, turma, grade, salas e calendário institucional; liga contratos a aluno/turma e reserva o modo/provedor de cobrança por parcela.
+23. **[025_team_member_seller_flag.sql](025_team_member_seller_flag.sql)** — Adiciona a marca `is_seller`: só usuários marcados como vendedores aparecem como destino de distribuição e repasse de leads.
+
+24. **[026_exclusive_class_arrival_stream.sql](026_exclusive_class_arrival_stream.sql)** — Registra o marco de ativação da fila exclusiva de Chegada para Aula Exclusiva/Experimental; somente leads posteriores a esse marco entram nela.
+
+25. **[027_contracts_digital_signature.sql](027_contracts_digital_signature.sql)** — Cria contratos, links e trilha de evidências; arquiva tanto a assinatura eletrônica quanto a via impressa, assinada à mão e digitalizada.
+
+26. **[031_lead_movement_panel.sql](031_lead_movement_panel.sql)** — Prepara o painel "Histórico" de movimentação de leads por vendedor: coluna `panel_member_id` no card de tarefa e índice por tipo/data em `commercial_events`. Não cria histórico nenhum — ele já existe em `dashboard.commercial_events` e continua sendo a única fonte.
+
+27. **[032_instagram_outreach.sql](032_instagram_outreach.sql)** — Cria `dashboard.instagram_outreach` (abordados, responderam, confirmados por vendedor e dia, lançados no card do Histórico) e **arquiva** a rotina diária "Verificar e responder o Instagram", que passa a ser lançada ali. Arquiva em vez de apagar: `DELETE` levaria junto, por CASCADE, os lançamentos de produção já feitos.
+
+28. **[033_instagram_panel_opcional.sql](033_instagram_panel_opcional.sql)** — Transforma "Leads Instagram" em opção por card (`dashboard.tasks.panel_instagram`), gerenciada por usuário master, e liga apenas para Andrea e Thiago Cardoso. Desligar preserva os lançamentos.
+
 > **Nota sobre `dashboard.commercial_leads.position`** (ordem manual do Kanban, coluna adicionada via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` em `ensureCommercialSchema`/`ensureCommercialSchemaForReads`): não precisou de migração de backfill. Leads sem `position` explícito (nunca arrastados) usam o fallback `COALESCE(cl.position, -i.id)` — único por lead e já preserva "mais recente primeiro" sem precisar tocar dado nenhum.
 
 ## Como executar
@@ -68,6 +82,13 @@ psql $DATABASE_URL -f 016_create_agenda_classes.sql
 psql $DATABASE_URL -f 017_add_oratory_course_type.sql
 psql $DATABASE_URL -f 018_repair_enrollment_forecasts.sql
 psql $DATABASE_URL -f 019_finance_receipts_alignment.sql
+psql $DATABASE_URL -f 026_exclusive_class_arrival_stream.sql
+psql $DATABASE_URL -f 027_contracts_digital_signature.sql
+psql $DATABASE_URL -f 031_lead_movement_panel.sql
+psql $DATABASE_URL -f 032_instagram_outreach.sql
+psql $DATABASE_URL -f 033_instagram_panel_opcional.sql
+psql $DATABASE_URL -f 034_payment_method_max_installments.sql
+psql $DATABASE_URL -f 035_payment_method_fee_pct.sql
 ```
 
 > **Atenção:** Faça backup do banco antes de executar as migrações em produção.

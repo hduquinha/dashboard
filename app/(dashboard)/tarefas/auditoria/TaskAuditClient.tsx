@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LucideIcon } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import {
   Activity,
   ArrowLeft,
@@ -39,23 +40,23 @@ const PERIODS: Array<{ key: PeriodPreset; label: string }> = [
   { key: "custom", label: "Personalizado" },
 ];
 
-const ACTION_META: Record<string, { label: string; icon: LucideIcon; tone: string }> = {
-  card_created: { label: "Card criado", icon: Plus, tone: "bg-emerald-50 text-emerald-700" },
-  card_updated: { label: "Card atualizado", icon: ClipboardPenLine, tone: "bg-blue-50 text-blue-700" },
-  card_moved: { label: "Card movido", icon: ArrowRight, tone: "bg-violet-50 text-violet-700" },
-  card_completed: { label: "Card concluído", icon: CheckCircle2, tone: "bg-emerald-50 text-emerald-700" },
-  card_archived: { label: "Card arquivado", icon: Archive, tone: "bg-amber-50 text-amber-700" },
-  card_restored: { label: "Card restaurado", icon: Archive, tone: "bg-cyan-50 text-cyan-700" },
-  card_deleted: { label: "Card excluído", icon: X, tone: "bg-rose-50 text-rose-700" },
-  comment_added: { label: "Comentário adicionado", icon: MessageSquare, tone: "bg-sky-50 text-sky-700" },
-  checklist_created: { label: "Checklist criada", icon: CheckSquare, tone: "bg-indigo-50 text-indigo-700" },
-  checklist_item_done: { label: "Item de checklist concluído", icon: CheckSquare, tone: "bg-emerald-50 text-emerald-700" },
-  attachment_added: { label: "Anexo adicionado", icon: Paperclip, tone: "bg-slate-100 text-slate-700" },
-  members_changed: { label: "Responsáveis atualizados", icon: Users, tone: "bg-blue-50 text-blue-700" },
-  labels_changed: { label: "Etiquetas atualizadas", icon: Tag, tone: "bg-fuchsia-50 text-fuchsia-700" },
-  custom_fields_changed: { label: "Campos personalizados atualizados", icon: FileText, tone: "bg-cyan-50 text-cyan-700" },
-  automation_ran: { label: "Automação executada", icon: Activity, tone: "bg-violet-50 text-violet-700" },
-  automation_scheduled: { label: "Automação agendada executada", icon: CalendarDays, tone: "bg-violet-50 text-violet-700" },
+const ACTION_META: Record<string, { label: string; icon: LucideIcon; tone: IconTileTone }> = {
+  card_created: { label: "Card criado", icon: Plus, tone: "teal" },
+  card_updated: { label: "Card atualizado", icon: ClipboardPenLine, tone: "brand" },
+  card_moved: { label: "Card movido", icon: ArrowRight, tone: "slate" },
+  card_completed: { label: "Card concluído", icon: CheckCircle2, tone: "teal" },
+  card_archived: { label: "Card arquivado", icon: Archive, tone: "amber" },
+  card_restored: { label: "Card restaurado", icon: Archive, tone: "brand" },
+  card_deleted: { label: "Card excluído", icon: X, tone: "ruby" },
+  comment_added: { label: "Comentário adicionado", icon: MessageSquare, tone: "brand" },
+  checklist_created: { label: "Checklist criada", icon: CheckSquare, tone: "slate" },
+  checklist_item_done: { label: "Item de checklist concluído", icon: CheckSquare, tone: "teal" },
+  attachment_added: { label: "Anexo adicionado", icon: Paperclip, tone: "slate" },
+  members_changed: { label: "Responsáveis atualizados", icon: Users, tone: "brand" },
+  labels_changed: { label: "Etiquetas atualizadas", icon: Tag, tone: "ruby" },
+  custom_fields_changed: { label: "Campos personalizados atualizados", icon: FileText, tone: "brand" },
+  automation_ran: { label: "Automação executada", icon: Activity, tone: "slate" },
+  automation_scheduled: { label: "Automação agendada executada", icon: CalendarDays, tone: "slate" },
 };
 
 function isoDate(date: Date): string {
@@ -132,15 +133,13 @@ function eventDetail(event: TaskAuditEvent): string | null {
 }
 
 function EventRow({ event }: { event: TaskAuditEvent }) {
-  const meta = ACTION_META[event.action] ?? { label: event.action, icon: Activity, tone: "bg-slate-100 text-slate-700" };
+  const meta = ACTION_META[event.action] ?? { label: event.action, icon: Activity, tone: "slate" };
   const Icon = meta.icon;
   const detail = eventDetail(event);
 
   return (
     <li className="flex gap-3 px-4 py-4 sm:px-5">
-      <span className={`mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl ${meta.tone}`}>
-        <Icon className="size-4" />
-      </span>
+      <IconTile icon={Icon} tone={meta.tone} size="md" className="mt-0.5" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <p className="font-semibold text-slate-900">{meta.label}</p>
@@ -250,11 +249,11 @@ export default function TaskAuditClient({ options }: { options: TaskAuditFilterO
   }
 
   const activeFilters = (preset !== "30d" ? 1 : 0) + (board ? 1 : 0) + (action ? 1 : 0) + (actor ? 1 : 0) + (search ? 1 : 0);
-  const metrics = [
-    { label: "Eventos", value: summary?.totalEvents ?? 0, icon: Activity, tone: "text-cyan-700 bg-cyan-50" },
-    { label: "Cards afetados", value: summary?.cardsAffected ?? 0, icon: ClipboardPenLine, tone: "text-blue-700 bg-blue-50" },
-    { label: "Quadros", value: summary?.boardsAffected ?? 0, icon: FolderKanban, tone: "text-violet-700 bg-violet-50" },
-    { label: "Pessoas ativas", value: summary?.activeActors ?? 0, icon: UserRound, tone: "text-emerald-700 bg-emerald-50" },
+  const metrics: Array<{ label: string; value: number; icon: LucideIcon; tone: IconTileTone }> = [
+    { label: "Eventos", value: summary?.totalEvents ?? 0, icon: Activity, tone: "brand" },
+    { label: "Cards afetados", value: summary?.cardsAffected ?? 0, icon: ClipboardPenLine, tone: "brand" },
+    { label: "Quadros", value: summary?.boardsAffected ?? 0, icon: FolderKanban, tone: "slate" },
+    { label: "Pessoas ativas", value: summary?.activeActors ?? 0, icon: UserRound, tone: "teal" },
   ];
 
   return (
@@ -278,7 +277,7 @@ export default function TaskAuditClient({ options }: { options: TaskAuditFilterO
           return (
             <div key={metric.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-center justify-between gap-3">
-                <span className={`flex size-9 items-center justify-center rounded-xl ${metric.tone}`}><Icon className="size-4" /></span>
+                <IconTile icon={Icon} tone={metric.tone} size="md" />
                 <strong className="text-2xl font-black tracking-tight text-slate-950">{metric.value}</strong>
               </div>
               <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">{metric.label}</p>

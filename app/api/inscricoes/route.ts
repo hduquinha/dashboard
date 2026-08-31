@@ -40,6 +40,7 @@ function parseOrderField(value: string | null): OrderableField {
     "profissao",
     "treinamento",
     "recrutador",
+    "data_cadastro",
     "criado_em",
   ];
   if (value && allowed.includes(value as OrderableField)) {

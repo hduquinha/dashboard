@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import { RefreshCw } from "lucide-react";
+import { MessageSquare, MessageSquareReply, Phone, PhoneOff, RefreshCw, type LucideIcon } from "lucide-react";
 import { describeCommercialEvent } from "@/lib/commercialEventDisplay";
 import type { CommercialTimelineEvent } from "@/lib/commercial";
 
@@ -23,11 +23,12 @@ const QUICK_LOG_ACTIONS: Array<{
   kind: (typeof ACTIVITY_OPTIONS)[number]["value"];
   label: string;
   description: string;
+  icon: LucideIcon;
 }> = [
-  { kind: "whatsapp", label: "💬 Mandei mensagem", description: "Mensagem enviada no WhatsApp" },
-  { kind: "whatsapp", label: "✅ Cliente respondeu", description: "Cliente respondeu no WhatsApp" },
-  { kind: "ligacao", label: "📞 Liguei", description: "Ligação feita" },
-  { kind: "ligacao", label: "🔇 Não atendeu", description: "Ligação não atendida" },
+  { kind: "whatsapp", label: "Mandei mensagem", description: "Mensagem enviada no WhatsApp", icon: MessageSquare },
+  { kind: "whatsapp", label: "Cliente respondeu", description: "Cliente respondeu no WhatsApp", icon: MessageSquareReply },
+  { kind: "ligacao", label: "Liguei", description: "Ligação feita", icon: Phone },
+  { kind: "ligacao", label: "Não atendeu", description: "Ligação não atendida", icon: PhoneOff },
 ];
 
 function formatDateTime(value: string): string {
@@ -115,8 +116,9 @@ export function LeadTimeline({ leadId, canLog = true }: LeadTimelineProps) {
                 disabled={saving}
                 onClick={() => logActivity(action.kind, action.description)}
                 title={action.description}
-                className="h-8 rounded-full border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 transition hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40"
+                className="inline-flex h-8 items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-3 text-xs font-semibold text-neutral-700 transition hover:border-emerald-400 hover:text-emerald-700 disabled:opacity-40"
               >
+                <action.icon size={13} className="text-neutral-400" />
                 {action.label}
               </button>
             ))}

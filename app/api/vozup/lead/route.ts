@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server";
+import { clientIpFromHeaders, lookupLeadGeo } from "@/lib/leadGeo";
 import { ingestVozupLead } from "@/lib/vozupLeadIngest";
 
 export const dynamic = "force-dynamic";
@@ -135,8 +136,16 @@ export async function POST(req: NextRequest) {
   const isLandingPage = origemValor.toLowerCase().includes("landing");
   const isPanfleto = /^panfleto [ab]$/i.test(origemValor);
 
+  // Cidade pelo IP: o formulário só pede nome e WhatsApp, então esta é a única
+  // localização que chega sem custar uma pergunta a mais (ver lib/leadGeo).
+  // Nunca sobrescreve cidade informada pela própria pessoa, e só vale para o
+  // POST da landing page — o webhook de Lead Ads do Facebook chama
+  // `ingestVozupLead` direto, sem request do visitante, e continua sem cidade.
+  const geo = textValue(raw.cidade) ? null : await lookupLeadGeo(clientIpFromHeaders(req.headers));
+
   const payload = {
     ...raw,
+    ...(geo ? { cidade: geo.cidade, estado: geo.uf, cidade_fonte: "ip" } : {}),
     nome,
     telefone,
     objetivo,

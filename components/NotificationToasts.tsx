@@ -1,17 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { AlarmClock, Bell, Inbox, ListChecks, MessageSquare, UserPlus, X } from "lucide-react";
+import {
+  AlarmClock,
+  AtSign,
+  BadgeDollarSign,
+  Bell,
+  CalendarClock,
+  Hourglass,
+  Inbox,
+  ListChecks,
+  UserCheck,
+  X,
+} from "lucide-react";
 import type { AppNotification, AppNotificationKind } from "@/types/notifications";
 
+/** Mesmos ícones da página /notificacoes — o aviso flutuante e o item da
+ *  lista precisam ser reconhecíveis como a mesma coisa. */
 const ICON_BY_KIND: Record<AppNotificationKind, typeof Bell> = {
   new_lead: Inbox,
-  lead_assigned: UserPlus,
+  lead_assigned: UserCheck,
   stale_lead: AlarmClock,
-  undistributed_lead: AlarmClock,
+  undistributed_lead: Hourglass,
   task_assigned: ListChecks,
-  task_mention: MessageSquare,
-  task_due: AlarmClock,
+  task_mention: AtSign,
+  task_due: CalendarClock,
+  finance_overdue: BadgeDollarSign,
 };
 
 interface NotificationToastsProps {

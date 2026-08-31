@@ -5,6 +5,7 @@ import {
   isReportMonth,
   monthBounds,
   monthLabel,
+  reportPeriodLabel,
   shiftMonth,
   type MonthlyReportInput,
 } from "@/lib/monthlyReport";
@@ -100,6 +101,8 @@ function baseInput(overrides: Partial<MonthlyReportInput> = {}): MonthlyReportIn
     ticketMedio: null,
     saleStageKey: null,
     enrollmentOrigins: null,
+    arrival: null,
+    sellers: null,
     ...overrides,
   };
 }
@@ -126,6 +129,115 @@ function origins(
     rows: [],
   };
 }
+
+/** Uma matrícula como getEnrollmentOrigins devolve, já com campanha resolvida. */
+function sale(
+  student: string,
+  amount: number,
+  extra: Partial<NonNullable<MonthlyReportInput["enrollmentOrigins"]>["rows"][number]> = {}
+): NonNullable<MonthlyReportInput["enrollmentOrigins"]>["rows"][number] {
+  return {
+    student,
+    amount,
+    saleDate: "2026-07-10",
+    kind: "anuncio",
+    leadOrigem: null,
+    campaignName: null,
+    linkKind: "direto",
+    ...extra,
+  };
+}
+
+function originsWithRows(
+  rows: NonNullable<MonthlyReportInput["enrollmentOrigins"]>["rows"]
+): NonNullable<MonthlyReportInput["enrollmentOrigins"]> {
+  const bucket = (kind: string) => {
+    const list = rows.filter((row) => row.kind === kind);
+    return { count: list.length, amount: list.reduce((total, row) => total + row.amount, 0) };
+  };
+  return {
+    total: rows.length,
+    totalAmount: rows.reduce((total, row) => total + row.amount, 0),
+    anuncio: bucket("anuncio"),
+    crmSemAnuncio: bucket("crm_sem_anuncio"),
+    semCadastro: bucket("sem_cadastro"),
+    rows,
+  };
+}
+
+describe("vendas por campanha", () => {
+  it("cruza a matrícula com o gasto da campanha que trouxe o lead", () => {
+    const report = buildMonthlyReport(
+      baseInput({
+        enrollmentOrigins: originsWithRows([
+          sale("Ana", 5000, { campaignId: "c1", campaignName: "Campanha c1" }),
+          sale("Bruno", 3000, { campaignId: "c1", campaignName: "Campanha c1" }),
+        ]),
+      })
+    );
+
+    const c1 = report.sales?.porCampanha.find((line) => line.campaignId === "c1");
+    expect(c1?.vendas).toBe(2);
+    expect(c1?.receita).toBe(8000);
+    // 400 investidos na c1 ÷ 2 vendas.
+    expect(c1?.custoPorVenda).toBe(200);
+    expect(c1?.retornoPorReal).toBe(20);
+    expect(report.sales?.vendasDeAnuncio).toBe(2);
+    expect(report.sales?.receitaDeAnuncio).toBe(8000);
+  });
+
+  it("mantém na tabela a campanha que gastou e não vendeu", () => {
+    const report = buildMonthlyReport(
+      baseInput({
+        enrollmentOrigins: originsWithRows([sale("Ana", 5000, { campaignId: "c1", campaignName: "Campanha c1" })]),
+      })
+    );
+    const c2 = report.sales?.porCampanha.find((line) => line.campaignId === "c2");
+    expect(c2?.vendas).toBe(0);
+    expect(c2?.custoPorVenda).toBeNull();
+    expect(report.sales?.campanhasSemVenda).toBe(1);
+    expect(report.highlights.some((point) => point.text.includes("sem fechar nenhuma venda"))).toBe(true);
+  });
+
+  it("separa a venda que não veio de mídia em vez de escondê-la", () => {
+    const report = buildMonthlyReport(
+      baseInput({
+        enrollmentOrigins: originsWithRows([
+          sale("Ana", 5000, { campaignId: "c1", campaignName: "Campanha c1" }),
+          sale("Carla", 4000, { kind: "sem_cadastro", linkKind: null }),
+          sale("Davi", 2000, { kind: "crm_sem_anuncio", leadOrigem: "Aula Experimental", linkKind: "nome" }),
+        ]),
+      })
+    );
+
+    const fora = report.sales?.porCampanha.find((line) => line.campaignId === null);
+    expect(fora?.vendas).toBe(2);
+    expect(fora?.receita).toBe(6000);
+    expect(fora?.spend).toBe(0);
+    // Receita total fecha com o Financeiro; a de anúncio não infla.
+    expect(report.sales?.receita).toBe(11000);
+    expect(report.sales?.receitaDeAnuncio).toBe(5000);
+    expect(report.sales?.vendas).toBe(3);
+  });
+
+  it("marca quantas vendas foram atribuídas por nome em vez de vínculo", () => {
+    const report = buildMonthlyReport(
+      baseInput({
+        enrollmentOrigins: originsWithRows([
+          sale("Ana", 5000, { campaignId: "c1", campaignName: "Campanha c1", linkKind: "direto" }),
+          sale("Bruno", 3000, { campaignId: "c1", campaignName: "Campanha c1", linkKind: "nome" }),
+        ]),
+      })
+    );
+    expect(report.sales?.vinculoDireto).toBe(1);
+    expect(report.sales?.vinculoPorNome).toBe(1);
+    expect(report.highlights.some((point) => point.text.includes("conciliação de nome"))).toBe(true);
+  });
+
+  it("não existe para quem não tem acesso ao Financeiro", () => {
+    expect(buildMonthlyReport(baseInput()).sales).toBeNull();
+  });
+});
 
 describe("helpers de mês", () => {
   it("valida o formato do mês", () => {
@@ -154,6 +266,11 @@ describe("helpers de mês", () => {
 
   it("escreve o mês por extenso", () => {
     expect(monthLabel("2026-07")).toBe("Julho de 2026");
+  });
+
+  it("rotula um intervalo personalizado sem fingir que ele é um mês", () => {
+    expect(reportPeriodLabel("2026-07-03", "2026-07-18")).toBe("3 a 18 de julho de 2026");
+    expect(reportPeriodLabel("2026-07-30", "2026-08-02")).toBe("30/07/2026 a 02/08/2026");
   });
 
   it("não inventa variação sem base de comparação", () => {
@@ -308,6 +425,21 @@ describe("buildMonthlyReport", () => {
     expect(report.highlights.some((point) => point.text.includes("custo por cadastro caiu"))).toBe(true);
   });
 
+  it("usa os rótulos escolhidos para um relatório de período personalizado", () => {
+    const report = buildMonthlyReport(
+      baseInput({
+        month: "2026-07-03_a_2026-07-18",
+        periodLabel: "3 a 18 de julho de 2026",
+        previousMonth: "2026-06",
+        previousPeriodLabel: "17 de junho a 2 de julho de 2026",
+        previousAds: [ad({ adId: "p1", campaignId: "c1", spend: 500, cadastrosCrm: 10, novos: 10, leadsCrm: 10 })],
+      })
+    );
+    expect(report.monthLabel).toBe("3 a 18 de julho de 2026");
+    expect(report.comparison?.previousLabel).toBe("17 de junho a 2 de julho de 2026");
+    expect(report.highlights.some((point) => point.text.includes("17 de junho a 2 de julho de 2026"))).toBe(true);
+  });
+
   it("fica sem comparativo quando o mês anterior não tem dado", () => {
     expect(buildMonthlyReport(baseInput()).comparison).toBeNull();
     expect(buildMonthlyReport(baseInput({ previousMonth: "2026-06", previousAds: [] })).comparison).toBeNull();
@@ -361,7 +493,7 @@ describe("buildMonthlyReport", () => {
     expect(text).toContain("CONVERSÃO (campanhas com formulário)");
     expect(text).toContain("ENGAJAMENTO (campanhas de aparecer — não geram lead)");
     expect(text).toContain("RETORNO MEDIDO (matrícula registrada e conciliada com lead de anúncio)");
-    expect(text).toContain("• Matrículas de anúncio: 1 de 3 no mês");
+    expect(text).toContain("• Matrículas de anúncio: 1 de 3 no período");
     expect(text).toContain("• Retorno: R$ 5.000,00");
     expect(text).toContain("Sem cadastro no CRM — indicação/boca a boca/presencial: 2");
   });
@@ -376,7 +508,7 @@ describe("buildMonthlyReport", () => {
         })
       )
     );
-    expect(text).toContain("• Retorno: R$ 0,00 — nenhuma matrícula do mês foi atribuída a anúncio");
+    expect(text).toContain("• Retorno: R$ 0,00 — nenhuma matrícula do período foi atribuída a anúncio");
     expect(text).toContain("Potencial em aberto (cenário, não receita)");
     expect(text).not.toContain("• ROAS:");
   });

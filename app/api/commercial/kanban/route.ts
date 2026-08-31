@@ -60,6 +60,11 @@ export async function GET(request: NextRequest) {
   if (stages.some((stage) => !allowedStages.has(stage))) {
     return NextResponse.json({ error: "Etapas inválidas para este funil." }, { status: 400 });
   }
+  // Busca digitada no quadro. Vai para o servidor (e não só nos cards já
+  // carregados) porque cada coluna traz no máximo PAGE_SIZE cards: procurar só
+  // no que está na tela devolveria "não encontrado" para lead que existe.
+  const busca = (searchParams.get("q") ?? "").trim();
+
   // Kanban da equipe: so leads com responsavel — os sem responsavel vivem
   // na Chegada de Leads, mesmo estando na etapa "novo".
   const assignedOnly = searchParams.get("assignedOnly") === "1";
@@ -103,6 +108,7 @@ export async function GET(request: NextRequest) {
           campaignSource: filterCriteria.campaignSource,
           campaignName: filterCriteria.campaignName,
           caracteristica: filterCriteria.caracteristica,
+          busca: busca.length >= 2 ? busca : undefined,
         },
       }).then((r) => ({ stage, leads: r.data, total: r.total }))
     )

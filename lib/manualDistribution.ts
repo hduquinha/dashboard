@@ -5,10 +5,10 @@ import { pickFormString } from "@/lib/inscricaoForm";
 import { FORM_NAME_KEYS, LANDING_PAGE_KEYS } from "@/lib/leadFields";
 import { effectiveLeadOrigin, originTier } from "@/lib/leadOriginPriority";
 import { isProductivityManager } from "@/lib/productivity";
-import { listInscricoes, listInscricoesByIds } from "@/lib/db";
+import { getPool, listInscricoes, listInscricoesByIds } from "@/lib/db";
 import { formatTrainingDateLabel } from "@/lib/trainings";
 import { listVozupLeadIdsByBlock } from "@/lib/vozupFolders";
-import type { CommercialSeller } from "@/types/commercial";
+import type { ArrivalQueueCounts, CommercialSeller } from "@/types/commercial";
 import type { InscricaoItem, InscricaoStatus } from "@/types/inscricao";
 
 export type ManualDistributionPresenceFilter =
@@ -56,6 +56,11 @@ export interface ManualDistributionCandidateResult {
   candidates: ManualDistributionCandidate[];
   total: number;
   limit: number;
+}
+
+export interface ExclusiveClassArrivalCandidateResult extends ManualDistributionCandidateResult {
+  /** Marco persistente que separa o histórico da nova fila de aulas. */
+  startsAt: string;
 }
 
 export interface ManualDistributionFolderBlockOption {
@@ -113,6 +118,10 @@ export interface ManualDistributionResult {
 
 const DEFAULT_LIMIT = 120;
 const MAX_FILTER_DISTRIBUTION = 500;
+/** Validade do cache de contagem das filas (ver countArrivalQueues). */
+const ARRIVAL_COUNTS_TTL_MS = 20_000;
+let arrivalCountsCache: { value: ArrivalQueueCounts; expiresAt: number } | null = null;
+const EXCLUSIVE_CLASS_ARRIVAL_STREAM_KEY = "aula_exclusiva_experimental";
 const STATUS_VALUES: InscricaoStatus[] = ["aguardando", "aprovado", "rejeitado"];
 const PRESENCE_VALUES: ManualDistributionPresenceFilter[] = [
   "aprovada",
@@ -480,6 +489,13 @@ function inferEntryChannel(item: InscricaoItem, signals: CampaignSignals): strin
   ]).join(" ");
 
   const hasForm = Boolean(signals.formId || signals.formName) || textIncludes(source, ["form", "formulario", "lead ads", "instant form"]);
+  // A Chat Ads e uma pagina propria (origem "Chat Ads VozUP") e precisa ser um
+  // balde separado na Chegada. Vem ANTES de Google/Meta de proposito: o clique
+  // chega com fbclid/gclid e seria absorvido pelo canal do trafego, que e
+  // exatamente o que se quer evitar. Segue a regra 1 da cartilha — quem manda
+  // e o formulario, nao o trafego.
+  if (textIncludes(source, ["chat ads org"])) return "Chat Ads Organico";
+  if (textIncludes(source, ["chat ads"])) return "Chat Ads";
   if (textIncludes(source, ["google", "gclid", "adwords", "youtube"]) || signals.clickId === "gclid") {
     return hasForm ? "Google Forms" : "Google Ads";
   }
@@ -566,14 +582,19 @@ function isTestLead(item: InscricaoItem): boolean {
 // Canais que "chegam" na Chegada de Leads: trafego pago da Meta e leads das
 // landing pages (Google). Aula exclusiva, workshop, encontro online etc. nao
 // entram aqui — esses leads seguem outros fluxos.
-const ARRIVAL_CHANNELS = new Set(["Meta Ads", "Meta Forms", "Google Ads", "Google Forms"]);
+const ARRIVAL_CHANNELS = new Set([
+  "Meta Ads", "Meta Forms", "Google Ads", "Google Forms",
+  // O organico do ChatGPT entra tambem: antes ele chegava aqui como landing
+  // page comum, e tira-lo agora esvaziaria a fila do SDR sem ninguem pedir.
+  "Chat Ads", "Chat Ads Organico",
+]);
 
 // O produto de um lead vem do FORMULARIO onde ele se inscreveu, nunca do canal
 // de trafego (ver docs/cartilha-formularios-produtos.md). Um lead da Aula
 // Exclusiva que clicou num anuncio do Instagram chega com utm/fbclid e seria
-// classificado como "Meta Ads" — mas continua sendo Aula Exclusiva e nao pode
-// aparecer na Chegada. Estes termos identificam formularios de produto
-// (aulas, workshop, Encontro Online, UP Day) que nunca entram aqui.
+// classificado como "Meta Ads", mas precisa seguir a fila exclusiva de aulas.
+// Estes termos identificam formularios de produto (aulas, workshop, Encontro
+// Online, UP Day).
 const EXCLUDED_PRODUCT_TERMS = [
   "aula exclusiva",
   "aula experimental",
@@ -584,13 +605,28 @@ const EXCLUDED_PRODUCT_TERMS = [
   "landing-inscricao",
 ];
 
-function isProductFormLead(item: InscricaoItem): boolean {
-  const identity = compactParts([
+const EXCLUSIVE_CLASS_TERMS = ["aula exclusiva", "aula experimental"];
+
+function productFormIdentity(item: InscricaoItem): string {
+  return compactParts([
     payloadText(item, ["origem", "lead_origem", "origem_formulario"]),
     payloadText(item, ["nome_evento"]),
+    payloadText(item, ["treinamento_nome", "treinamentoNome"]),
+    payloadText(item, ["data_treinamento", "dataTreinamento"]),
+    payloadText(item, ["modalidade"]),
     item.treinamentoNome,
+    item.treinamentoData,
     item.treinamentoId,
   ]).join(" ");
+}
+
+function isExclusiveClassLead(item: InscricaoItem): boolean {
+  const identity = productFormIdentity(item);
+  return Boolean(identity && textIncludes(identity, EXCLUSIVE_CLASS_TERMS));
+}
+
+function isProductFormLead(item: InscricaoItem): boolean {
+  const identity = productFormIdentity(item);
   if (identity && textIncludes(identity, EXCLUDED_PRODUCT_TERMS)) return true;
 
   // Data ISO em data_treinamento e exclusiva do Encontro Online.
@@ -617,6 +653,68 @@ function isArrivalLead(item: InscricaoItem, candidate: ManualDistributionCandida
   // Landing pages sem UTM identificavel: a origem gravada no payload ainda
   // denuncia a landing page.
   return Boolean(origem && textIncludes(origem, ["landing"]));
+}
+
+function isOnOrAfter(item: InscricaoItem, startsAt: string): boolean {
+  const createdAt = new Date(item.criadoEm).getTime();
+  const cutoff = new Date(startsAt).getTime();
+  return Number.isFinite(createdAt) && Number.isFinite(cutoff) && createdAt >= cutoff;
+}
+
+async function getExclusiveClassArrivalStartAt(): Promise<string> {
+  const pool = getPool();
+  let rows: Array<{ starts_at: Date | string }>;
+
+  try {
+    ({ rows } = await pool.query<{ starts_at: Date | string }>(
+      `SELECT starts_at FROM dashboard.arrival_streams WHERE stream_key = $1`,
+      [EXCLUSIVE_CLASS_ARRIVAL_STREAM_KEY]
+    ));
+  } catch (error) {
+    // Compatibilidade com o primeiro deploy caso a migração ainda não tenha
+    // sido executada. Em funcionamento normal, a leitura acima é a única
+    // consulta feita para recuperar o marco.
+    if (!(typeof error === "object" && error && "code" in error && error.code === "42P01")) {
+      throw error;
+    }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS dashboard.arrival_streams (
+        stream_key TEXT PRIMARY KEY,
+        starts_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    rows = [];
+  }
+
+  if (rows.length === 0) {
+    const inserted = await pool.query<{ starts_at: Date | string }>(
+      `
+        INSERT INTO dashboard.arrival_streams (stream_key, starts_at)
+        VALUES ($1, NOW())
+        ON CONFLICT (stream_key) DO NOTHING
+        RETURNING starts_at
+      `,
+      [EXCLUSIVE_CLASS_ARRIVAL_STREAM_KEY]
+    );
+    rows = inserted.rows;
+    if (rows.length === 0) {
+      ({ rows } = await pool.query<{ starts_at: Date | string }>(
+        `SELECT starts_at FROM dashboard.arrival_streams WHERE stream_key = $1`,
+        [EXCLUSIVE_CLASS_ARRIVAL_STREAM_KEY]
+      ));
+    }
+  }
+
+  const raw = rows[0]?.starts_at;
+  if (!raw) {
+    throw new Error("Marco de início da fila de aulas não encontrado.");
+  }
+  const date = raw instanceof Date ? raw : new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error("Marco de início da fila de aulas inválido.");
+  }
+  return date.toISOString();
 }
 
 function normalizeSellerIds(input: unknown): number[] {
@@ -684,37 +782,137 @@ export function normalizeManualDistributionFilters(input: Record<string, unknown
   };
 }
 
+interface ArrivalPage {
+  items: InscricaoItem[];
+  total: number;
+  limit: number;
+  startsAt: string;
+}
+
+/**
+ * A pagina de leads que alimenta as DUAS filas da Chegada. As duas listas
+ * (geral e Aula Exclusiva) partem exatamente da mesma consulta: separa-las aqui
+ * evita que uma delas mude de criterio sozinha e passe a discordar da outra —
+ * e permite contar as duas com uma consulta so.
+ */
+async function loadArrivalPage(
+  filters: ManualDistributionFilters,
+  limit: number
+): Promise<ArrivalPage> {
+  const safePageSize = safeLimit(limit);
+  const [result, startsAt] = await Promise.all([
+    listInscricoes({
+      page: 1,
+      pageSize: safePageSize,
+      orderBy: "criado_em",
+      orderDirection: "desc",
+      filters: {
+        caracteristica: filters.caracteristica,
+        treinamento: filters.treinamento,
+        campaignSource: filters.campaignSource,
+        campaignName: filters.campaignName,
+        presenca: filters.presenca,
+        status: filters.status,
+        unassignedOnly: filters.unassignedOnly,
+        produto: filters.produto,
+      },
+    }),
+    getExclusiveClassArrivalStartAt(),
+  ]);
+
+  return { items: result.data, total: result.total, limit: safePageSize, startsAt };
+}
+
+/**
+ * Em qual fila cada lead da pagina cai. Um lead de Aula Exclusiva recebido
+ * depois do marco vai para a fila dedicada; o resto so entra na chegada geral
+ * se for lead de captacao (ver isArrivalLead e a cartilha).
+ */
+function splitArrivalQueues(
+  page: ArrivalPage
+): { general: ManualDistributionCandidate[]; exclusiveClass: ManualDistributionCandidate[] } {
+  const general: ManualDistributionCandidate[] = [];
+  const exclusiveClass: ManualDistributionCandidate[] = [];
+
+  for (const item of page.items) {
+    if (isTestLead(item)) continue;
+
+    const candidate = candidateFromItem(item);
+    if (isOnOrAfter(item, page.startsAt) && isExclusiveClassLead(item)) {
+      exclusiveClass.push(candidate);
+      continue;
+    }
+
+    if (isArrivalLead(item, candidate)) general.push(candidate);
+  }
+
+  return { general, exclusiveClass };
+}
+
 export async function listManualDistributionCandidates(
   filters: ManualDistributionFilters,
   limit = DEFAULT_LIMIT
 ): Promise<ManualDistributionCandidateResult> {
-  const safePageSize = safeLimit(limit);
-  const result = await listInscricoes({
-    page: 1,
-    pageSize: safePageSize,
-    orderBy: "criado_em",
-    orderDirection: "desc",
-    filters: {
-      caracteristica: filters.caracteristica,
-      treinamento: filters.treinamento,
-      campaignSource: filters.campaignSource,
-      campaignName: filters.campaignName,
-      presenca: filters.presenca,
-      status: filters.status,
-      unassignedOnly: filters.unassignedOnly,
-      produto: filters.produto,
-    },
-  });
-
-  const cleanData = result.data.filter((item) => !isTestLead(item));
-  const arrivals = cleanData
-    .map((item) => ({ item, candidate: candidateFromItem(item) }))
-    .filter(({ item, candidate }) => isArrivalLead(item, candidate));
+  const page = await loadArrivalPage(filters, limit);
+  const { general } = splitArrivalQueues(page);
 
   return {
-    candidates: arrivals.map(({ candidate }) => candidate),
-    total: Math.max(0, result.total - (result.data.length - arrivals.length)),
-    limit: safePageSize,
+    candidates: general,
+    total: Math.max(0, page.total - (page.items.length - general.length)),
+    limit: page.limit,
+  };
+}
+
+/**
+ * Quantos leads estao esperando distribuicao agora, por fila. E o numero que a
+ * tela mostra nas abas ("Chegada geral" / "Aula Exclusiva"), usado no menu
+ * lateral para acender o aviso no item Chegada de Leads.
+ *
+ * Contar e a mesma consulta de listar: nao existe COUNT barato equivalente,
+ * porque "isto e lead de chegada?" depende de regras de payload (canal, origem
+ * efetiva, formulario de produto) que so rodam em JS. Como o numero e igual
+ * para todo gestor e a tela nao muda de segundo em segundo, o resultado fica
+ * em cache curto — assim varios gestores com a aba aberta nao multiplicam a
+ * consulta no banco. O cache vive no processo, e o servidor roda com
+ * DASHBOARD_WEB_CONCURRENCY workers: na pratica sao ate N consultas por
+ * janela, nao uma, e o aviso pode demorar um ciclo a mais para apagar no
+ * worker que nao distribuiu.
+ */
+export async function countArrivalQueues(): Promise<ArrivalQueueCounts> {
+  const now = Date.now();
+  if (arrivalCountsCache && arrivalCountsCache.expiresAt > now) {
+    return arrivalCountsCache.value;
+  }
+
+  const page = await loadArrivalPage(normalizeManualDistributionFilters({}), DEFAULT_LIMIT);
+  const { general, exclusiveClass } = splitArrivalQueues(page);
+  const value: ArrivalQueueCounts = {
+    general: general.length,
+    exclusiveClass: exclusiveClass.length,
+    total: general.length + exclusiveClass.length,
+  };
+
+  arrivalCountsCache = { value, expiresAt: now + ARRIVAL_COUNTS_TTL_MS };
+  return value;
+}
+
+/**
+ * Nova fila de Chegada dedicada à Aula Exclusiva/Experimental. O marco é
+ * persistido na primeira ativação; por isso nenhuma aula recebida antes dele
+ * aparece aqui, mesmo que seja reenviada ou fique sem responsável.
+ */
+export async function listExclusiveClassArrivalCandidates(
+  filters: ManualDistributionFilters,
+  limit = DEFAULT_LIMIT
+): Promise<ExclusiveClassArrivalCandidateResult> {
+  const page = await loadArrivalPage(filters, limit);
+  const { exclusiveClass } = splitArrivalQueues(page);
+
+  return {
+    candidates: exclusiveClass,
+    total: Math.max(0, page.total - (page.items.length - exclusiveClass.length)),
+    limit: page.limit,
+    startsAt: page.startsAt,
   };
 }
 
@@ -856,6 +1054,10 @@ export async function distributeManualLeads(
       });
     }
   }
+
+  // A fila acabou de encolher: derruba o cache para o aviso do menu apagar no
+  // próximo ciclo, e não até 20s depois.
+  if (assigned.length > 0) arrivalCountsCache = null;
 
   return { assigned, skipped, failed };
 }

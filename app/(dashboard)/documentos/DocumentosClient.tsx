@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   UsersRound,
 } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import { CONSULTING_PERIODS } from "@/lib/exclusiveClassDocumentConfig";
 
 const MAX_COPIES = 50;
@@ -75,9 +76,7 @@ export default function DocumentosClient() {
       <div className="mt-6 grid items-start gap-6 xl:grid-cols-[minmax(0,0.88fr)_minmax(520px,1.12fr)]">
         <section className="rounded-[22px] border border-slate-200 bg-white p-5 shadow-[var(--dashboard-card-shadow)] sm:p-6">
           <div className="flex items-start gap-4">
-            <div className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-cyan-50 text-[#0086b8]">
-              <Printer size={23} />
-            </div>
+            <IconTile icon={Printer} tone="brand" size="lg" solid />
             <div>
               <p className="text-xs font-black uppercase tracking-[0.12em] text-[#0086b8]">
                 Modelo 01

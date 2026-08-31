@@ -115,7 +115,11 @@ async function setupPush(): Promise<boolean> {
  * 2. se o push não ficar ativo, mantém o polling do feed
  *    `/api/notifications/leads` como fallback (funciona com a aba aberta).
  */
-export default function LeadNotifications() {
+export default function LeadNotifications({
+  canReceiveNewLeads,
+}: {
+  canReceiveNewLeads: boolean;
+}) {
   const lastSeenIdRef = useRef<number | null>(null);
   const pollingRef = useRef(false);
   const pushActiveRef = useRef(false);
@@ -178,13 +182,22 @@ export default function LeadNotifications() {
     }
 
     void init();
+
+    // Todos continuam inscritos no push para avisos pessoais, mas apenas quem
+    // distribui leads consulta o feed de chegadas usado como fallback local.
+    if (!canReceiveNewLeads) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     poll();
     const interval = setInterval(poll, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [canReceiveNewLeads]);
 
   return null;
 }

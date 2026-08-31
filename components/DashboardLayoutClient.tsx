@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { Bell, Menu } from "lucide-react";
 import LeadNotifications from "@/components/LeadNotifications";
 import ModernSidebar from "@/components/ModernSidebar";
@@ -14,6 +14,7 @@ import type { DashboardUser } from "@/lib/auth";
 interface DashboardLayoutClientProps {
   children: React.ReactNode;
   currentUser?: DashboardUser | null;
+  canReceiveNewLeadNotifications: boolean;
   duplicateCount: number;
   showPasswordResetPrompt: boolean;
 }
@@ -21,33 +22,151 @@ interface DashboardLayoutClientProps {
 export default function DashboardLayoutClient({
   children,
   currentUser,
+  canReceiveNewLeadNotifications,
   duplicateCount,
   showPasswordResetPrompt,
 }: DashboardLayoutClientProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
-  const [mobileOpenPathname, setMobileOpenPathname] = useState<string | null>(null);
+  const [isMobileOpen, setIsMobileOpen] = useState(false);
   const pathname = usePathname();
-  const isMobileOpen = mobileOpenPathname === pathname;
+  const router = useRouter();
+  const sessionSyncInFlight = useRef(false);
   const isVozupWorkspace = pathname.startsWith("/vozup") || pathname.startsWith("/financeiro");
   const notifications = useAppNotifications();
+  const arrivalPending = notifications.arrivalQueue?.total ?? 0;
+
+  // O cookie de sessão contém um snapshot para poder ser validado no proxy.
+  // Reidrata-o a partir do banco ao abrir o dashboard, ao voltar para a aba e
+  // periodicamente. Isso aplica permissões, flags e atribuições de funil sem
+  // exigir logout/login.
+  useEffect(() => {
+    async function syncSession() {
+      if (sessionSyncInFlight.current) return;
+      sessionSyncInFlight.current = true;
+      try {
+        const response = await fetch("/api/auth/session", { cache: "no-store" });
+        if (response.status === 401) {
+          window.location.assign("/login");
+          return;
+        }
+        if (!response.ok) return;
+        const data = (await response.json().catch(() => ({}))) as { changed?: boolean };
+        if (data.changed) router.refresh();
+      } catch {
+        // Uma falha transitória não deve derrubar a tela que já está aberta.
+      } finally {
+        sessionSyncInFlight.current = false;
+      }
+    }
+
+    void syncSession();
+    const interval = window.setInterval(() => void syncSession(), 15_000);
+    const onFocus = () => void syncSession();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void syncSession();
+    };
+    const onSessionRefreshRequest = () => void syncSession();
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("dashboard-session-refresh", onSessionRefreshRequest);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("dashboard-session-refresh", onSessionRefreshRequest);
+    };
+  }, [router]);
+
+  // Fechar o menu ao trocar de página.
+  //
+  // Antes o estado era `mobileOpenPathname === pathname`, o que amarrava "menu
+  // aberto" à rota em que ele foi aberto. Dois defeitos vinham daí, os dois
+  // relatados pela equipe no celular:
+  //   1. as páginas são `force-dynamic`, então entre o toque e a troca de rota
+  //      passa-se o tempo do render no servidor — e nesse intervalo o menu
+  //      continuava aberto por cima da tela parada, parecendo travamento;
+  //   2. tocar no item da página em que já se está nunca mudava o pathname, e
+  //      aí o menu não fechava nunca.
+  //
+  // Agora o menu fecha no toque (ver `closeMobileSidebar` nos links) e isto aqui
+  // é só a rede de segurança para navegações vindas de fora (botão voltar,
+  // clique em notificação, push). É o padrão do React de ajustar estado durante
+  // a renderização em vez de num efeito — sem render extra e sem piscada.
+  const [lastPathname, setLastPathname] = useState(pathname);
+  if (pathname !== lastPathname) {
+    setLastPathname(pathname);
+    setIsMobileOpen(false);
+  }
+
+  // Travar a rolagem do fundo enquanto o menu está aberto.
+  //
+  // Sem isto o `<main>` continua rolando atrás do overlay. No iOS é pior que no
+  // Android por causa do encadeamento de rolagem: o dedo arrasta o menu, o
+  // gesto "vaza" para a página de trás e o menu parece pular ou sumir.
+  useEffect(() => {
+    if (!isMobileOpen) return;
+
+    const { body } = document;
+    const previousOverflow = body.style.overflow;
+    const previousOverscroll = body.style.overscrollBehavior;
+
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+
+    return () => {
+      body.style.overflow = previousOverflow;
+      body.style.overscrollBehavior = previousOverscroll;
+    };
+  }, [isMobileOpen]);
+
+  // Fechar com Esc — vale para teclado no desktop e para teclado externo no tablet.
+  useEffect(() => {
+    if (!isMobileOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setIsMobileOpen(false);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isMobileOpen]);
 
   return (
     // Na impressão o quadro deixa de ser "tela cheia com rolagem interna": sem
     // isso o navegador imprime só o pedaço visível do <main> e o documento sai
     // com uma página só, cortado no meio.
     <div className="flex h-dvh w-full overflow-hidden bg-[#f5f8fb] text-slate-950 print:block print:h-auto print:overflow-visible print:bg-white">
-      <LeadNotifications />
+      <LeadNotifications canReceiveNewLeads={canReceiveNewLeadNotifications} />
       {showPasswordResetPrompt && currentUser ? <PasswordResetPrompt name={currentUser.name} /> : null}
       {/* Barra de topo do celular: `lg:hidden` não vale no papel (a largura de
           impressão é menor que lg), então ela precisa sumir explicitamente. */}
-      <div className="fixed left-0 right-0 top-0 z-20 flex h-14 items-center justify-between border-b border-white/10 bg-[var(--dashboard-navy)] px-3 text-white shadow-[0_12px_30px_rgba(2,19,37,0.18)] lg:hidden print:hidden">
+      {/* Altura = 3,5rem de barra + a faixa do notch, e o mesmo valor vira
+          `padding-top` para empurrar o conteúdo da barra para baixo do relógio.
+          O `<main>` repete essa conta idêntica no seu `padding-top`: se as duas
+          divergirem, o topo da página fica escondido atrás da barra. */}
+      <div className="fixed left-0 right-0 top-0 z-20 flex h-[calc(3.5rem+env(safe-area-inset-top))] items-center justify-between border-b border-white/10 bg-[var(--dashboard-navy)] px-3 pt-[env(safe-area-inset-top)] text-white shadow-[0_12px_30px_rgba(2,19,37,0.18)] lg:hidden print:hidden">
         <div className="flex items-center gap-3">
+          {/* No celular o menu vive fechado, então o aviso da Chegada de Leads
+              não apareceria nunca: o ponto âmbar no botão do menu é o que
+              denuncia que tem lead esperando lá dentro. */}
           <button
-            onClick={() => setMobileOpenPathname(pathname)}
-            className="flex size-9 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
-            aria-label="Abrir menu"
+            onClick={() => setIsMobileOpen(true)}
+            aria-expanded={isMobileOpen}
+            aria-controls="menu-lateral"
+            className="relative flex size-9 items-center justify-center rounded-lg text-white/80 hover:bg-white/10 hover:text-white"
+            aria-label={
+              arrivalPending > 0
+                ? `Abrir menu (${arrivalPending} ${arrivalPending === 1 ? "lead esperando" : "leads esperando"} na Chegada de Leads)`
+                : "Abrir menu"
+            }
           >
             <Menu size={20} />
+            {arrivalPending > 0 ? (
+              <span className="absolute right-1 top-1 size-2.5 rounded-full bg-amber-400">
+                <span className="absolute inset-0 animate-ping rounded-full bg-amber-300" aria-hidden />
+              </span>
+            ) : null}
           </button>
           <div className="flex items-center gap-2">
             <span className="text-lg font-black tracking-tight text-white">
@@ -78,13 +197,14 @@ export default function DashboardLayoutClient({
         currentUser={currentUser}
         duplicateCount={duplicateCount}
         unreadNotifications={notifications.unread}
+        arrivalPending={arrivalPending}
         isCollapsed={isCollapsed}
         toggleSidebar={() => setIsCollapsed(!isCollapsed)}
         isMobileOpen={isMobileOpen}
-        closeMobileSidebar={() => setMobileOpenPathname(null)}
+        closeMobileSidebar={() => setIsMobileOpen(false)}
       />
       
-      <main className="flex-1 overflow-y-auto overflow-x-hidden pt-14 transition-all duration-300 lg:pt-0 print:h-auto print:overflow-visible print:pt-0">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden pt-[calc(3.5rem+env(safe-area-inset-top))] pb-[env(safe-area-inset-bottom)] transition-all duration-300 lg:pt-0 lg:pb-0 print:h-auto print:overflow-visible print:pt-0">
         <div
           className={`${isVozupWorkspace ? "min-h-full p-0" : "min-h-full p-3 sm:p-4 lg:p-6"} print:min-h-0 print:p-0`}
         >

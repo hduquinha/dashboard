@@ -47,7 +47,7 @@ function sanitize(value: string | null): string {
 }
 
 function parseOrderField(value: string | null): OrderableField {
-  const allowed: OrderableField[] = ["id", "nome", "telefone", "cidade", "profissao", "treinamento", "recrutador", "criado_em"];
+  const allowed: OrderableField[] = ["id", "nome", "telefone", "cidade", "profissao", "treinamento", "recrutador", "data_cadastro", "criado_em"];
   return (value && allowed.includes(value as OrderableField)) ? value as OrderableField : "criado_em";
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useTransition, useEffect, useMemo, useCallback } from "react";
+import { AlertTriangle, CalendarDays, Check, Link2, X } from "lucide-react";
 import type { 
   PresenceConfig, 
   AssociationStatus, 
@@ -880,7 +881,7 @@ function StepIndicator({ currentStep }: { currentStep: Step }) {
                     ? "bg-emerald-500 text-white"
                     : "bg-neutral-100 text-neutral-500"
               }`}>
-                {isCompleted ? "✓" : step.number}
+                {isCompleted ? <Check size={15} strokeWidth={3} /> : step.number}
               </div>
               <span className={`text-sm font-medium ${
                 isActive ? "text-neutral-900" : "text-neutral-500"
@@ -1058,7 +1059,7 @@ function UploadStep({
                         : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
                     }`}
                   >
-                    📅 Dia 1
+                    <CalendarDays size={15} className="mr-1.5 inline-block align-[-2px]" />Dia 1
                   </button>
                   <button
                     type="button"
@@ -1069,7 +1070,7 @@ function UploadStep({
                         : "border-neutral-300 bg-white text-neutral-600 hover:bg-neutral-50"
                     }`}
                   >
-                    📅 Dia 2
+                    <CalendarDays size={15} className="mr-1.5 inline-block align-[-2px]" />Dia 2
                   </button>
                 </div>
               </div>
@@ -1289,7 +1290,7 @@ function ReviewStep({
             )}
             {config.totalDays === 2 && (
               <span className="text-violet-600 font-medium">
-                🗓 Dia {config.currentDay ?? 1} de 2
+<CalendarDays size={14} className="mr-1 inline-block align-[-2px]" />Dia {config.currentDay ?? 1} de 2
               </span>
             )}
           </div>
@@ -1333,7 +1334,7 @@ function ReviewStep({
                   onClick={onToggleMergeMode}
                   className="rounded-lg border border-sky-300 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100"
                 >
-                  🔗 Juntar Participantes
+                  <Link2 size={15} className="mr-1.5 inline-block align-[-2px]" />Juntar Participantes
                 </button>
               )}
             </div>
@@ -1538,7 +1539,7 @@ function AssociateStep({
 
       {!canProceed && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
-          ⚠️ Você precisa confirmar todas as associações antes de continuar. 
+          <AlertTriangle size={15} className="mr-1.5 inline-block align-[-2px]" />Você precisa confirmar todas as associações antes de continuar. 
           {stats.pending > 0 && ` Ainda há ${stats.pending} participante(s) sem associação.`}
           {stats.autoMatched > 0 && ` Ainda há ${stats.autoMatched} associação(ões) automática(s) para confirmar.`}
         </div>
@@ -1609,7 +1610,7 @@ function AssociateStep({
                     <td className="px-4 py-3">
                       {isConfirmed ? (
                         <span className="inline-block rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                          ✓ Confirmado
+                          <Check size={12} strokeWidth={3} className="mr-1 inline-block align-[-1px]" />Confirmado
                         </span>
                       ) : isAuto ? (
                         <span className="inline-block rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
@@ -1617,11 +1618,11 @@ function AssociateStep({
                         </span>
                       ) : isNotFound ? (
                         <span className="inline-block rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-                          ✗ Não encontrado
+                          <X size={12} strokeWidth={3} className="mr-1 inline-block align-[-1px]" />Não encontrado
                         </span>
                       ) : isDoubt ? (
                         <span className="inline-block rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700">
-                          ⚠ Em dúvida
+                          <AlertTriangle size={12} className="mr-1 inline-block align-[-1px]" />Em dúvida
                         </span>
                       ) : (
                         <span className="inline-block rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">

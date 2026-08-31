@@ -76,10 +76,11 @@ export async function POST(req: NextRequest) {
           continue;
         }
 
-        const lead = await fetchFacebookLeadDetails(leadgenId);
+        const pageId = String(value.page_id ?? entry.id ?? "");
+        const lead = await fetchFacebookLeadDetails(leadgenId, pageId || undefined);
         const savedId = await ingestFacebookLead(lead, {
           formId: String(value.form_id ?? lead.form_id ?? ""),
-          pageId: String(value.page_id ?? entry.id ?? ""),
+          pageId,
         });
         if (savedId) imported += 1;
         else skipped += 1;

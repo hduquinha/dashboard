@@ -30,7 +30,9 @@ export default async function UsuariosPage() {
       role: member.role,
       active: member.active,
       priorityLevel: member.priorityLevel,
+      isTeacher: member.isTeacher,
       permissions: member.permissions,
+      isSeller: member.isSeller,
       institutoUpOnly: member.institutoUpOnly,
     }))
     .sort((a, b) => b.priorityLevel - a.priorityLevel || a.name.localeCompare(b.name));

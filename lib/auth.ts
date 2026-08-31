@@ -35,6 +35,8 @@ export interface DashboardSession {
   issuedAtSeconds: number;
   expiresAtSeconds: number;
   user: DashboardUser;
+  /** Versão dos acessos a funis usados para detectar atribuições externas. */
+  accessFingerprint?: string;
 }
 
 export class UnauthorizedError extends Error {
@@ -264,7 +266,7 @@ export function createSessionValue(now = Date.now()): string | null {
 }
 
 export function createDashboardSessionValue(
-  input: { user: DashboardUser },
+  input: { user: DashboardUser; accessFingerprint?: string },
   now = Date.now()
 ): string | null {
   const issuedAtSeconds = Math.floor(now / 1000);
@@ -275,6 +277,7 @@ export function createDashboardSessionValue(
     issuedAtSeconds,
     expiresAtSeconds,
     user: input.user,
+    accessFingerprint: input.accessFingerprint,
   } satisfies DashboardSession);
 }
 

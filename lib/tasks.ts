@@ -74,9 +74,34 @@ export interface TaskLabel {
   color: string;
 }
 
+export type TaskKind = "pontual" | "recorrente" | "painel_leads";
+export const TASK_KINDS: TaskKind[] = ["pontual", "recorrente", "painel_leads"];
+
+/** Kind desconhecido (banco mais novo que o código, ou lixo) cai em pontual. */
+export function normalizeTaskKind(value: unknown): TaskKind {
+  return value === "recorrente" || value === "painel_leads" ? value : "pontual";
+}
+
 export interface TaskCard {
   id: number;
   boardId: number;
+  /**
+   * "pontual" = tarefa com prazo, que se conclui. "recorrente" = rotina que
+   * nunca é concluída e acumula registros de produção (ver lib/taskProduction).
+   * A rotina existe UMA vez; o que se repete são os registros, não o card.
+   * "painel_leads" = card de leitura: mostra a movimentação de leads de um
+   * vendedor (ver lib/leadMovementLog). Não tem prazo nem conclusão porque não
+   * é trabalho a fazer, é relatório.
+   */
+  kind: TaskKind;
+  /** Vendedor de quem este card mostra o histórico — só em kind painel_leads. */
+  panelMemberId: number | null;
+  /** Painel deste vendedor também registra prospecção no Instagram. */
+  panelInstagram: boolean;
+  /** Último registro de produção — só existe em rotina. Alimenta o card do quadro. */
+  lastProduction: { date: string; label: string | null; memberName: string | null } | null;
+  /** Data do último registro de quem está vendo o quadro. Base do selo "Pendente hoje". */
+  myLastProductionDate: string | null;
   columnId: number | null;
   title: string;
   description: string | null;
@@ -84,11 +109,17 @@ export interface TaskCard {
   /** Data de início — é o que dá largura ao card na Timeline. */
   startDate: string | null;
   dueDate: string | null;
+  /** "HH:MM" quando a tarefa tem hora marcada (ligação de retorno, consultoria). */
+  dueTime: string | null;
+  /** Lead do CRM a que esta tarefa pertence, quando criada pela ficha dele. */
+  inscricaoId: number | null;
   position: number;
   completedAt: string | null;
   assigneeIds: number[];
   labelIds: number[];
   createdBy: number | null;
+  /** Nome de quem criou o card; null quando o autor não é mais um usuário. */
+  createdByName: string | null;
   createdAt: string;
   archivedAt?: string | null;
   /** Capa: cor sólida ou imagem (anexo do próprio card). */
@@ -229,6 +260,24 @@ const TASKS_SCHEMA_V2 = `
   ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS cover_attachment_id INTEGER;
   ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
   ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS is_template BOOLEAN NOT NULL DEFAULT false;
+
+  -- Card de painel de leads: de qual vendedor ele mostra o histórico. Fica no
+  -- card e não em task_assignees porque "de quem é o relatório" não é a mesma
+  -- pergunta que "quem responde por esta tarefa".
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS panel_member_id INTEGER;
+
+  -- O bloco de prospecção do Instagram é opcional por card: nem todo vendedor
+  -- trabalha o direct. Quem liga e desliga é o master (ver lib/instagramOutreach
+  -- e a rota /api/commercial/movimentacao). Nasce desligado.
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS panel_instagram BOOLEAN NOT NULL DEFAULT false;
+
+  -- A constraint de kind nasceu na migração 024 com dois valores e não estava
+  -- no ensure — quem criou a base pelo código não a tinha, e quem rodou a
+  -- migração ficou preso a 'pontual'/'recorrente'. Recriar aqui (o mesmo padrão
+  -- de team_members_role_check) deixa os dois caminhos com a mesma lista.
+  ALTER TABLE ${SCHEMA}.tasks DROP CONSTRAINT IF EXISTS tasks_kind_check;
+  ALTER TABLE ${SCHEMA}.tasks
+    ADD CONSTRAINT tasks_kind_check CHECK (kind IN ('pontual', 'recorrente', 'painel_leads'));
 
   -- Coluna: arquivamento, limite de WIP e a marca de "esta coluna conclui a
   -- tarefa" (é o que faz arrastar pra Concluído carimbar completed_at).
@@ -376,6 +425,45 @@ const TASKS_SCHEMA_V2 = `
   CREATE INDEX IF NOT EXISTS idx_task_activity_task ON ${SCHEMA}.task_activity(task_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_task_activity_board ON ${SCHEMA}.task_activity(board_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_task_automations_board ON ${SCHEMA}.task_automations(board_id);
+
+  -- Tarefa ligada a um lead do CRM, com hora marcada. É a mesma tarefa que
+  -- aparece no quadro em /tarefas — o Kanban do vendedor só a espelha em forma
+  -- de lista. Por isso mora aqui e não numa tabela de "compromissos" à parte:
+  -- duas tabelas dariam duas versões da mesma tarefa.
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS inscricao_id INTEGER;
+  -- Hora separada da data porque due_date já é DATE e é usada por automações,
+  -- filtros e Timeline; virar TIMESTAMPTZ mudaria o significado dela em tudo.
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS due_time TIME;
+  -- Carimbo do lembrete de horário, para o ciclo de 5 minutos avisar uma vez só.
+  ALTER TABLE ${SCHEMA}.tasks ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ;
+
+  CREATE INDEX IF NOT EXISTS idx_tasks_inscricao
+    ON ${SCHEMA}.tasks(inscricao_id) WHERE inscricao_id IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_tasks_agenda
+    ON ${SCHEMA}.tasks(due_date) WHERE due_date IS NOT NULL AND NOT archived;
+
+  -- A agenda entra pelo responsável (task_assignees.member_id), mas a chave
+  -- primária é (task_id, member_id): com member_id na segunda posição, buscar
+  -- "as tarefas do fulano" varre o índice inteiro. Este índice é o caminho de
+  -- entrada real da consulta do Kanban.
+  CREATE INDEX IF NOT EXISTS idx_task_assignees_member
+    ON ${SCHEMA}.task_assignees(member_id);
+
+  -- Integridade do vínculo tarefa → lead. Sem a FK nada impedia um
+  -- inscricao_id apontando para lead inexistente; com ON DELETE SET NULL a
+  -- tarefa sobrevive à remoção do lead (o histórico continua no quadro) em vez
+  -- de sumir junto ou travar a exclusão. Na prática o CRM só faz soft delete
+  -- (payload.dashboard_excluido), então isto é rede de segurança.
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'tasks_inscricao_id_fkey'
+    ) THEN
+      ALTER TABLE ${SCHEMA}.tasks
+        ADD CONSTRAINT tasks_inscricao_id_fkey
+        FOREIGN KEY (inscricao_id) REFERENCES inscricoes.inscricoes(id) ON DELETE SET NULL;
+    END IF;
+  END $$;
 `;
 
 function normalizePriority(value: unknown): TaskPriority {
@@ -871,6 +959,10 @@ export interface BoardData {
  */
 const TASK_SELECT = `
   SELECT t.*,
+    -- Quem criou o card. Resolvido aqui, e não pela lista de membros da tela,
+    -- porque aquela lista só traz gente ATIVA: card criado por quem saiu da
+    -- escola perderia o autor justamente quando ele é mais útil de saber.
+    (SELECT mc.name FROM ${SCHEMA}.team_members mc WHERE mc.id = t.created_by) AS created_by_name,
     COALESCE(array_agg(DISTINCT a.member_id) FILTER (WHERE a.member_id IS NOT NULL),'{}') AS assignee_ids,
     COALESCE(array_agg(DISTINCT ll.label_id) FILTER (WHERE ll.label_id IS NOT NULL),'{}') AS label_ids,
     (SELECT COUNT(*) FROM ${SCHEMA}.task_checklist_items ci
@@ -880,13 +972,50 @@ const TASK_SELECT = `
     (SELECT COUNT(*) FROM ${SCHEMA}.task_comments cm WHERE cm.task_id = t.id) AS comment_count,
     (SELECT COUNT(*) FROM ${SCHEMA}.task_attachments at WHERE at.task_id = t.id) AS attachment_count,
     (SELECT COALESCE(jsonb_object_agg(cv.field_id, cv.value) FILTER (WHERE cv.value IS NOT NULL), '{}'::jsonb)
-       FROM ${SCHEMA}.task_custom_values cv WHERE cv.task_id = t.id) AS custom_values
+       FROM ${SCHEMA}.task_custom_values cv WHERE cv.task_id = t.id) AS custom_values,
+    -- Último registro de produção, só para rotina. O guarda kind='recorrente'
+    -- evita pagar a subconsulta nas 260+ tarefas pontuais, e o índice
+    -- (task_id, entry_date DESC) resolve cada uma em uma leitura.
+    (SELECT JSON_BUILD_OBJECT(
+              'date', e.entry_date::text,
+              'label', (
+                SELECT STRING_AGG(
+                         CASE
+                           WHEN mt.unit = 'checagem' THEN mt.name
+                           WHEN mt.unit = 'texto' THEN mt.name || ': ' || COALESCE(v.value_text, '-')
+                           ELSE TRIM(TO_CHAR(v.value_numeric, 'FM999999990.##')) || ' ' || LOWER(mt.name)
+                         END, ' - ' ORDER BY mt.position, mt.id)
+                  FROM ${SCHEMA}.task_production_values v
+                  JOIN ${SCHEMA}.task_metrics mt ON mt.id = v.metric_id
+                 WHERE v.entry_id = e.id
+              ),
+              'memberName', (SELECT m2.name FROM ${SCHEMA}.team_members m2 WHERE m2.id = e.member_id)
+            )
+       FROM ${SCHEMA}.task_production_entries e
+      WHERE e.task_id = t.id AND t.kind = 'recorrente'
+      ORDER BY e.entry_date DESC, e.id DESC
+      LIMIT 1) AS last_production,
+    -- Último registro DA PESSOA que está olhando o quadro. Num card
+    -- compartilhado pela equipe, "já registrei hoje?" é pergunta individual:
+    -- olhar o último registro de qualquer um faria o Albert ver "registrado"
+    -- só porque a Mayara lançou. $2 é o member_id do visitante (NULL quando
+    -- ele não está na equipe).
+    (SELECT e.entry_date::text
+       FROM ${SCHEMA}.task_production_entries e
+      WHERE e.task_id = t.id AND t.kind = 'recorrente'
+        AND $2::int IS NOT NULL AND e.member_id = $2::int
+      ORDER BY e.entry_date DESC
+      LIMIT 1) AS my_last_production_date
   FROM ${SCHEMA}.tasks t
   LEFT JOIN ${SCHEMA}.task_assignees a ON a.task_id = t.id
   LEFT JOIN ${SCHEMA}.task_label_links ll ON ll.task_id = t.id
 `;
 
-export async function getBoardData(boardId: number): Promise<BoardData | null> {
+export async function getBoardData(
+  boardId: number,
+  /** Quem está olhando — define o selo "já registrei hoje?" de cada rotina. */
+  viewerMemberId?: number | null
+): Promise<BoardData | null> {
   await ensureTasksSchema();
   const pool = getPool();
   const boardRes = await pool.query(`SELECT * FROM ${SCHEMA}.task_boards WHERE id = $1`, [boardId]);
@@ -900,7 +1029,7 @@ export async function getBoardData(boardId: number): Promise<BoardData | null> {
       `${TASK_SELECT}
        WHERE t.board_id=$1 AND NOT t.archived AND NOT t.is_template
        GROUP BY t.id ORDER BY t.position, t.id`,
-      [boardId]
+      [boardId, viewerMemberId ?? null]
     ),
     pool.query(`SELECT * FROM ${SCHEMA}.task_labels WHERE board_id=$1 ORDER BY id`, [boardId]),
     pool.query(`SELECT * FROM ${SCHEMA}.task_custom_fields WHERE board_id=$1 ORDER BY position, id`, [boardId]),
@@ -954,7 +1083,7 @@ export async function listArchivedTasks(boardId: number): Promise<TaskCard[]> {
      WHERE t.board_id=$1 AND t.archived AND NOT t.is_template
      GROUP BY t.id ORDER BY COALESCE(t.archived_at, t.updated_at) DESC NULLS LAST, t.id DESC
      LIMIT 300`,
-    [boardId]
+    [boardId, null]
   );
   return rows.map(mapTask);
 }
@@ -985,17 +1114,25 @@ export function mapTask(r: Record<string, unknown>): TaskCard {
   return {
     id: Number(r.id),
     boardId: Number(r.board_id),
+    kind: normalizeTaskKind(r.kind),
+    panelMemberId: r.panel_member_id === null || r.panel_member_id === undefined ? null : Number(r.panel_member_id),
+    panelInstagram: Boolean(r.panel_instagram),
+    lastProduction: (r.last_production as TaskCard["lastProduction"]) ?? null,
+    myLastProductionDate: (r.my_last_production_date as string | null) ?? null,
     columnId: r.column_id === null ? null : Number(r.column_id),
     title: String(r.title),
     description: (r.description as string) ?? null,
     priority: normalizePriority(r.priority),
     startDate: isoDay(r.start_date),
     dueDate: isoDay(r.due_date),
+    dueTime: typeof r.due_time === "string" ? r.due_time.slice(0, 5) : null,
+    inscricaoId: r.inscricao_id === null || r.inscricao_id === undefined ? null : Number(r.inscricao_id),
     position: Number(r.position),
     completedAt: r.completed_at ? new Date(r.completed_at as string).toISOString() : null,
     assigneeIds: ((r.assignee_ids as number[]) ?? []).map(Number),
     labelIds: ((r.label_ids as number[]) ?? []).map(Number),
     createdBy: r.created_by === null ? null : Number(r.created_by),
+    createdByName: (r.created_by_name as string | null) ?? null,
     createdAt: new Date(r.created_at as string).toISOString(),
     archivedAt: r.archived_at ? new Date(r.archived_at as string).toISOString() : null,
     coverColor: (r.cover_color as string) ?? null,
@@ -1010,7 +1147,7 @@ export function mapTask(r: Record<string, unknown>): TaskCard {
 
 /** Um card só, já no formato da listagem (usado pelo detalhe e pelas automações). */
 export async function getTask(taskId: number): Promise<TaskCard | null> {
-  const { rows } = await getPool().query(`${TASK_SELECT} WHERE t.id = $1 GROUP BY t.id`, [taskId]);
+  const { rows } = await getPool().query(`${TASK_SELECT} WHERE t.id = $1 GROUP BY t.id`, [taskId, null]);
   return rows[0] ? mapTask(rows[0]) : null;
 }
 
@@ -1086,17 +1223,23 @@ export async function createTask(input: {
   priority?: TaskPriority;
   startDate?: string | null;
   dueDate?: string | null;
+  dueTime?: string | null;
+  inscricaoId?: number | null;
   coverColor?: string | null;
   assigneeIds?: number[];
   labelIds?: number[];
   createdBy?: number | null;
+  /** Padrão "pontual": toda tarefa criada hoje continua se comportando igual. */
+  kind?: TaskKind;
+  /** Só faz sentido com kind painel_leads. */
+  panelMemberId?: number | null;
 }): Promise<TaskCard> {
   await ensureTasksSchema();
   const pool = getPool();
   const { rows } = await pool.query(
     `INSERT INTO ${SCHEMA}.tasks (board_id, column_id, title, description, priority, start_date, due_date,
-       cover_color, created_by, position)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+       due_time, inscricao_id, cover_color, created_by, kind, panel_member_id, position)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,
        COALESCE((SELECT MAX(position)+1 FROM ${SCHEMA}.tasks WHERE board_id=$1 AND column_id IS NOT DISTINCT FROM $2),0))
      RETURNING *`,
     [
@@ -1107,11 +1250,23 @@ export async function createTask(input: {
       normalizePriority(input.priority),
       input.startDate || null,
       input.dueDate || null,
+      input.dueTime || null,
+      input.inscricaoId ?? null,
       input.coverColor || null,
       input.createdBy ?? null,
+      normalizeTaskKind(input.kind),
+      input.panelMemberId ?? null,
     ]
   );
+  // `RETURNING *` não traz o nome do criador (ele vem de subconsulta no
+  // TASK_SELECT). Sem isto o card recém-criado ficaria sem autor até o quadro
+  // recarregar — logo no momento em que a pessoa olha para ele.
   const task = mapTask({ ...rows[0], assignee_ids: [], label_ids: [] });
+  const autor = await pool.query<{ name: string | null }>(
+    `SELECT name FROM ${SCHEMA}.team_members WHERE id = $1`,
+    [input.createdBy ?? null]
+  );
+  task.createdByName = autor.rows[0]?.name ?? null;
   if (input.assigneeIds?.length) await setTaskAssignees(task.id, input.assigneeIds);
   if (input.labelIds?.length) await setTaskLabels(task.id, input.labelIds);
   return { ...task, assigneeIds: input.assigneeIds ?? [], labelIds: input.labelIds ?? [] };
@@ -1145,6 +1300,10 @@ export async function updateTask(
     archived?: boolean;
     coverColor?: string | null;
     coverAttachmentId?: number | null;
+    /** "HH:MM" ou null para tirar a hora marcada. */
+    dueTime?: string | null;
+    kind?: TaskKind;
+    panelMemberId?: number | null;
   }
 ): Promise<void> {
   // due_date e description não podem usar COALESCE: o usuário precisa conseguir
@@ -1157,6 +1316,7 @@ export async function updateTask(
   const touchCover = input.coverColor !== undefined;
   const touchCoverAttachment = input.coverAttachmentId !== undefined;
   const touchCompletedAt = input.completedAt !== undefined;
+  const touchDueTime = input.dueTime !== undefined;
   await getPool().query(
     `UPDATE ${SCHEMA}.tasks SET
        title = COALESCE($2, title),
@@ -1178,6 +1338,11 @@ export async function updateTask(
        start_date = CASE WHEN $10::boolean THEN $11::date ELSE start_date END,
        cover_color = CASE WHEN $12::boolean THEN $13::text ELSE cover_color END,
        cover_attachment_id = CASE WHEN $14::boolean THEN $15::int ELSE cover_attachment_id END,
+       due_time = CASE WHEN $18::boolean THEN $19::time ELSE due_time END,
+       kind = COALESCE($20, kind),
+       panel_member_id = CASE WHEN $21::boolean THEN $22::int ELSE panel_member_id END,
+       -- Remarcou hora ou prazo? O lembrete tem que tocar de novo.
+       reminder_sent_at = CASE WHEN $18::boolean OR $5::boolean THEN NULL ELSE reminder_sent_at END,
        updated_at = NOW()
      WHERE id = $1`,
     [
@@ -1198,6 +1363,11 @@ export async function updateTask(
       touchCoverAttachment ? input.coverAttachmentId ?? null : null,
       touchCompletedAt,
       touchCompletedAt ? normalizeCompletedAt(input.completedAt) : null,
+      touchDueTime,
+      touchDueTime ? input.dueTime || null : null,
+      input.kind ? normalizeTaskKind(input.kind) : null,
+      input.panelMemberId !== undefined,
+      input.panelMemberId ?? null,
     ]
   );
 }
@@ -1285,6 +1455,81 @@ export async function moveTask(taskId: number, toColumnId: number | null, ordere
   } finally {
     client.release();
   }
+}
+
+export interface CompletionColumnSync {
+  fromColumnId: number | null;
+  toColumnId: number;
+}
+
+/**
+ * Mantém a coluna do card de acordo com a marca de concluído.
+ *
+ * O `moveTask` já cuidava de um lado: arrastar para a coluna de conclusão
+ * carimba `completed_at`. Faltava o outro — marcar "Concluída" dentro do card
+ * deixava o card marcado no meio do fluxo, e aí o quadro e a ficha contavam
+ * histórias diferentes (o relatório dizia concluído, a coluna dizia "em
+ * produção").
+ *
+ * As duas direções:
+ *  - marcou concluída fora da coluna de conclusão → card vai para ela;
+ *  - desmarcou estando na coluna de conclusão → card volta para a primeira
+ *    coluna do quadro, porque ficar em "Concluído" sem data de conclusão é
+ *    exatamente a incoerência que esta função existe para evitar.
+ *
+ * Devolve o movimento feito (ou null) para quem chamou registrar no histórico.
+ */
+export async function syncTaskCompletionColumn(taskId: number): Promise<CompletionColumnSync | null> {
+  const pool = getPool();
+  const { rows } = await pool.query<{
+    board_id: number;
+    column_id: number | null;
+    completed: boolean;
+    completes_task: boolean | null;
+  }>(
+    `SELECT t.board_id,
+            t.column_id,
+            (t.completed_at IS NOT NULL) AS completed,
+            c.completes_task
+       FROM ${SCHEMA}.tasks t
+       LEFT JOIN ${SCHEMA}.task_columns c ON c.id = t.column_id
+      WHERE t.id = $1`,
+    [taskId]
+  );
+
+  const task = rows[0];
+  // Card fora de coluna (backlog solto) não tem para onde ir.
+  if (!task || task.column_id === null) return null;
+
+  const inCompletingColumn = Boolean(task.completes_task);
+  if (task.completed === inCompletingColumn) return null;
+
+  const destino = await pool.query<{ id: number }>(
+    `SELECT id FROM ${SCHEMA}.task_columns
+      WHERE board_id = $1 AND archived = false AND completes_task = $2
+      ORDER BY position, id
+      LIMIT 1`,
+    [task.board_id, task.completed]
+  );
+
+  const toColumnId = destino.rows[0]?.id;
+  // Quadro sem coluna de conclusão (ou sem coluna comum, no caso do retorno):
+  // não há para onde mover, e o card simplesmente fica onde está.
+  if (!toColumnId || toColumnId === task.column_id) return null;
+
+  await pool.query(
+    `UPDATE ${SCHEMA}.tasks
+        SET column_id = $2,
+            position = COALESCE(
+              (SELECT MAX(position) + 1 FROM ${SCHEMA}.tasks WHERE column_id = $2 AND archived = false),
+              0
+            ),
+            updated_at = NOW()
+      WHERE id = $1`,
+    [taskId, toColumnId]
+  );
+
+  return { fromColumnId: task.column_id, toColumnId };
 }
 
 export async function setTaskAssignees(taskId: number, memberIds: number[]): Promise<void> {
@@ -1398,4 +1643,32 @@ export async function userCanAccessColumn(user: PermissionUser | null | undefine
 export async function userCanAccessTask(user: PermissionUser | null | undefined, taskId: number): Promise<boolean> {
   const boardId = await boardIdOfTask(taskId);
   return boardId === null ? false : userCanAccessBoard(user, boardId);
+}
+
+/**
+ * Liga ou desliga o bloco de prospecção do Instagram de um card de painel.
+ *
+ * Desligar NÃO apaga os lançamentos: some da tela e do PDF, e volta inteiro se
+ * o card for religado. Quem trabalhou no direct em agosto trabalhou — tirar a
+ * pessoa do Instagram hoje não desfaz o mês passado.
+ *
+ * O gate de master fica na rota, não aqui: esta função é o "como", a permissão
+ * é o "quem".
+ */
+export async function setPanelInstagram(taskId: number, enabled: boolean): Promise<void> {
+  await ensureTasksSchema();
+  await getPool().query(
+    `UPDATE ${SCHEMA}.tasks SET panel_instagram = $2, updated_at = NOW() WHERE id = $1 AND kind = 'painel_leads'`,
+    [taskId, enabled]
+  );
+}
+
+/** Ids dos vendedores cujo card de painel tem o Instagram ligado. */
+export async function listInstagramPanelMemberIds(): Promise<Set<number>> {
+  await ensureTasksSchema();
+  const { rows } = await getPool().query<{ panel_member_id: number }>(
+    `SELECT panel_member_id FROM ${SCHEMA}.tasks
+      WHERE kind = 'painel_leads' AND panel_instagram AND NOT archived AND panel_member_id IS NOT NULL`
+  );
+  return new Set(rows.map((row) => Number(row.panel_member_id)));
 }

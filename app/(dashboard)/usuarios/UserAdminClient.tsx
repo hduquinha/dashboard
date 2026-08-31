@@ -13,6 +13,7 @@ import {
   UserCog,
   X,
 } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import {
   ALL_PERMISSION_KEYS,
   DEFAULT_PRIORITY_BY_ROLE,
@@ -34,6 +35,8 @@ export interface AdminTeamMember {
   active: boolean;
   priorityLevel: number;
   permissions: PermissionKey[];
+  isSeller: boolean;
+  isTeacher: boolean;
   institutoUpOnly: boolean;
 }
 
@@ -85,9 +88,7 @@ function DeleteUserDialog({
         aria-labelledby="delete-user-title"
         className="w-full max-w-md rounded-lg bg-white p-6 shadow-2xl ring-1 ring-slate-200"
       >
-        <div className="flex size-11 items-center justify-center rounded-full bg-rose-50 text-rose-600">
-          <Trash2 size={20} />
-        </div>
+        <IconTile icon={Trash2} tone="ruby" size="lg" solid className="!rounded-full" />
         <h2 id="delete-user-title" className="mt-4 text-lg font-black text-slate-950">
           Excluir usuario?
         </h2>
@@ -135,6 +136,8 @@ function emptyCreateMember(): AdminTeamMember {
     active: true,
     priorityLevel: DEFAULT_PRIORITY_BY_ROLE.member,
     permissions: defaultPermissionsForRole("member"),
+    isSeller: false,
+    isTeacher: false,
     institutoUpOnly: false,
   };
 }
@@ -157,6 +160,8 @@ function PermissionDialog({
   const [role, setRole] = useState<TeamRole>(base.role);
   const [active, setActive] = useState(base.active);
   const [priorityLevel, setPriorityLevel] = useState(base.priorityLevel);
+  const [isSeller, setIsSeller] = useState(base.isSeller);
+  const [isTeacher, setIsTeacher] = useState(base.isTeacher);
   const [institutoUpOnly, setInstitutoUpOnly] = useState(base.institutoUpOnly);
   const [permissions, setPermissions] = useState<PermissionKey[]>(base.permissions);
   const [saving, setSaving] = useState(false);
@@ -223,6 +228,8 @@ function PermissionDialog({
         active,
         priorityLevel,
         permissions: effectivePermissions,
+        isSeller,
+        isTeacher,
         institutoUpOnly,
       };
       if (password) body.password = password;
@@ -237,6 +244,7 @@ function PermissionDialog({
         throw new Error(data.error ?? "Falha ao salvar usuario.");
       }
       onSaved(data.member);
+      window.dispatchEvent(new Event("dashboard-session-refresh"));
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro desconhecido.");
@@ -273,6 +281,10 @@ function PermissionDialog({
               <label className="grid gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                 Nome
                 <input
+                  name="team-member-name"
+                  autoComplete="off"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold normal-case tracking-normal text-slate-900 outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100"
@@ -282,7 +294,11 @@ function PermissionDialog({
               <label className="grid gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                 E-mail
                 <input
+                  name="team-member-email"
                   type="email"
+                  autoComplete="off"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
                   value={email}
                   disabled={!isCreate}
                   onChange={(event) => setEmail(event.target.value)}
@@ -293,7 +309,11 @@ function PermissionDialog({
               <label className="grid gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500">
                 {isCreate ? "Senha" : "Nova senha"}
                 <input
+                  name="team-member-new-password"
                   type="password"
+                  autoComplete="new-password"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
                   value={password}
                   minLength={8}
                   placeholder={isCreate ? "Minimo 8 caracteres" : "Manter atual"}
@@ -337,6 +357,34 @@ function PermissionDialog({
                   checked={active}
                   disabled={isSelf}
                   onChange={(event) => setActive(event.target.checked)}
+                  className="size-4 rounded border-slate-300 text-cyan-600"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700">Vendedor / recebe leads</span>
+                  <span className="block text-xs text-slate-500">Aparece nas listas de distribuição e de repasse.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isSeller}
+                  onChange={(event) => setIsSeller(event.target.checked)}
+                  className="size-4 rounded border-slate-300 text-cyan-600"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <span>
+                  <span className="block text-sm font-semibold text-slate-700">Professor</span>
+                  <span className="block text-xs text-slate-500">
+                    Aparece na lista de professores da turma e nas aulas.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={isTeacher}
+                  onChange={(event) => setIsTeacher(event.target.checked)}
                   className="size-4 rounded border-slate-300 text-cyan-600"
                 />
               </label>
@@ -540,6 +588,11 @@ export default function UserAdminClient({
             <div className="relative max-w-md flex-1">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <input
+                name="team-member-search"
+                type="search"
+                autoComplete="off"
+                data-1p-ignore="true"
+                data-lpignore="true"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Buscar usuario"
@@ -593,6 +646,16 @@ export default function UserAdminClient({
                       {member.institutoUpOnly ? (
                         <span className="ml-2 rounded-md bg-amber-50 px-2 py-1 text-xs font-black text-amber-700">
                           Instituto UP
+                        </span>
+                      ) : null}
+                      {member.isSeller ? (
+                        <span className="ml-2 rounded-md bg-cyan-50 px-2 py-1 text-xs font-black text-cyan-700">
+                          Vendedor
+                        </span>
+                      ) : null}
+                      {member.isTeacher ? (
+                        <span className="ml-2 rounded-md bg-violet-50 px-2 py-1 text-xs font-black text-violet-700">
+                          Professor
                         </span>
                       ) : null}
                     </td>
@@ -672,7 +735,12 @@ export default function UserAdminClient({
           state={dialog}
           currentUserId={currentUserId}
           onClose={() => setDialog(null)}
-          onSaved={upsertMember}
+          onSaved={(member) => {
+            // Evita que um e-mail preenchido automaticamente pelo navegador
+            // deixe a lista filtrada só no próprio administrador após salvar.
+            setQuery("");
+            upsertMember(member);
+          }}
         />
       ) : null}
       {memberToDelete ? (

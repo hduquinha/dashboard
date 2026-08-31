@@ -3,9 +3,11 @@ import { actorOf, requireTasks } from "@/lib/tasksApi";
 import {
   getTask,
   moveTask,
+  normalizeTaskKind,
   setCustomValue,
   setTaskAssignees,
   setTaskLabels,
+  syncTaskCompletionColumn,
   updateTask,
   userCanAccessTask,
 } from "@/lib/tasks";
@@ -79,7 +81,9 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     body?.completedAt !== undefined ||
     body?.archived !== undefined ||
     body?.coverColor !== undefined ||
-    body?.coverAttachmentId !== undefined;
+    body?.coverAttachmentId !== undefined ||
+    body?.kind !== undefined ||
+    body?.panelMemberId !== undefined;
 
   if (touchesFields) {
     await updateTask(taskId, {
@@ -93,6 +97,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       archived: body?.archived,
       coverColor: body?.coverColor,
       coverAttachmentId: body?.coverAttachmentId,
+      kind: body?.kind === undefined ? undefined : normalizeTaskKind(body.kind),
+      panelMemberId:
+        body?.panelMemberId === undefined
+          ? undefined
+          : typeof body.panelMemberId === "number"
+            ? body.panelMemberId
+            : null,
     });
 
     // O histórico guarda só o que realmente mudou — "editou o card" sem dizer o
@@ -118,6 +129,29 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     // simplesmente informando a data de conclusão, e mudar só a data de um card
     // que já estava concluído não é "concluir de novo".
     const afterFields = await getTask(taskId);
+
+    // Marcar/desmarcar "Concluída" também muda a coluna do card — senão o card
+    // fica marcado como concluído no meio do quadro. O movimento entra no
+    // histórico como qualquer arrasto, para a auditoria não ficar com um card
+    // que trocou de coluna sozinho e sem registro.
+    const moved = await syncTaskCompletionColumn(taskId);
+    if (moved) {
+      await logActivity({
+        taskId,
+        boardId: before.boardId,
+        actor,
+        action: "card_moved",
+        detail: { fromColumnId: moved.fromColumnId, toColumnId: moved.toColumnId, via: "conclusao" },
+      });
+      await runAutomations({
+        type: "card_moved",
+        boardId: before.boardId,
+        taskId,
+        columnId: moved.toColumnId,
+        actor,
+      });
+    }
+
     if (afterFields?.completedAt && !before.completedAt) {
       await logActivity({ taskId, boardId: before.boardId, actor, action: "card_completed", detail: {} });
       await runAutomations({ type: "card_completed", boardId: before.boardId, taskId, actor });

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { AlertTriangle, X, ChevronRight } from 'lucide-react';
+import IconTile from '@/components/IconTile';
 import { useState } from 'react';
 import type { DuplicateReason } from '@/types/inscricao';
 
@@ -68,9 +69,7 @@ export default function DuplicateNotification({ totalGroups, topReasons }: Dupli
       </button>
 
       <div className="flex items-start gap-3 pr-8">
-        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-amber-100">
-          <AlertTriangle className="h-5 w-5 text-amber-600" />
-        </div>
+        <IconTile icon={AlertTriangle} tone="amber" size="md" solid />
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">

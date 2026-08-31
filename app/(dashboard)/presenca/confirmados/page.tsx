@@ -13,6 +13,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
+import IconTile, { type IconTileTone } from "@/components/IconTile";
 import { formatTrainingTagLabel } from "@/lib/participantTags";
 import { listPresenceRecords, type PresenceRecord } from "@/lib/presenceRecords";
 import { humanizeName } from "@/lib/utils";
@@ -118,11 +119,11 @@ export default async function PresencasConfirmadasPage({ searchParams }: PagePro
       </header>
 
       <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-        <Metric icon={Users} label="Validadas" value={data.total} tone="bg-cyan-50 text-cyan-700" />
-        <Metric icon={CheckCircle} label="Aprovadas" value={data.totalAprovados} tone="bg-emerald-50 text-emerald-700" />
-        <Metric icon={Clock} label="Parciais" value={data.totalParciais} tone="bg-amber-50 text-amber-700" />
-        <Metric icon={XCircle} label="Insuficientes" value={data.totalReprovados} tone="bg-rose-50 text-rose-700" />
-        <Metric icon={AlertTriangle} label="Pendentes" value={data.totalPending} tone="bg-violet-50 text-violet-700" />
+        <Metric icon={Users} label="Validadas" value={data.total} tone="brand" />
+        <Metric icon={CheckCircle} label="Aprovadas" value={data.totalAprovados} tone="teal" />
+        <Metric icon={Clock} label="Parciais" value={data.totalParciais} tone="amber" />
+        <Metric icon={XCircle} label="Insuficientes" value={data.totalReprovados} tone="ruby" />
+        <Metric icon={AlertTriangle} label="Pendentes" value={data.totalPending} tone="slate" />
       </section>
 
       {data.pending.length > 0 ? (
@@ -234,13 +235,11 @@ function Metric({
   icon: LucideIcon;
   label: string;
   value: number;
-  tone: string;
+  tone: IconTileTone;
 }) {
   return (
     <div className="flex items-center gap-3 rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
-      <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone}`}>
-        <Icon className="h-5 w-5" />
-      </div>
+      <IconTile icon={Icon} tone={tone} size="md" />
       <div>
         <p className="text-xs font-medium text-neutral-500">{label}</p>
         <p className="text-2xl font-bold text-neutral-900">{value.toLocaleString("pt-BR")}</p>

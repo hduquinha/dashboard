@@ -12,11 +12,13 @@ import {
   LayoutDashboard,
   LayoutGrid,
   ListTree,
+  Search,
   Sparkles,
   Split,
   Target,
   Users,
 } from "lucide-react";
+import IconTile from "@/components/IconTile";
 import type { CampanhasTab } from "@/types/metaAds";
 
 interface CampaignTabOption {
@@ -44,8 +46,8 @@ export const CAMPAIGN_TAB_OPTIONS: CampaignTabOption[] = [
   { key: "geral", label: "Funil e evolução", description: "Jornada comercial e gráficos do período", icon: Sparkles },
   {
     key: "relatorio",
-    label: "Relatório mensal",
-    description: "Gasto e retorno do mês, pronto para apresentar",
+    label: "Relatórios",
+    description: "Documento por período e campanhas, pronto para apresentar",
     icon: FileText,
   },
   { key: "comparativos", label: "Comparativos", description: "Melhores, piores e concentração de resultado", icon: BarChart3 },
@@ -63,6 +65,12 @@ export const CAMPAIGN_TAB_OPTIONS: CampaignTabOption[] = [
     icon: GitBranch,
   },
   { key: "vendedores", label: "Vendedores", description: "Conversão e valor por vendedor", icon: Users },
+  {
+    key: "google",
+    label: "Visão geral",
+    description: "Investimento, campanhas e leads da Rede de Pesquisa",
+    icon: Search,
+  },
 ];
 
 const NAV_GROUPS: CampaignNavGroup[] = [
@@ -93,6 +101,16 @@ const NAV_GROUPS: CampaignNavGroup[] = [
     description: "Pessoas e equipe",
     icon: Users,
     tabs: ["leads", "rendimento", "vendedores"],
+  },
+  // Grupo separado de propósito: todas as outras abas são Meta Ads. Misturar o
+  // Google dentro delas faria número de rede de pesquisa entrar em média de
+  // criativo, que é justamente o erro que a divisão evita.
+  {
+    key: "google",
+    label: "Google Ads",
+    description: "Rede de Pesquisa",
+    icon: Search,
+    tabs: ["google"],
   },
 ];
 
@@ -128,7 +146,7 @@ export default function CampaignSectionNavigation({
       aria-label="Navegação das métricas de campanha"
       className="overflow-visible rounded-xl border border-[rgb(var(--border-weak))] bg-[rgb(var(--surface-1))] shadow-[0_1px_2px_rgba(28,32,36,0.04)]"
     >
-      <div className="grid grid-cols-2 gap-1 p-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-1 p-2 lg:grid-cols-5">
         {visibleGroups.map((group) => {
           const active = group.key === activeGroup.key;
           return (
@@ -143,13 +161,7 @@ export default function CampaignSectionNavigation({
                   : "text-[rgb(var(--slate-11))] hover:bg-[rgb(var(--slate-2))]"
               }`}
             >
-              <span
-                className={`flex h-9 w-9 flex-none items-center justify-center rounded-lg ${
-                  active ? "bg-[rgb(var(--surface-1))]" : "bg-[rgb(var(--slate-3))]"
-                }`}
-              >
-                <group.icon className="h-4 w-4" />
-              </span>
+              <IconTile icon={group.icon} tone={active ? "brand" : "slate"} size="sm" solid={active} />
               <span className="min-w-0">
                 <span className="block text-sm font-semibold leading-tight">{group.label}</span>
                 <span className="mt-0.5 hidden text-[11px] leading-tight text-[rgb(var(--slate-9))] sm:block">

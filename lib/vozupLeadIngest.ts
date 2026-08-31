@@ -1,4 +1,5 @@
 import { getPool, autoMergeNewLeadByPhone } from "@/lib/db";
+import { sendChatAdsRegistration } from "@/lib/chatAdsEvents";
 import { ensureCommercialSchema } from "@/lib/commercial";
 import { findStageByKind, getDefaultFunnel } from "@/lib/funnels";
 import { normalizeMetaAdsAttributionPayload } from "@/lib/vozupTrafficAttribution";
@@ -75,9 +76,27 @@ async function syncToPipeline(inscricaoId: number, origemValor: string): Promise
  * o merge por telefone, a sincronização com a pipeline comercial e o aviso no WhatsApp.
  * Usado tanto pelo POST direto da landing page quanto pelo webhook de Lead Ads do Facebook.
  */
+/** Data válida e não futura; qualquer outra coisa cai no NOW() do banco. */
+function normalizeCreatedAt(value: string | Date | null | undefined): Date | null {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.getTime() > Date.now() ? null : date;
+}
+
 export async function ingestVozupLead(
   payload: Record<string, unknown>,
-  options: { notify: boolean }
+  options: {
+    notify: boolean;
+    /**
+     * Quando o lead foi preenchido de verdade, se não for agora. O Lead Ads da
+     * Meta informa isso (`created_time`), e usar a hora da IMPORTAÇÃO no lugar
+     * joga o lead para o dia errado em toda contagem por período — foi o que
+     * aconteceu na carga de 17/08/2026: 44 leads de 10 a 16/08 caíram todos no
+     * dia 17 e o relatório do período anterior mostrou 2 cadastros onde havia 24.
+     */
+    createdAt?: string | Date | null;
+  }
 ): Promise<number | null> {
   // Trava server-side: `fbclid` e fontes genericas (`ig`/`facebook`) nao
   // provam compra de midia. Normalizar antes do INSERT tambem impede que o
@@ -91,9 +110,12 @@ export async function ingestVozupLead(
   let savedId: number | null = null;
   try {
     const pool = getPool();
+    const criadoEm = normalizeCreatedAt(options.createdAt);
     const result = await pool.query<{ id: number }>(
-      "INSERT INTO inscricoes.inscricoes (payload) VALUES ($1) RETURNING id",
-      [JSON.stringify(normalizedPayload)]
+      criadoEm
+        ? "INSERT INTO inscricoes.inscricoes (payload, criado_em) VALUES ($1, $2) RETURNING id"
+        : "INSERT INTO inscricoes.inscricoes (payload) VALUES ($1) RETURNING id",
+      criadoEm ? [JSON.stringify(normalizedPayload), criadoEm] : [JSON.stringify(normalizedPayload)]
     );
     savedId = result.rows[0]?.id ?? null;
   } catch (err) {
@@ -113,6 +135,14 @@ export async function ingestVozupLead(
   } else if (savedId) {
     syncToPipeline(savedId, origemValor).catch((err) => {
       console.error("[vozupLeadIngest] Erro ao sincronizar Pipeline:", err);
+    });
+  }
+
+  if (savedId) {
+    // Conversão para o ChatGPT Ads. Fire-and-forget: só age quando o lead tem
+    // `oppref` e as variáveis de ambiente estão configuradas.
+    sendChatAdsRegistration(normalizedPayload, savedId).catch((err) => {
+      console.error("[vozupLeadIngest] Erro ao enviar conversão do ChatGPT Ads:", err);
     });
   }
 

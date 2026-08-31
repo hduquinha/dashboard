@@ -33,6 +33,13 @@ const SECTION_LABELS: Record<string, string> = {
   configuracoes: "Configuracoes Financeiras",
 };
 
+/** Rotulo legivel do status da NF na planilha (o contador le esta coluna). */
+const INVOICE_STATUS_EXPORT: Record<string, string> = {
+  pendente: "Pendente",
+  emitida: "Emitida",
+  dispensada: "Nao gera nota",
+};
+
 const COMPLETE_SECTIONS = [
   "dashboard",
   "fluxo",
@@ -233,6 +240,9 @@ async function buildRows(section: string, month: string, searchParams: URLSearch
       "Taxa %": item.ratePct,
       "Taxas": item.feeTotal,
       "Receita liquida": item.netTotal,
+      "Nota fiscal": INVOICE_STATUS_EXPORT[item.invoiceStatus] ?? item.invoiceStatus,
+      "NF numero": item.invoiceNumber,
+      "NF emitida em": item.invoiceIssuedAt,
     }));
   }
 
