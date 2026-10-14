@@ -2,16 +2,37 @@ import type { TrainingKind, TrainingOption } from "@/types/training";
 
 const DEFAULT_TRAINING_OPTIONS: TrainingOption[] = [
   {
-    // Turma de dois SÁBADOS (24/10 e 07/11), não mais sábado e domingo
-    // seguidos. Os rótulos "24 e 25/10" continuam como alias: quem carregou a
-    // landing antes da mudança ainda pode enviar o antigo, e ele tem que cair
-    // nesta mesma turma em vez de abrir um bloco solto.
-    id: "24/10 e 07/11",
-    label: "Up Day Plus 24/10 e 07/11/2026",
+    // A turma de outubro foi remarcada quatro vezes: "24 e 25/10" → dois sábados
+    // "24/10 e 07/11" (24/08/2026) → sábado e domingo "07 e 08/11" (14/09/2026,
+    // junto com a mudança de local para o Tatuapé) → "28 e 29/11" (02/10/2026)
+    // → sábado e domingo "05 e 06/12" (14/10/2026). Os rótulos antigos continuam
+    // como alias: quem carregou a landing antes da mudança ainda pode enviar o
+    // antigo, e ele tem que cair nesta mesma turma em vez de abrir um bloco solto.
+    id: "05 e 06/12",
+    label: "Up Day Plus 05 e 06/12/2026",
     kind: "up-day-plus",
     days: 2,
     cluster: 80,
     aliases: [
+      "05 e 06/12/2026",
+      "05 e 06 de Dezembro de 2026",
+      "05 e 06 de dezembro de 2026",
+      "2026-12-05T08:59:00-03:00",
+      "Inscricao UP Day - Dezembro 2026",
+      "Inscrição UP Day - Dezembro 2026",
+      "28 e 29/11",
+      "28 e 29/11/2026",
+      "28 e 29 de Novembro de 2026",
+      "28 e 29 de novembro de 2026",
+      "2026-11-28T08:59:00-03:00",
+      "07 e 08/11",
+      "07 e 08/11/2026",
+      "07 e 08 de Novembro de 2026",
+      "07 e 08 de novembro de 2026",
+      "2026-11-07T08:59:00-03:00",
+      "Inscricao UP Day - Novembro 2026",
+      "Inscrição UP Day - Novembro 2026",
+      "24/10 e 07/11",
       "24/10 e 07/11/2026",
       "24 de Outubro e 07 de Novembro de 2026",
       "24 de outubro e 07 de novembro de 2026",
@@ -159,6 +180,9 @@ function isVozupOriginId(value: string): boolean {
     normalized.includes("voz up") ||
     normalized.startsWith("aula experimental") ||
     normalized.startsWith("aula exclusiva") ||
+    // Workshop sem data (Ação Aline): a rota /api/vozup/lead copia a origem para
+    // treinamento_nome, e isso não é turma do Instituto.
+    normalized.startsWith("campanha setembro amarelo") ||
     normalized.startsWith("landing page")
   );
 }
